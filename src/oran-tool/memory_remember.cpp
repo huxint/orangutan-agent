@@ -189,8 +189,6 @@ core::Result<void> register_memory_remember(Registry& registry) {
                      "The host supplies scope and timestamps; a successful result confirms persistence.",
       .input_schema_json = std::string{kMemoryRememberSchema},
       .required_capabilities = {core::Capability::write_memory},
-      .deferred = false,
-      .category = "memory",
   };
 
   return registry.add_prepared(std::move(def), [](std::string_view input_json) -> core::Result<PreparedCall> {

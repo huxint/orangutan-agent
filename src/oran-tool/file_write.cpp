@@ -190,8 +190,6 @@ core::Result<void> register_file_write(Registry& registry) {
                      "with bytes_written plus files_touched.",
       .input_schema_json = std::string{kFileWriteSchema},
       .required_capabilities = {core::Capability::write_file},
-      .deferred = false,
-      .category = "file",
   };
   return registry.add_prepared(std::move(def), &prepare_file_write);
 }

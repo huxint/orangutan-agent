@@ -14,14 +14,10 @@ TEST_CASE("ToolDef aggregate-init exposes name/description/schema", "[unit][core
       .description = "Read a UTF-8 text file.",
       .input_schema_json = R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
       .required_capabilities = {},
-      .deferred = false,
-      .category = {},
   };
   REQUIRE(td.name == "FileRead");
   REQUIRE(td.description == "Read a UTF-8 text file.");
   REQUIRE(td.input_schema_json.contains("\"path\""));
-  REQUIRE_FALSE(td.deferred);
-  REQUIRE_FALSE(td.category.has_value());
 }
 
 TEST_CASE("ToolDef::with_no_input fills a minimal object schema", "[unit][core][tool_def]") {
@@ -50,13 +46,9 @@ TEST_CASE("ToolDef equality is member-wise", "[unit][core][tool_def]") {
   differ_schema.input_schema_json = R"({"type":"object"})";
   REQUIRE_FALSE(differ_schema == lhs);
 
-  ToolDef differ_deferred = lhs;
-  differ_deferred.deferred = true;
-  REQUIRE_FALSE(differ_deferred == lhs);
-
-  ToolDef differ_category = lhs;
-  differ_category.category = "time";
-  REQUIRE_FALSE(differ_category == lhs);
+  ToolDef differ_capabilities = lhs;
+  differ_capabilities.required_capabilities = {orangutan::core::Capability::read_file};
+  REQUIRE_FALSE(differ_capabilities == lhs);
 }
 
 TEST_CASE("ToolDef is move-constructed cheaply", "[unit][core][tool_def]") {
@@ -67,5 +59,5 @@ TEST_CASE("ToolDef is move-constructed cheaply", "[unit][core][tool_def]") {
   // The moved-from string's data pointer should have transferred (libstdc++
   // moves the buffer for non-SSO sizes; either way `dst` owns the data).
   REQUIRE(dst.input_schema_json.contains("\"type\":\"object\""));
-  (void)schema_addr;
+  static_cast<void>(schema_addr);
 }

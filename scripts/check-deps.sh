@@ -3,7 +3,7 @@
 #
 # Walks xmake/targets.lua, extracts each oran-X library's add_deps() list,
 # and validates the result against the layering documented in
-# docs/design-docs/module-boundaries.md ("Dependency Direction"). A library
+# docs/ARCHITECTURE.md ("Boundaries"). A library
 # may depend only on libraries strictly below its own layer; sibling deps
 # within the same layer are rejected unless an explicit exception is wired
 # in below.
@@ -28,7 +28,7 @@ if [[ ! -f "${targets}" ]]; then
 fi
 
 # Layering, lowest (foundation) → highest (composition root). Matches the
-# diagram in docs/design-docs/module-boundaries.md "Dependency Direction".
+# dependency direction in docs/ARCHITECTURE.md.
 # `bootstrap` composes the platform and agent libraries for their host.
 declare -A LAYER=(
   [core]=0
@@ -61,7 +61,7 @@ declare -A LAYER_NAME=(
 )
 
 # Explicit sibling-dep allowlist. Same-layer deps are forbidden by
-# module-boundaries.md "Dependency Direction" UNLESS the relationship is
+# the architecture unless the relationship is
 # documented in docs/ARCHITECTURE.md's library inventory and added here.
 # Keys are `<dependent>__<dep>` pairs (double underscore — single dash
 # trips shfmt's arithmetic reformatter inside `[]`).
@@ -73,7 +73,6 @@ declare -A LAYER_NAME=(
 #   config -> storage  : typed permissions block reuses storage's migration shape.
 #   tool   -> permission: dispatch consults RuleSet + AuditSink directly.
 #   tool   -> hook     : dispatch publishes tool_before / tool_dispatched / tool_error / tool_after.
-#   prompt -> tool     : prompt assembly delegates schema/catalog bytes to CatalogRenderer.
 #   provider-> prompt  : provider adapters consume RenderedPrompt cache hints; prompt never calls providers.
 declare -A ALLOWED_SIBLING=(
   [http__async]=1
@@ -82,7 +81,6 @@ declare -A ALLOWED_SIBLING=(
   [config__storage]=1
   [tool__permission]=1
   [tool__hook]=1
-  [prompt__tool]=1
   [provider__prompt]=1
 )
 

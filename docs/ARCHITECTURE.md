@@ -15,9 +15,10 @@ Asio. RAII owns resources; cancellation requests are followed by a lifetime join
 
 Conversation preparation returns an owned value and a persistence boundary.
 The session coordinator loads history and the scoped memory index, runs a turn and
-persists its completed suffix. Memory adapters borrow explicit storage services;
-tool promotion remains session-local state. New abstractions must express a
-current domain boundary with a concrete caller.
+persists its completed suffix. Memory adapters borrow explicit storage services.
+Tool selection produces one owned catalogue per turn; pure prompt rendering
+fingerprints those native declarations without duplicating them in text. New
+abstractions must express a current domain boundary with a concrete caller.
 
 ```mermaid
 flowchart TD
@@ -46,10 +47,10 @@ flowchart TD
 | `oran-permission` | Rules, decisions, bounded approval grants and audit sinks. |
 | `oran-hook` | Typed effect gates and advisory lifecycle observations. |
 | `oran-memory` | Session serialization, scoped notes, a bounded discovery index and lexical recall. |
-| `oran-tool` | Tool definitions, prepared calls, path admission, authorization and execution. |
-| `oran-prompt` | Deterministic cached sections and tool catalogue selection. |
+| `oran-tool` | Tool selection, prepared calls, path admission, authorization and execution. |
+| `oran-prompt` | Pure text rendering and cache fingerprints over explicit core values. |
 | `oran-provider` | Protocol mapping, credential boundary, retries and fallback. |
-| `oran-agent` | Provider/tool turn execution, bounded scheduling and promotion state. |
+| `oran-agent` | Provider/tool turn execution and bounded scheduling. |
 | `oran-bootstrap` | Construct resources and drive one session from the application. |
 
 Applications link the runtime libraries and supply configuration, executors and
@@ -59,7 +60,8 @@ runners. See [BUILD_SYSTEM.md](BUILD_SYSTEM.md).
 
 Dependencies flow toward domain values and platform primitives. Intentional
 same-layer edges are HTTP/IO/storage → async, config → storage, tool →
-permission/hook, prompt → tool and provider → prompt. The graph is checked by
+permission/hook and provider → prompt. Prompt depends only on core; it has no
+configuration, tool-runtime or executor dependency. The graph is checked by
 `scripts/check-deps.sh`. The composition root joins runtime, memory and transport.
 
 ## Authority And State

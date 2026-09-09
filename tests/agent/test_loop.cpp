@@ -8,6 +8,7 @@
 #include <expected>
 #include <filesystem>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -23,7 +24,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <oran/async.hpp>
-#include <oran/config.hpp>
 #include <oran/core/content.hpp>
 #include <oran/core/error.hpp>
 #include <oran/core/message.hpp>
@@ -41,7 +41,6 @@
 
 namespace agent = orangutan::agent;
 namespace async = orangutan::async;
-namespace config = orangutan::config;
 namespace core = orangutan::core;
 namespace hook = orangutan::hook;
 namespace permission = orangutan::permission;
@@ -115,14 +114,12 @@ provider::Route priced_route() {
   };
 }
 
-core::ToolDef tool_def(std::string name, std::string description, bool deferred = false) {
+core::ToolDef tool_def(std::string name, std::string description) {
   return core::ToolDef{
       .name = std::move(name),
       .description = std::move(description),
       .input_schema_json = R"({"type":"object","properties":{},"additionalProperties":false})",
       .required_capabilities = {},
-      .deferred = deferred,
-      .category = "test",
   };
 }
 
@@ -266,11 +263,6 @@ storage::Pool open_trace_pool(asio::io_context& io, TempDb& db) {
   return std::move(*pool);
 }
 
-std::uint64_t prompt_section_hash(const prompt::RenderedPrompt& rendered, std::string_view id) {
-  const auto it = std::ranges::find(rendered.sections, id, &prompt::CacheSection::id);
-  REQUIRE(it != rendered.sections.end());
-  return it->content_hash;
-}
 
 tool::DispatchContext dispatch_context(asio::io_context& io,
                                        permission::RuleSet& rules,
@@ -289,9 +281,9 @@ tool::DispatchContext dispatch_context(asio::io_context& io,
 
 std::vector<core::ToolDef> loop_catalog() {
   return {
-      tool_def("MemoryRecall", "Recall memory", true),
+      tool_def("MemoryRecall", "Recall memory"),
       canned_tool_def("FileRead"),
-      tool_def("CustomNonDefault", "A registered tool outside the default prompt set"),
+      tool_def("CustomTool", "A registered host extension"),
   };
 }
 
@@ -299,8 +291,6 @@ agent::RunTurnInputs base_inputs(const std::vector<core::ToolDef>& catalog, cons
   return agent::RunTurnInputs{
       .system_preamble = "system: deterministic test preamble",
       .tool_catalog = catalog,
-      .active_tools = config::PromptActiveToolsConfig{},
-      .promoted_tools = {},
       .skills_catalog = "skills: none",
       .memory_framing = "memory: none",
       .per_agent_overlay = "overlay: coder",
@@ -486,9 +476,9 @@ TEST_CASE("Loop returns text from a single fake-provider end_turn", "[unit][agen
     REQUIRE(result->model_used == std::string{"fake-1"});
     REQUIRE(result->iterations == 1);
     REQUIRE(result->assistant_blocks.size() == 1);
-    REQUIRE(result->rendered_prompt.sections.size() == 7);
+    REQUIRE(result->rendered_prompt.sections.size() == 5);
     REQUIRE(result->cache_hints.has_value());
-    REQUIRE(result->cache_hints->prefix_sections.size() == 6);
+    REQUIRE(result->cache_hints->prefix_sections.size() == 4);
     REQUIRE(fake.turns_consumed() == 1);
   });
 }
@@ -506,10 +496,10 @@ TEST_CASE("Loop maps prompt, messages, active tools, and cache hints into the pr
     agent::Loop loop{provider, default_route(provider::PromptCacheOptions{.enabled = true, .min_prefix_bytes = 1})};
 
     const auto catalog = loop_catalog();
-    const std::vector<std::string> promoted{"MemoryRecall"};
+    const std::vector<std::string> selected{"MemoryRecall", "FileRead"};
     const std::vector<core::Message> tail{core::Message::user_text("map this")};
     auto inputs = base_inputs(catalog, tail);
-    inputs.promoted_tools = promoted;
+    inputs.active_tools = selected;
     auto result = co_await loop.run_turn(inputs);
 
     REQUIRE(result.has_value());
@@ -523,9 +513,9 @@ TEST_CASE("Loop maps prompt, messages, active tools, and cache hints into the pr
     REQUIRE(request.max_tokens == 512);
     REQUIRE(request.system_prompt.has_value());
     REQUIRE(request.system_prompt->contains("system: deterministic test preamble"));
-    REQUIRE(request.system_prompt->contains("Tool: FileRead"));
-    REQUIRE(request.system_prompt->contains("Tool: MemoryRecall"));
-    REQUIRE_FALSE(request.system_prompt->contains("Tool: CustomNonDefault"));
+    REQUIRE_FALSE(request.system_prompt->contains("Tool: FileRead"));
+    REQUIRE_FALSE(request.system_prompt->contains("Tool: MemoryRecall"));
+    REQUIRE_FALSE(request.system_prompt->contains("Tool: CustomTool"));
 
     REQUIRE(request.tools.size() == 2);
     REQUIRE(request.tools[0].name == "FileRead");
@@ -534,6 +524,79 @@ TEST_CASE("Loop maps prompt, messages, active tools, and cache hints into the pr
     REQUIRE(request.cache->prefix_bytes == result->rendered_prompt.prefix_bytes);
     REQUIRE(provider.route().has_value());
     REQUIRE(provider.route()->primary.model == "fake-1");
+  });
+}
+
+TEST_CASE("Loop sends each native schema once in both supported protocols", "[unit][agent][loop][protocol]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    RecordingProvider recording{provider::Response{
+        .blocks = {core::TextContent{.text = "done"}},
+        .stop_reason = core::StopReason::end_turn,
+        .usage = {},
+        .model_used = std::nullopt,
+        .route_profile_used = std::nullopt,
+    }};
+    agent::Loop loop{recording, default_route()};
+    const std::vector<core::ToolDef> catalog{core::ToolDef{
+        .name = "CustomLookup",
+        .description = "native_description_probe",
+        .input_schema_json = R"({"type":"object","properties":{"native_schema_probe":{"type":"string"}}})",
+        .required_capabilities = {},
+    }};
+    const std::vector<core::Message> tail{core::Message::user_text("Inspect the available context.")};
+    const auto result = co_await loop.run_turn(base_inputs(catalog, tail));
+    REQUIRE(result.has_value());
+    REQUIRE(recording.request().has_value());
+    const auto& request = *recording.request();
+    REQUIRE(request.tools == catalog);
+    REQUIRE(request.system_prompt.has_value());
+    REQUIRE_FALSE(request.system_prompt->contains("native_schema_probe"));
+    REQUIRE_FALSE(request.system_prompt->contains("native_description_probe"));
+
+    for (const auto protocol : {provider::ProtocolKind::anthropic_messages, provider::ProtocolKind::openai_responses}) {
+      auto target = default_route().primary;
+      target.protocol = protocol;
+      const auto encoded = provider::make_protocol_request(request, target);
+      REQUIRE(encoded.has_value());
+      for (const std::string_view marker : {"native_schema_probe", "native_description_probe"}) {
+        auto parts = std::string_view{encoded->body_json} | std::views::split(marker);
+        REQUIRE(std::ranges::distance(parts) == 2);
+      }
+    }
+  });
+}
+
+TEST_CASE("Loop validates explicit tool selection before provider execution", "[unit][agent][loop][catalog]") {
+  bool unknown = false;
+  SECTION("explicit empty selection") {}
+  SECTION("unknown tool name") {
+    unknown = true;
+  }
+  test::run_async([unknown](asio::io_context&) -> async::Awaitable<void> {
+    RecordingProvider recording{provider::Response{
+        .blocks = {core::TextContent{.text = "done"}},
+        .stop_reason = core::StopReason::end_turn,
+        .usage = {},
+        .model_used = std::nullopt,
+        .route_profile_used = std::nullopt,
+    }};
+    agent::Loop loop{recording, default_route()};
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("Hello")};
+    const std::vector<std::string> names =
+        unknown ? std::vector<std::string>{"MissingTool"} : std::vector<std::string>{};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.active_tools = names;
+    const auto result = co_await loop.run_turn(inputs);
+    if (unknown) {
+      REQUIRE_FALSE(result.has_value());
+      REQUIRE(result.error().kind() == core::ErrorKind::not_found);
+      REQUIRE(recording.calls() == 0);
+    } else {
+      REQUIRE(result.has_value());
+      REQUIRE(recording.request().has_value());
+      REQUIRE(recording.request()->tools.empty());
+    }
   });
 }
 
@@ -589,7 +652,7 @@ TEST_CASE("Loop uses the stable default system preamble when no override is supp
     REQUIRE(provider.requests()[1].system_prompt.has_value());
     REQUIRE(provider.requests()[0].system_prompt->contains("You are Orangutan"));
     REQUIRE(provider.requests()[0].system_prompt->contains("Operating principles:"));
-    REQUIRE(provider.requests()[0].system_prompt->contains("Tool: FileRead"));
+    REQUIRE_FALSE(provider.requests()[0].system_prompt->contains("Tool: FileRead"));
     REQUIRE(provider.requests()[0].system_prompt->contains("memory: none"));
     REQUIRE(*provider.requests()[0].system_prompt == *provider.requests()[1].system_prompt);
     REQUIRE(first->rendered_prompt.sections[0].id == "system_preamble");
@@ -663,7 +726,7 @@ TEST_CASE("Loop publishes provider request and response hooks", "[unit][agent][l
     REQUIRE(request->route_protocol == "anthropic_messages");
     REQUIRE(request->fallback_count == 0);
     REQUIRE(request->message_count == 1);
-    REQUIRE(request->tool_count == 2);
+    REQUIRE(request->tool_count == 3);
     REQUIRE(request->stream);
     REQUIRE(request->max_tokens == std::optional<std::uint32_t>{512});
     REQUIRE(request->thinking_budget == std::nullopt);
@@ -1675,8 +1738,8 @@ TEST_CASE("Loop persists one terminal trace row for a text turn", "[unit][agent]
     REQUIRE((*row)->iteration_count == 1);
     REQUIRE((*row)->prompt_prefix_hash == result->rendered_prompt.prefix_hash);
     REQUIRE((*row)->prompt_prefix_bytes == static_cast<std::int64_t>(result->rendered_prompt.prefix_bytes));
-    REQUIRE((*row)->active_catalog_hash == prompt_section_hash(result->rendered_prompt, "tool_catalog"));
-    REQUIRE((*row)->deferred_catalog_hash == prompt_section_hash(result->rendered_prompt, "deferred_tools"));
+    REQUIRE((*row)->active_catalog_hash == result->rendered_prompt.tool_catalog_hash);
+    REQUIRE((*row)->deferred_catalog_hash == 0);
     REQUIRE((*row)->cache_creation_tokens == 2);
     REQUIRE((*row)->cache_read_tokens == 7);
     REQUIRE((*row)->input_tokens == 11);
@@ -1765,8 +1828,8 @@ TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows"
     REQUIRE((*row)->iteration_count == 2);
     REQUIRE((*row)->prompt_prefix_hash == result->rendered_prompt.prefix_hash);
     REQUIRE((*row)->prompt_prefix_bytes == static_cast<std::int64_t>(result->rendered_prompt.prefix_bytes));
-    REQUIRE((*row)->active_catalog_hash == prompt_section_hash(result->rendered_prompt, "tool_catalog"));
-    REQUIRE((*row)->deferred_catalog_hash == prompt_section_hash(result->rendered_prompt, "deferred_tools"));
+    REQUIRE((*row)->active_catalog_hash == result->rendered_prompt.tool_catalog_hash);
+    REQUIRE((*row)->deferred_catalog_hash == 0);
     REQUIRE((*row)->cache_creation_tokens == 2);
     REQUIRE((*row)->cache_read_tokens == 8);
     REQUIRE((*row)->input_tokens == 14);
@@ -2133,10 +2196,8 @@ TEST_CASE("Loop preserves multiple tool_results in tool_use order", "[unit][agen
     const auto catalog = registry.catalog();
     const std::vector<core::Message> tail{core::Message::user_text("run both")};
     auto inputs = base_inputs(catalog, tail);
-    inputs.active_tools = config::PromptActiveToolsConfig{
-        .use_defaults = false,
-        .tool_names = {"FirstTool", "SecondTool"},
-    };
+    const std::vector<std::string> selected{"FirstTool", "SecondTool"};
+    inputs.active_tools = selected;
     inputs.tools = &registry;
     inputs.dispatch_context = &ctx;
     auto result = co_await loop.run_turn(inputs);

@@ -54,11 +54,18 @@ contain non-secret context only.
 
 ## Prompt Caching
 
-`oran-prompt` renders ordered sections and hashes their content with explicit
-cache versions. The adapter maps that representation into protocol-specific
-cache hints. Tool descriptions and memory framing are deterministic for equal
-inputs; conversation messages remain after the cached prefix.
+`oran-prompt` renders stable text and fingerprints the same native declarations
+sent in `Request::tools`. Descriptions and input schemas occur only in those
+native declarations. The effective prefix identity includes their bytes and
+cache version, while conversation messages remain dynamic.
 
-Changing model, route or stable section bytes changes the effective request.
-Dynamic timestamps, turn IDs, trace IDs and tool results do not enter the stable
-system preamble. [prompt-design](../rules/prompt-design.md) owns section placement.
+`make_prompt_cache_hints` validates the final stable-text breakpoint and counts
+native tool fields toward the configured byte floor. Retry/fallback execution
+applies the selected profile's eligibility policy. Current protocol encoders do
+not serialize explicit cache directives from these internal hints; protocol
+cache-control support remains in [live debt](../exec-plans/tech-debt-tracker.md).
+Local fingerprint tests do not establish provider cache hits.
+
+Changing model, route or stable inputs changes the effective request. Dynamic
+timestamps, turn IDs, trace IDs and tool results do not enter the system preamble.
+[prompt-design](../rules/prompt-design.md) owns section placement and fingerprints.

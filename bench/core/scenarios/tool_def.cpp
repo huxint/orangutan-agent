@@ -33,8 +33,6 @@ constexpr std::string_view kEmptySchema = R"({"type":"object","properties":{},"a
       .description = "Return current UTC time.",
       .input_schema_json = std::string{kEmptySchema},
       .required_capabilities = {},
-      .deferred = false,
-      .category = {},
   };
 }
 

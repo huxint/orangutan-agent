@@ -31,6 +31,7 @@
 #include <oran/hook/event.hpp>
 #include <oran/hook/payload.hpp>
 #include <oran/storage/trace_repository.hpp>
+#include <oran/tool/catalog.hpp>
 #include <oran/tool/registry.hpp>
 
 namespace orangutan::agent {
@@ -44,48 +45,19 @@ namespace {
   return default_preamble.section_text;
 }
 
-[[nodiscard]] bool is_promoted_tool(std::span<const std::string> promoted_tools, std::string_view name) noexcept {
-  return std::ranges::contains(promoted_tools, name);
-}
-
-[[nodiscard]] bool is_explicit_active_tool(const config::PromptActiveToolsConfig& active_tools,
-                                           std::string_view name) noexcept {
-  return !active_tools.use_defaults && std::ranges::contains(active_tools.tool_names, name);
-}
-
-/// Mirror the prompt builder's active-tool selection just far enough to
-/// populate `provider::Request::tools`. The prompt bytes are still the source
-/// of truth for what the model reads; this native list lets adapters that have
-/// first-class tool fields send the same active set without parsing section 2.
-///
-/// The builder owns validation. We intentionally call it before this helper in
-/// `run_turn`, so an explicit unknown tool name fails at the prompt boundary
-/// instead of being silently omitted here.
-[[nodiscard]] std::vector<core::ToolDef> request_tools_for(std::span<const core::ToolDef> catalog,
-                                                           const config::PromptActiveToolsConfig& active_tools,
-                                                           std::span<const std::string> promoted_tools) {
-  std::vector<core::ToolDef> selected;
-  selected.reserve(catalog.size());
-  for (const auto& def : catalog) {
-    if ((active_tools.use_defaults && prompt::is_default_active_tool(def.name)) ||
-        is_explicit_active_tool(active_tools, def.name) || is_promoted_tool(promoted_tools, def.name)) {
-      selected.push_back(def);
-    }
-  }
-  std::ranges::sort(selected, {}, &core::ToolDef::name);
-  return selected;
-}
-
 [[nodiscard]] std::optional<std::string> join_prompt_prefix(const prompt::RenderedPrompt& rendered) {
   if (rendered.sections.empty()) {
     return std::nullopt;
   }
 
   std::string output;
-  output.reserve(rendered.prefix_bytes + rendered.sections.size());
+  output.reserve(rendered.prefix_bytes - rendered.tool_catalog_bytes + rendered.sections.size());
   for (const auto& section : rendered.sections) {
     if (section.id == "conversation_tail") {
       break;
+    }
+    if (section.content.empty()) {
+      continue;
     }
     if (!output.empty()) {
       output.push_back('\n');
@@ -443,10 +415,6 @@ make_provider_fallback_payload(const RunTurnInputs& inputs,
   return static_cast<std::int64_t>(value);
 }
 
-[[nodiscard]] std::uint64_t section_hash(const prompt::RenderedPrompt& rendered, std::string_view id) noexcept {
-  const auto it = std::ranges::find(rendered.sections, id, &prompt::CacheSection::id);
-  return it == rendered.sections.end() ? 0 : it->content_hash;
-}
 
 [[nodiscard]] std::optional<core::TurnId> dispatch_parent_turn_id(const RunTurnInputs& inputs) {
   if (!inputs.trace.enabled) {
@@ -519,8 +487,8 @@ make_trace_request(const RunTurnInputs& inputs,
       .iteration_count = static_cast<std::int64_t>(iterations),
       .prompt_prefix_hash = rendered.prefix_hash,
       .prompt_prefix_bytes = *prefix_bytes,
-      .active_catalog_hash = section_hash(rendered, "tool_catalog"),
-      .deferred_catalog_hash = section_hash(rendered, "deferred_tools"),
+      .active_catalog_hash = rendered.tool_catalog_hash,
+      .deferred_catalog_hash = 0,
       .cache_creation_tokens = *cache_creation_tokens,
       .cache_read_tokens = *cache_read_tokens,
       .input_tokens = *input_tokens,
@@ -679,7 +647,7 @@ private:
 class Loop::Impl {
 public:
   Impl(provider::System& provider, provider::Route route, LoopOptions options)
-      : provider_{provider}, route_{std::move(route)}, options_{std::move(options)}, builder_{options_.prompt_options},
+      : provider_{provider}, route_{std::move(route)}, options_{std::move(options)},
         default_preamble_{default_system_preamble()} {}
 
   [[nodiscard]] async::Awaitable<core::Result<RunTurnResult>> run_turn(RunTurnInputs inputs,
@@ -698,7 +666,10 @@ public:
     std::vector<core::Message> transcript{inputs.conversation_tail.begin(), inputs.conversation_tail.end()};
     auto total_usage = provider::Usage{};
     const auto started_at_ns = now_epoch_ns();
-    const auto native_tools = request_tools_for(inputs.tool_catalog, inputs.active_tools, inputs.promoted_tools);
+    const auto native_tools = tool::select_tools(inputs.tool_catalog, inputs.active_tools);
+    if (!native_tools) {
+      co_return std::unexpected(native_tools.error());
+    }
     const auto system_preamble = system_preamble_for(inputs, default_preamble_);
     const auto thinking_budget =
         inputs.thinking_budget.has_value() ? inputs.thinking_budget : route_.primary.thinking_budget;
@@ -711,30 +682,27 @@ public:
     std::optional<ToolScheduler> owned_scheduler;
 
     for (std::uint32_t iteration = 1; iteration <= options_.max_iterations; ++iteration) {
-      auto rendered = co_await builder_.build(prompt::BuilderInputs{
-          .system_preamble = system_preamble,
-          .tool_catalog = inputs.tool_catalog,
-          .active_tools = inputs.active_tools,
-          .promoted_tools = inputs.promoted_tools,
-          .skills_catalog = inputs.skills_catalog,
-          .memory_framing = inputs.memory_framing,
-          .per_agent_overlay = inputs.per_agent_overlay,
-          .conversation_tail = transcript,
-      });
-      if (!rendered) {
-        co_return std::unexpected(std::move(rendered).error());
-      }
+      auto rendered = prompt::render(
+          prompt::RenderInputs{
+              .system_preamble = system_preamble,
+              .tools = *native_tools,
+              .skills_catalog = inputs.skills_catalog,
+              .memory_framing = inputs.memory_framing,
+              .per_agent_overlay = inputs.per_agent_overlay,
+              .conversation_tail = transcript,
+          },
+          options_.prompt_versions);
 
       auto cache =
-          provider::make_prompt_cache_hints(*rendered, route_.primary.cache.value_or(provider::PromptCacheOptions{}));
+          provider::make_prompt_cache_hints(rendered, route_.primary.cache.value_or(provider::PromptCacheOptions{}));
       if (!cache) {
         co_return std::unexpected(std::move(cache).error());
       }
 
       auto request = provider::Request{
           .messages = transcript,
-          .system_prompt = join_prompt_prefix(*rendered),
-          .tools = native_tools,
+          .system_prompt = join_prompt_prefix(rendered),
+          .tools = *native_tools,
           .tool_choice = inputs.tool_choice,
           .max_tokens = inputs.max_tokens,
           .thinking_budget = thinking_budget,
@@ -771,7 +739,7 @@ public:
         if (error.kind() == core::ErrorKind::cancelled && trace_writer_configured(inputs)) {
           auto traced = co_await write_trace_turn(inputs,
                                                   route_,
-                                                  *rendered,
+                                                  rendered,
                                                   total_usage,
                                                   iteration,
                                                   started_at_ns,
@@ -785,7 +753,7 @@ public:
         } else if (error.kind() != core::ErrorKind::cancelled) {
           auto traced = co_await write_error_trace_turn(inputs,
                                                         route_,
-                                                        *rendered,
+                                                        rendered,
                                                         total_usage,
                                                         iteration,
                                                         started_at_ns,
@@ -807,7 +775,7 @@ public:
                                          provider_started_at,
                                          provider_finished_at);
       add_usage(total_usage, response->usage);
-      last_rendered = *rendered;
+      last_rendered = rendered;
       last_route_model = response->model_used.value_or(route_.primary.model);
       last_route_profile = response->route_profile_used.value_or(route_.primary.profile);
 
@@ -819,7 +787,7 @@ public:
           const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
           auto traced = co_await write_error_trace_turn(inputs,
                                                         route_,
-                                                        *rendered,
+                                                        rendered,
                                                         total_usage,
                                                         iteration,
                                                         started_at_ns,
@@ -836,7 +804,7 @@ public:
           const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
           auto traced = co_await write_error_trace_turn(inputs,
                                                         route_,
-                                                        *rendered,
+                                                        rendered,
                                                         total_usage,
                                                         iteration,
                                                         started_at_ns,
@@ -914,7 +882,7 @@ public:
             const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
             auto traced = co_await write_trace_turn(inputs,
                                                     route_,
-                                                    *rendered,
+                                                    rendered,
                                                     total_usage,
                                                     iteration,
                                                     started_at_ns,
@@ -930,7 +898,7 @@ public:
             const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
             auto traced = co_await write_error_trace_turn(inputs,
                                                           route_,
-                                                          *rendered,
+                                                          rendered,
                                                           total_usage,
                                                           iteration,
                                                           started_at_ns,
@@ -960,7 +928,7 @@ public:
         const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
         auto traced = co_await write_error_trace_turn(inputs,
                                                       route_,
-                                                      *rendered,
+                                                      rendered,
                                                       total_usage,
                                                       iteration,
                                                       started_at_ns,
@@ -982,7 +950,7 @@ public:
       const auto served_profile = response->route_profile_used.value_or(route_.primary.profile);
       if (auto traced = co_await write_trace_turn(inputs,
                                                   route_,
-                                                  *rendered,
+                                                  rendered,
                                                   total_usage,
                                                   iteration,
                                                   started_at_ns,
@@ -998,7 +966,7 @@ public:
           .stop_reason = response->stop_reason,
           .usage = total_usage,
           .model_used = std::move(response->model_used),
-          .rendered_prompt = std::move(*rendered),
+          .rendered_prompt = std::move(rendered),
           .cache_hints = std::move(*cache),
           .iterations = iteration,
           .transcript = std::move(transcript),
@@ -1035,7 +1003,6 @@ private:
   provider::System& provider_;
   provider::Route route_;
   LoopOptions options_;
-  prompt::Builder builder_;
   SystemPreamble default_preamble_;
 };
 

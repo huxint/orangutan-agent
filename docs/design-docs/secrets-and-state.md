@@ -29,13 +29,20 @@ The config file contains:
 | `runtime.request_timeout_ms`, `runtime.stream.max_bytes` | Host maps transport bounds to `HttpProviderBackendOptions`. |
 | `runtime.tool_output` | `AgentSession` applies model-visible text and structured output byte limits. |
 | `runtime.tool_scheduler` | `AgentSession` applies parallelism and per-call dispatch timeouts. |
-| `runtime.prompt.active_tools` | `AgentSession` selects the active catalogue. |
+| `runtime.prompt.active_tools` | `AgentSession` maps configured names to the loop's native tool selection. |
 | `trace.enabled` | Host maps the trace switch to `RuntimeAssemblyOptions`. |
 | `profiles`, `routes` | `HttpProviderBackend` selects model, protocol, endpoint, credentials and model policy; `route_name` defaults to `default`. |
 | `permissions`, `agents.<name>.permissions` | `AgentSession` materializes global and selected-agent rules. Host maps workspace roots to `WorkspaceOptions`. |
 | `agents.<name>.prompt_overlay` | `AgentSession` selects stable agent instructions. |
 | `hooks.timeout_ms` | Host maps the hook deadline to `RuntimeAssemblyOptions`. |
 | `memory.longterm.recall` | `AgentSession` resolves automatic index enablement, limit and kinds; an explicit optional `longterm_recall` overrides it. |
+
+`runtime.prompt.active_tools` accepts `"defaults"` or an array of registered tool
+names. Defaults expose every registered tool, including host extensions. An
+explicit array selects only those names; `[]` exposes none. Unknown names fail
+before provider execution. Disabled delegation is removed from both the available
+catalogue and explicit selection. [Tools](tool-runtime.md) owns this boundary and
+the migration from the removed discovery API.
 
 Path locks follow active work. The retired `runtime.tool_scheduler.idle_lock_ttl_ms`
 field is ignored when reading existing configuration.

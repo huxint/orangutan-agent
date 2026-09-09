@@ -2,5 +2,4 @@
 
 #pragma once
 
-#include <oran/prompt/builder.hpp>
-#include <oran/prompt/promotion_state.hpp>
+#include <oran/prompt/render.hpp>

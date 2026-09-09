@@ -4,8 +4,7 @@
 
 A-vs-B comparisons:
 
-- `registry.lookup`: catalog-only `Registry::find("noop")` (the agent loop
-  uses this on every iteration to materialize the provider's tool catalog).
+- `registry.lookup`: definition lookup through `Registry::find("noop")`.
 - `registry.dispatch_allow`: full `dispatch` walk — permission evaluator
   with a single matching `allow` rule, an in-memory `RecordingAuditSink`
   record, and a trivial in-process handler. The delta over `registry.lookup`
@@ -60,14 +59,10 @@ A-vs-B comparisons:
   observer subscribed to both bookend events. Both should be sub-µs
   — the cost of an expensive sink (shell, webhook) is the sink's own
   bill, not the bus's.
-- `catalog.render_cold_32_tools` vs. `catalog.render_hot_32_tools`:
-  deterministic prompt-facing rendering of a 32-tool catalog with every
-  fifth tool deferred. The cold path parses and canonicalises each
-  active tool's JSON Schema before writing the block. The hot path
-  reuses the bounded rendered-block cache keyed by the stable `ToolDef`
-  fields plus renderer version, then still sorts and joins the catalog
-  snapshot. The delta is the cache value future `oran-prompt` should
-  see when repeated turns keep the same tool declarations.
+- `catalog.select_all_32_tools` vs. `catalog.select_subset_32_tools`:
+  select every definition or four explicit names from a 32-tool snapshot.
+  Both paths return owned definitions sorted by name. Selection does not parse
+  schemas or retain a rendered-block cache.
 - `output.text_only` vs. `output.with_data_16kib`: construction cost for
   the v1-compatible text-only envelope and for an envelope that carries a
   16 KiB serialized structured payload plus usage counters. This pins the

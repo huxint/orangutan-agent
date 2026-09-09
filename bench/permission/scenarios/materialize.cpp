@@ -48,7 +48,7 @@ rule(cfg::PermissionVerdict v, std::string pattern, std::optional<Capability> ca
   cfg::PermissionsConfig out;
   out.rules.reserve(8);
   out.rules.push_back(rule(cfg::PermissionVerdict::allow, "FileRead", std::nullopt));
-  out.rules.push_back(rule(cfg::PermissionVerdict::allow, "ToolSearch", std::nullopt));
+  out.rules.push_back(rule(cfg::PermissionVerdict::allow, "MemoryRecall", std::nullopt));
   out.rules.push_back(rule(cfg::PermissionVerdict::allow, "*", Capability::read_memory));
   out.rules.push_back(rule(cfg::PermissionVerdict::deny, "*", Capability::runtime_loader));
   out.rules.push_back(rule(cfg::PermissionVerdict::deny, "ShellExec(rm:*)", std::nullopt));

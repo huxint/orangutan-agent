@@ -35,8 +35,8 @@ oran_lib("permission", { "oran-core", "oran-config", "oran-storage", "oran-async
 oran_lib("hook", { "oran-core", "oran-async" }, {})
 oran_lib("memory", { "oran-core", "oran-async", "oran-storage" }, { "nlohmann_json" })
 oran_lib("tool", { "oran-core", "oran-async", "oran-io", "oran-permission", "oran-hook" }, { "nlohmann_json" })
-oran_lib("prompt", { "oran-core", "oran-async", "oran-config", "oran-tool" }, {})
+oran_lib("prompt", { "oran-core" }, {})
 oran_lib("provider", { "oran-core", "oran-async", "oran-config", "oran-prompt" }, { "nlohmann_json" })
-oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider", "oran-hook" }, { "nlohmann_json" })
+oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "oran-tool", "oran-provider", "oran-hook" }, {})
 
 oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-tool", "oran-provider", "oran-agent" }, { "nlohmann_json" })

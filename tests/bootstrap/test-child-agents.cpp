@@ -189,7 +189,7 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
   orangutan::tests::run_async([explicit_catalog](asio::io_context& io) -> async::Awaitable<void> {
     auto configuration = nlohmann::json::parse(COLLABORATION_CONFIG);
     if (explicit_catalog) {
-      configuration["runtime"]["prompt"]["active_tools"] = {"AgentRun", "MemoryRecall", "ToolSearch"};
+      configuration["runtime"]["prompt"]["active_tools"] = {"AgentRun", "MemoryRecall", "MemoryRemember"};
     }
     SessionFixture fixture{io.get_executor(), configuration.dump()};
     for (const auto& scope : {"scope-A", "scope-B"}) {
@@ -229,7 +229,7 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
     REQUIRE(result->text == "parent received the finding");
     REQUIRE(provider.requests.size() == 5);
     REQUIRE(std::ranges::contains(provider.requests[1].tools, std::string{"AgentRun"}, &core::ToolDef::name));
-    REQUIRE(provider.requests[1].system_prompt->contains("Tool: AgentRun"));
+    REQUIRE_FALSE(provider.requests[1].system_prompt->contains("Tool: AgentRun"));
     const auto& child_request = provider.requests[2];
     REQUIRE(child_request.messages.size() == 1);
     REQUIRE(child_request.messages[0].blocks == core::Message::user_text("inspect").blocks);

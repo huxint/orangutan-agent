@@ -182,8 +182,6 @@ core::Result<void> register_memory_recall(Registry& registry) {
                      "updating a lesson. Optional kinds filter the current scope, which is supplied by the host.",
       .input_schema_json = std::string{kMemoryRecallSchema},
       .required_capabilities = {core::Capability::read_memory},
-      .deferred = false,
-      .category = "memory",
   };
 
   return registry.add_prepared(std::move(def), [](std::string_view input_json) -> core::Result<PreparedCall> {

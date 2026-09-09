@@ -7,7 +7,6 @@
 
 namespace orangutan::bench {
 void register_catalog_sections(ankerl::nanobench::Bench& bench);
-void register_promotion_state(ankerl::nanobench::Bench& bench);
 }  // namespace orangutan::bench
 
 int main() {
@@ -18,7 +17,6 @@ int main() {
   bench.warmup(20);
 
   orangutan::bench::register_catalog_sections(bench);
-  orangutan::bench::register_promotion_state(bench);
 
   std::println();
   return 0;

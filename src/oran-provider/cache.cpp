@@ -14,7 +14,7 @@
 namespace orangutan::provider {
 namespace {
 
-constexpr std::size_t kExpectedPromptSections = 7;
+constexpr std::size_t kExpectedPromptSections = 5;
 
 [[nodiscard]] core::Error invalid_cache_prompt(std::string reason) {
   return core::Error::invalid_argument("provider prompt-cache mapping requires a valid rendered prompt")
@@ -55,7 +55,7 @@ core::Result<std::optional<PromptCacheHints>> make_prompt_cache_hints(const prom
                                .with("tail_index", std::to_string(tail_index)));
   }
 
-  std::size_t computed_prefix_bytes = 0;
+  std::size_t computed_prefix_bytes = rendered.tool_catalog_bytes;
   for (std::size_t i = 0; i <= breakpoint_index; ++i) {
     computed_prefix_bytes += rendered.sections[i].content.size();
   }

@@ -37,8 +37,6 @@ core::ToolDef read_tool() {
       .description = "Read a file",
       .input_schema_json = R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
       .required_capabilities = {},
-      .deferred = false,
-      .category = std::string{"files"},
   };
 }
 

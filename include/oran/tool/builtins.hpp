@@ -16,9 +16,6 @@ inline constexpr std::string_view kFileWriteName{"FileWrite"};
 /// Stable wire name for the file-edit built-in.
 inline constexpr std::string_view kFileEditName{"FileEdit"};
 
-/// Stable wire name for the catalog metadata lookup built-in.
-inline constexpr std::string_view kToolSearchName{"ToolSearch"};
-
 /// Stable wire name for the long-term memory recall built-in.
 inline constexpr std::string_view kMemoryRecallName{"MemoryRecall"};
 
@@ -79,17 +76,6 @@ inline constexpr std::string_view AGENT_RUN_NAME{"AgentRun"};
 /// `match_count`.
 [[nodiscard]] core::Result<void> register_file_edit(Registry& registry);
 
-/// Register the `ToolSearch` tool. Searches the current registry catalog by
-/// exact `name`, exact `category`, and/or declared `capability`; at least one
-/// selector is required and supplied selectors are ANDed. Input shape:
-/// `{"name"?: <string>, "category"?: <string>, "capability"?:
-/// <Capability wire name>}`. Metadata lookup requires no runtime capability,
-/// is not deferred, and returns a text fallback plus structured `data_json`
-/// with `kind`, `query`, `match_count`, and `matches[]` entries carrying the
-/// matched tool's name, description, input schema, required capabilities,
-/// deferred flag, and category.
-[[nodiscard]] core::Result<void> register_tool_search(Registry& registry);
-
 /// Register the `MemoryRecall` tool. Searches long-term memory through the
 /// runtime supplied on `DispatchContext::memory_recall`; capability
 /// `read_memory` is required. Input shape: `{"query": <string>,
@@ -123,7 +109,7 @@ inline constexpr std::string_view AGENT_RUN_NAME{"AgentRun"};
 /// structured `data_json` with the scoped removed key.
 [[nodiscard]] core::Result<void> register_memory_forget(Registry& registry);
 
-/// Register filesystem tools and catalogue discovery.
+/// Register the three filesystem tools.
 [[nodiscard]] core::Result<void> register_builtins(Registry& registry);
 
 /// Register the memory tools after the host has supplied memory services.

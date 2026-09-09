@@ -42,8 +42,6 @@ void add_audited_tool(tool::Registry& registry) {
       .description = "No-cap tool that records a decision row per call",
       .input_schema_json = R"({"type":"object","properties":{},"additionalProperties":true})",
       .required_capabilities = {},
-      .deferred = false,
-      .category = "bench",
   };
   auto handler = [](std::string_view, tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
     co_return tool::Output::text_only("ok");

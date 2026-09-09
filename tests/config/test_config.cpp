@@ -78,7 +78,7 @@ constexpr auto kMinimalConfig = R"json({
     "prompt": {
       "active_tools": [
         "FileRead",
-        "ToolSearch"
+        "MemoryRemember"
       ]
     }
   },
@@ -150,7 +150,7 @@ TEST_CASE("Config::parse returns typed config values", "[unit][config]") {
   REQUIRE(result->runtime().tool_output.max_text_bytes == 4096);
   REQUIRE(result->runtime().tool_output.max_data_bytes == 8192);
   REQUIRE_FALSE(result->runtime().prompt.active_tools.use_defaults);
-  REQUIRE(result->runtime().prompt.active_tools.tool_names == std::vector<std::string>{"FileRead", "ToolSearch"});
+  REQUIRE(result->runtime().prompt.active_tools.tool_names == std::vector<std::string>{"FileRead", "MemoryRemember"});
 
   REQUIRE_FALSE(result->trace().enabled);
 
@@ -709,7 +709,7 @@ TEST_CASE("Config::parse extracts runtime.prompt active tools", "[unit][config][
     auto result = config::Config::parse(R"json({
   "runtime": {
     "prompt": {
-      "active_tools": ["FileRead", "FileEdit", "ToolSearch"]
+      "active_tools": ["FileRead", "FileEdit", "MemoryRemember"]
     }
   }
 })json");
@@ -717,7 +717,7 @@ TEST_CASE("Config::parse extracts runtime.prompt active tools", "[unit][config][
     REQUIRE(result.has_value());
     REQUIRE_FALSE(result->runtime().prompt.active_tools.use_defaults);
     REQUIRE(result->runtime().prompt.active_tools.tool_names ==
-            std::vector<std::string>{"FileRead", "FileEdit", "ToolSearch"});
+            std::vector<std::string>{"FileRead", "FileEdit", "MemoryRemember"});
   }
 
   SECTION("empty explicit allowlist") {

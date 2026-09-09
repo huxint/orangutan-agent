@@ -9,7 +9,7 @@
 #include <vector>
 
 #include <oran/core/result.hpp>
-#include <oran/prompt/builder.hpp>
+#include <oran/prompt/render.hpp>
 
 namespace orangutan::provider {
 
@@ -44,7 +44,8 @@ struct PromptCacheOptions {
 /// breakpoint sits on the final prefix section, immediately before the
 /// conversation tail. When disabled or under the configured prefix-byte floor,
 /// the result is `std::nullopt` so provider routes can silently skip cache
-/// controls without mutating the prompt bytes.
+/// controls without mutating the prompt bytes. Native tool fields contribute
+/// to the effective prefix hash and byte count, but not the text section list.
 [[nodiscard]] core::Result<std::optional<PromptCacheHints>>
 make_prompt_cache_hints(const prompt::RenderedPrompt& rendered, PromptCacheOptions options = {});
 

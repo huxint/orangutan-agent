@@ -63,8 +63,6 @@ using namespace std::chrono_literals;
       .description = "Latency-controllable test tool",
       .input_schema_json = R"({"type":"object","properties":{},"additionalProperties":true})",
       .required_capabilities = {},
-      .deferred = false,
-      .category = "test",
   };
 }
 
@@ -307,8 +305,6 @@ struct LockTracker {
       .input_schema_json =
           R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":true})",
       .required_capabilities = std::move(caps),
-      .deferred = false,
-      .category = "test",
   };
 }
 

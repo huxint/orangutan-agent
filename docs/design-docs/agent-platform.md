@@ -29,7 +29,18 @@ The session coordinator serializes turns using the same session identity.
 
 Persisted history loads at most 128 rows and 512 KiB of encoded content/metadata.
 An incomplete leading exchange is removed before model submission. Stored rows
-remain intact. Deferred tool promotion affects the next prompt boundary.
+remain intact.
+
+`RunTurnInputs` supplies an available tool catalogue and optional active names.
+The loop selects and owns a sorted native catalogue once, before provider
+execution. Every iteration uses that same value for declarations and prompt
+fingerprinting; tool outputs never change selection. An absent list exposes all
+available tools, an empty list exposes none, and unknown names fail explicitly.
+The [tool contract](tool-runtime.md) owns selection and dispatch authority.
+
+New trace rows store the native definition fingerprint in `active_catalog_hash`
+and zero in the retired `deferred_catalog_hash` column. Existing trace rows and
+schema versions remain intact.
 
 [`prepare_conversation`](../../include/oran/agent/conversation.hpp) takes owned
 history and prompt values, removes the incomplete leading exchange and returns
@@ -46,9 +57,9 @@ cross-agent state to the loop.
 `AgentRun` starts a configured agent with a self-contained task and returns its
 completed answer as a tool result. Its `agent` argument selects an entry from
 `config.agents`; the host supplies the provider route, workspace, memory scope,
-fresh session ID and approval identity. The child owns its conversation and tool
-promotion state. Each completed child transcript commits separately from the
-parent's transcript.
+fresh session ID and approval identity. The child owns its conversation and
+selected tool context. Each completed child transcript commits separately from
+the parent's transcript.
 
 The host admits at most `AgentSessionOptions::max_child_runs` children per parent
 prompt, defaulting to four; zero disables delegation. Only one generation is

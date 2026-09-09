@@ -6,7 +6,6 @@
 #include <print>
 
 namespace orangutan::bench {
-void register_prompt_cache_hit_rate(ankerl::nanobench::Bench& bench);
 void register_scheduler_overhead(ankerl::nanobench::Bench& bench);
 void register_scheduler_audit_fanout(ankerl::nanobench::Bench& bench);
 }  // namespace orangutan::bench
@@ -18,7 +17,6 @@ int main() {
   bench.minEpochIterations(12'000);
   bench.warmup(20);
 
-  orangutan::bench::register_prompt_cache_hit_rate(bench);
   orangutan::bench::register_scheduler_overhead(bench);
   // Registered last: this scenario lowers `minEpochIterations` for its
   // SQLite-backed run, which would otherwise dominate wall time.

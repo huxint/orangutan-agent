@@ -26,8 +26,8 @@ when the task reveals another relevant topic. A durable correction or preference
 is saved in the turn where it arises, without waiting for a "remember this"
 request. The agent reads an existing related note and reuses its ID when updating
 the lesson. One-off instructions, guesses, secrets and facts readily derived from
-code do not become durable notes. MemoryForget remains deferred for explicit
-removal.
+code do not become durable notes. MemoryForget is also available in the native
+tool declarations when the backend is bound, for explicit scoped removal.
 
 These are model behavior instructions. The runtime guarantees the discovery,
 read and write paths, but does not infer durability, force a write every turn, or

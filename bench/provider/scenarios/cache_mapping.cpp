@@ -37,21 +37,22 @@ prompt::CacheSection section(std::string id,
 prompt::RenderedPrompt make_rendered_prompt() {
   std::vector<prompt::CacheSection> sections{
       section("system_preamble", std::string(1024, 's'), 11, 1),
-      section("tool_catalog", std::string(4096, 't'), 22, 1),
-      section("deferred_tools", std::string(512, 'd'), 33, 1),
       section("skills_catalog", std::string(512, 'k'), 44, 1),
       section("memory_framing", std::string(512, 'm'), 55, 1),
       section("per_agent_overlay", std::string(256, 'o'), 66, 1, true),
       section("conversation_tail", "user turn", 77, 1),
   };
 
-  std::size_t prefix_bytes = 0;
+  constexpr std::size_t tool_bytes = 4096;
+  std::size_t prefix_bytes = tool_bytes;
   for (std::size_t i = 0; i < sections.size() - 1; ++i) {
     prefix_bytes += sections[i].content.size();
   }
 
   return prompt::RenderedPrompt{
       .sections = std::move(sections),
+      .tool_catalog_hash = 22,
+      .tool_catalog_bytes = tool_bytes,
       .prefix_hash = 0x12345678,
       .prefix_bytes = prefix_bytes,
   };

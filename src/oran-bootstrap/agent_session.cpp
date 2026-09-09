@@ -5,9 +5,7 @@
 #include <limits>
 #include <span>
 #include <system_error>
-#include <unordered_map>
 #include <utility>
-#include <variant>
 
 #include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
@@ -218,12 +216,14 @@ public:
     if (!context.agent_run) {
       std::erase_if(catalog, [](const auto& definition) { return definition.name == tool::AGENT_RUN_NAME; });
     }
-    const auto promotions = session_state_.promotion_snapshot(core::time::now_utc());
+    std::optional<std::span<const std::string>> active_tools;
+    if (!active_tools_.use_defaults) {
+      active_tools = active_tools_.tool_names;
+    }
     auto inputs = agent::RunTurnInputs{
         .system_preamble = options_.system_preamble,
         .tool_catalog = catalog,
-        .active_tools = active_tools_,
-        .promoted_tools = promotions.tool_names,
+        .active_tools = active_tools,
         .memory_framing = memory_framing,
         .per_agent_overlay = options_.per_agent_overlay,
         .conversation_tail = conversation.messages,
@@ -283,7 +283,6 @@ public:
         co_return std::unexpected(std::move(persisted).error());
       }
     }
-    observe_turn_results(result->transcript, conversation.history_size);
     if (store == nullptr) {
       transcript_ = std::move(result->transcript);
     }
@@ -295,51 +294,6 @@ public:
   }
 
 private:
-  void observe_turn_results(const std::vector<core::Message>& transcript, std::size_t start_index) {
-    if (start_index > transcript.size()) {
-      return;
-    }
-    std::unordered_map<std::string_view, std::string_view> tool_use_names;
-    for (auto i = start_index; i < transcript.size(); ++i) {
-      const auto& message = transcript[i];
-      if (message.role != core::Role::assistant) {
-        continue;
-      }
-      for (const auto& block : message.blocks) {
-        if (const auto* use = std::get_if<core::ToolUseContent>(&block); use != nullptr) {
-          tool_use_names.emplace(use->id, use->name);
-        }
-      }
-    }
-
-    const auto now = core::time::now_utc();
-    for (auto i = start_index; i < transcript.size(); ++i) {
-      const auto& message = transcript[i];
-      if (message.role != core::Role::tool) {
-        continue;
-      }
-      for (const auto& block : message.blocks) {
-        const auto* result_block = std::get_if<core::ToolResultContent>(&block);
-        if (result_block == nullptr) {
-          continue;
-        }
-        const auto name_it = tool_use_names.find(result_block->tool_use_id);
-        if (name_it == tool_use_names.end()) {
-          continue;
-        }
-        const auto output = tool::Output{
-            .text = result_block->output,
-            .data_json = result_block->data_json,
-            .attachments = {},
-            .usage = {},
-            .is_error = result_block->is_error,
-        };
-        // Promotion is advisory; malformed search output cannot undo a saved turn.
-        [[maybe_unused]] auto report = session_state_.observe_tool_output(name_it->second, output, now);
-      }
-    }
-  }
-
   AgentSessionOptions options_;
   provider::execution::Runtime execution_runtime_;
   agent::Loop loop_;
@@ -351,7 +305,6 @@ private:
   tool::OutputCapOptions output_caps_;
   config::PromptActiveToolsConfig active_tools_;
   std::string session_id_text_;
-  agent::SessionState session_state_;
   std::vector<core::Message> transcript_;
 };
 

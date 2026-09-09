@@ -73,8 +73,6 @@ core::Result<void> register_agent_run(Registry& registry, std::span<const std::s
                          "under both agents' permissions.",
           .input_schema_json = schema.dump(),
           .required_capabilities = {core::Capability::spawn_agent},
-          .deferred = false,
-          .category = "agent",
       },
       [names = std::move(names)](std::string_view input) -> core::Result<PreparedCall> {
         auto request = parse_agent_run(names, input);

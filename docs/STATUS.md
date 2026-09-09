@@ -32,16 +32,20 @@ these boundaries, output compatibility and preservation of existing tables.
 SQLite connections configure their own handles from explicit options.
 
 `AgentRun` selects a configured child, assigns a fresh session ID and approval
-identity, and uses the child's prompt overlay and promotion state. Parent and child rules
-intersect at dispatch, including rewritten input and approval limits. The child
-inherits workspace, memory scope, provider route, scheduler and strand. Admission
-defaults to four children per prompt and one generation. Cancellation joins the
-child's cleanup without waiting for an unrelated session. The
+identity, and uses the child's prompt overlay and selected tool context. Parent
+and child rules intersect at dispatch, including rewritten input and approval
+limits. The child inherits workspace, memory scope, provider route, scheduler and
+strand. Admission defaults to four children per prompt and one generation.
+Cancellation joins the child's cleanup without waiting for an unrelated session. The
 [agent contract](design-docs/agent-platform.md) owns these bounds.
 
-FileRead, FileWrite and FileEdit are the built-in filesystem tools. ToolSearch,
-memory tools and AgentRun provide the other runtime extensions. Stored capability
-names remain readable for compatibility.
+FileRead, FileWrite and FileEdit are the built-in filesystem tools. Memory tools
+and AgentRun provide the other runtime extensions. Default selection exposes all
+registered definitions, including host extensions. The loop owns one sorted
+native catalogue per turn; descriptions and schemas are sent once through the
+provider tool fields. Prompt rendering depends only on core values and includes
+native definitions in its cache fingerprint. Stored capability names remain
+readable for compatibility.
 
 Filesystem tools prepare owned, validated calls from final hook input before
 path admission and approval. Path intent and execution use that same request;
@@ -85,46 +89,56 @@ reads, same-ID correction, reopened sessions, budgets and unavailable memory.
 Controlled providers supply the tool decisions; real-model consultation and
 learning quality remain a separate gate in the memory contract.
 
+Tool-context regressions cover custom registry defaults, explicit subsets and
+empty selections, unknown names, child restrictions and denied effects. Both
+supported protocol payloads contain each selected schema once. Tool definitions
+stay fixed across iterations, host changes appear at the next prompt, and native
+schema changes invalidate cache identity without adding system text.
+Affected benchmark targets also compile successfully.
+
 Local verification is not reference-hardware compile/performance certification.
 The toolchain and hosted quality gaps remain in [live debt](exec-plans/tech-debt-tracker.md).
 
 ## Handoff
 
-The host-bound memory and child tools now use the same prepared-call boundary as
-filesystem tools. MemoryRecall, MemoryRemember, MemoryForget, AgentRun and
-ToolSearch parse and validate owned typed requests before path admission,
-permission evaluation and approval; handlers no longer reparse JSON. Memory
-scope, child identity, policy intersection and concrete services remain host
-bound.
+Tool context reduction is complete. ToolSearch, SessionState, PromotionState,
+the post-turn transcript observer and the rendered-schema cache are removed.
+The tool layer owns pure selection, the prompt layer owns synchronous rendering
+and fingerprints, the loop owns the selected snapshot, and bootstrap maps host
+configuration and child restrictions into those value interfaces.
 
-MemoryRecall and MemoryRemember are active in the default catalogue. The runtime
-preamble defines proactive consultation and same-turn durable correction; the
-index makes existing knowledge discoverable before a model chooses its next
-action. Session configuration controls automatic orientation, and all reads and
-writes retain their permission boundary.
+`runtime.prompt.active_tools` keeps its configuration shape: defaults now expose
+all registered tools, explicit lists select only named tools, and `[]` selects
+none. Unknown names fail before provider execution. Hosts using the removed
+discovery or promotion APIs must migrate to native declarations; the
+[tool contract](design-docs/tool-runtime.md) owns compatibility details. Existing
+message encoding, database versions, permission enforcement and child joins are
+preserved. [Prompt design](rules/prompt-design.md) owns the new text section and
+cache identity contract.
+
+Memory orientation, exact reads and same-turn durable correction remain part of
+ordinary work. All three bound memory tools are directly visible by default;
+visibility still grants no write authority.
 
 Recommended next slices, not yet implemented:
 
-1. **Tool context reduction:** scope deferred-tool discovery/promotion and
-   duplicate tool-schema rendering as one complete change. Check actual host
-   use of custom registries and explicit tool selection before removing the
-   discovery state. Keep authorization at dispatch and preserve provider-native
-   tool declarations and cache behavior.
-2. **Development scaffolding cleanup:** remove unused success stubs, empty build
+1. **Development scaffolding cleanup:** remove unused success stubs, empty build
    wiring and unconsumed options, along with their advertised entry points and
    stale documentation. Retain the checks that actually run.
-3. **Session working memory:** persist a compact view of goals, constraints,
-   decisions, completed work and pending work alongside recent conversation.
-   Address the applicable backup/import boundary before persistence changes;
-   evaluate spontaneous memory use with the deployment model separately from
-   controlled-provider tests.
-4. **Build configuration:** make existing LTO/sanitizer options reliably affect
-   compilation and linking, and consolidate flag setup to eliminate manual
-   overrides. Use ordinary build/test targets for verification.
+2. **Session working memory:** persist goals, constraints, decisions, completed
+   work and pending work alongside recent conversation. Address backup/import
+   obligations before persistence changes; evaluate spontaneous memory use with
+   the deployment model separately from controlled-provider tests.
+3. **Build configuration:** make LTO/sanitizer options reliably affect compilation
+   and linking, and consolidate flag setup to eliminate manual overrides. Use
+   ordinary build/test targets for verification.
+4. **Provider cache controls:** internal cache hints are validated and retained,
+   but current protocol encoders do not send explicit cache directives. Implement
+   protocol controls at the provider boundary and test enabled, disabled and
+   fallback requests without coupling prompt rendering to vendor behavior.
 
-The first slice combines the two tool-related directions; the
-[live debt](exec-plans/tech-debt-tracker.md) records the concrete findings and
-completion criteria. These recommendations do not change current contracts.
+[Live debt](exec-plans/tech-debt-tracker.md) records findings and completion
+criteria. These recommendations do not change current contracts.
 
 The library provider/tool/session loop remains the acceptance boundary:
 authorized tool execution, scoped memory recall, persisted continuation and

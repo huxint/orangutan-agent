@@ -311,7 +311,6 @@ DispatchContext DispatchContext::for_now(const DispatchContext& prototype, bool 
       .approval_token_output = thread_approval_token_output ? prototype.approval_token_output : nullptr,
       .now = core::time::now_utc(),
       .bus = prototype.bus,
-      .registry = nullptr,
       .memory_recall = prototype.memory_recall,
       .memory_remember = prototype.memory_remember,
       .memory_forget = prototype.memory_forget,
@@ -398,17 +397,6 @@ std::vector<core::ToolDef> Registry::catalog() const {
 
 async::Awaitable<core::Result<Output>>
 Registry::dispatch(std::string_view name, std::string_view input_json, DispatchContext& ctx) const {
-  struct RegistryContextGuard {
-    DispatchContext& ctx;
-    const Registry* previous_registry;
-
-    ~RegistryContextGuard() {
-      ctx.registry = previous_registry;
-    }
-  };
-
-  RegistryContextGuard registry_guard{.ctx = ctx, .previous_registry = ctx.registry};
-  ctx.registry = this;
   ctx.resolved_path.reset();
   const auto it = entries_.find(name);
   if (it == entries_.end()) {

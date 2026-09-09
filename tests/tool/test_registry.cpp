@@ -224,7 +224,6 @@ TEST_CASE("DispatchContext::for_now creates a fresh wall-clock context", "[unit]
   REQUIRE(ctx.scope_key == "scope-A");
   REQUIRE(ctx.agent_key == "coder");
   REQUIRE(ctx.identity == "operator-1");
-  REQUIRE(ctx.registry == nullptr);
   REQUIRE_FALSE(ctx.resolved_path.has_value());
 }
 
@@ -237,11 +236,9 @@ TEST_CASE("DispatchContext::for_now clones a prototype and clears dispatch-local
       .capability = std::nullopt,
   });
   permission::NullAuditSink audit;
-  tool::Registry registry;
   permission::ApprovalToken token_output;
 
   auto prototype = make_ctx(io, rules, audit, permission::Mode::strict);
-  prototype.registry = &registry;
   prototype.resolved_path = tool::ResolvedToolPath{
       .authority_relative_path = "a",
       .absolute_path = "/tmp/a",
@@ -261,7 +258,6 @@ TEST_CASE("DispatchContext::for_now clones a prototype and clears dispatch-local
   REQUIRE(threaded.approval_token_output == &token_output);
   REQUIRE(threaded.parent_turn_id == prototype.parent_turn_id);
   REQUIRE(threaded.now > core::Time::epoch());
-  REQUIRE(threaded.registry == nullptr);
   REQUIRE_FALSE(threaded.resolved_path.has_value());
 
   REQUIRE(dropped.approval_token_output == nullptr);
@@ -297,112 +293,6 @@ TEST_CASE("Registry::catalog reports tools in insertion order", "[unit][tool][re
   REQUIRE(catalog[0].name == "alpha");
   REQUIRE(catalog[1].name == "beta");
   REQUIRE(catalog[2].name == "gamma");
-}
-
-TEST_CASE("CatalogRenderer renders a deterministic full-schema tool block", "[unit][tool][catalog]") {
-  core::ToolDef def{
-      .name = "FileRead",
-      .description = "Read a UTF-8 text file.",
-      .input_schema_json =
-          R"({"required":["path"],"properties":{"path":{"type":"string"}},"type":"object","additionalProperties":false})",
-      .required_capabilities = {core::Capability::read_file},
-      .deferred = false,
-      .category = "file",
-  };
-
-  tool::CatalogRenderer renderer;
-  auto first = renderer.render_tool_block(def);
-  REQUIRE(first.has_value());
-  auto second = renderer.render_tool_block(def);
-  REQUIRE(second.has_value());
-
-  REQUIRE(*first == *second);
-  REQUIRE(first->contains("Tool: FileRead\n"));
-  REQUIRE(first->contains("Description: Read a UTF-8 text file.\n"));
-  REQUIRE(first->contains("Category: file\n"));
-  REQUIRE(first->contains("Capabilities: read_file\n"));
-  REQUIRE(first->contains("Input Schema:\n"));
-  REQUIRE(first->contains(R"("additionalProperties": false)"));
-  REQUIRE(first->contains(R"("path")"));
-
-  const auto stats = renderer.cache_stats();
-  REQUIRE(stats.renderer_version == 1);
-  REQUIRE(stats.blocks.misses == 1);
-  REQUIRE(stats.blocks.hits == 1);
-  REQUIRE(stats.blocks.current_entries == 1);
-}
-
-TEST_CASE("CatalogRenderer sorts active tools and separates deferred entries", "[unit][tool][catalog]") {
-  auto active_b = core::ToolDef::with_no_input("FileWrite", "Write a file.");
-  active_b.required_capabilities = {core::Capability::write_file};
-  active_b.category = "file";
-
-  auto deferred = core::ToolDef::with_no_input("MemoryRecall", "Recall memory.");
-  deferred.required_capabilities = {core::Capability::read_memory};
-  deferred.deferred = true;
-  deferred.category = "memory";
-
-  auto active_a = core::ToolDef::with_no_input("FileRead", "Read a file.");
-  active_a.required_capabilities = {core::Capability::read_file};
-  active_a.category = "file";
-
-  const std::vector<core::ToolDef> defs{active_b, deferred, active_a};
-  tool::CatalogRenderer renderer;
-  auto rendered = renderer.render_catalog(defs);
-  REQUIRE(rendered.has_value());
-
-  REQUIRE(rendered->active_blocks.size() == 2);
-  REQUIRE(rendered->active_blocks[0].starts_with("Tool: FileRead\n"));
-  REQUIRE(rendered->active_blocks[1].starts_with("Tool: FileWrite\n"));
-  REQUIRE(rendered->active_text.find("Tool: FileRead") < rendered->active_text.find("Tool: FileWrite"));
-  REQUIRE_FALSE(rendered->active_text.contains("MemoryRecall"));
-  REQUIRE(rendered->deferred_entries == std::vector<std::string>{"MemoryRecall - Recall memory."});
-  REQUIRE(rendered->deferred_text == "MemoryRecall - Recall memory.");
-}
-
-TEST_CASE("CatalogRenderer cache key includes renderer version and rendered ToolDef fields", "[unit][tool][catalog]") {
-  auto def = core::ToolDef::with_no_input("AlphaTool", "Alpha.");
-  def.required_capabilities = {core::Capability::read_file};
-  def.category = "alpha";
-
-  tool::CatalogRenderer v1{tool::ToolCatalogRenderOptions{.renderer_version = 1, .max_cached_blocks = 256}};
-  tool::CatalogRenderer v2{tool::ToolCatalogRenderOptions{.renderer_version = 2, .max_cached_blocks = 256}};
-
-  const auto hash_v1 = tool::tool_def_render_hash(def, 1);
-  const auto hash_v2 = tool::tool_def_render_hash(def, 2);
-  REQUIRE(hash_v1 != hash_v2);
-
-  auto deferred_only = def;
-  deferred_only.deferred = true;
-  REQUIRE(tool::tool_def_render_hash(def, 1) == tool::tool_def_render_hash(deferred_only, 1));
-
-  auto category_changed = def;
-  category_changed.category = "beta";
-  REQUIRE(tool::tool_def_render_hash(def, 1) != tool::tool_def_render_hash(category_changed, 1));
-
-  REQUIRE(v1.render_tool_block(def).has_value());
-  REQUIRE(v1.render_tool_block(def).has_value());
-  REQUIRE(v1.cache_stats().blocks.misses == 1);
-  REQUIRE(v1.cache_stats().blocks.hits == 1);
-
-  REQUIRE(v2.render_tool_block(def).has_value());
-  REQUIRE(v2.cache_stats().renderer_version == 2);
-  REQUIRE(v2.cache_stats().blocks.misses == 1);
-  REQUIRE(v2.cache_stats().blocks.hits == 0);
-}
-
-TEST_CASE("CatalogRenderer can disable memoisation without unbounded state", "[unit][tool][catalog]") {
-  auto def = core::ToolDef::with_no_input("AlphaTool", "Alpha.");
-  tool::CatalogRenderer renderer{tool::ToolCatalogRenderOptions{.renderer_version = 1, .max_cached_blocks = 0}};
-
-  REQUIRE(renderer.render_tool_block(def).has_value());
-  REQUIRE(renderer.render_tool_block(def).has_value());
-
-  const auto stats = renderer.cache_stats();
-  REQUIRE(stats.blocks.hits == 0);
-  REQUIRE(stats.blocks.misses == 2);
-  REQUIRE(stats.blocks.current_entries == 0);
-  REQUIRE(stats.blocks.current_bytes == 0);
 }
 
 TEST_CASE("Registry::remove unregisters tools and reports not_found on a second call", "[unit][tool][registry]") {
@@ -540,8 +430,6 @@ TEST_CASE("Registry::dispatch honors a capability scope on the firing rule", "[u
         .description = "tool needing read_file",
         .input_schema_json = "{}",
         .required_capabilities = {core::Capability::read_file},
-        .deferred = false,
-        .category = {},
     };
     REQUIRE(registry.add(std::move(def), make_echo_handler()).has_value());
 
@@ -603,22 +491,7 @@ TEST_CASE("register_file_read advertises a `read_file` capability and a path sch
   REQUIRE(def->input_schema_json.contains("\"path\""));
 }
 
-TEST_CASE("register_tool_search advertises a capability-free runtime lookup", "[unit][tool][tool_search]") {
-  tool::Registry registry;
-  REQUIRE(tool::register_tool_search(registry).has_value());
-  REQUIRE(registry.size() == 1);
-  const auto* def = registry.find(tool::kToolSearchName);
-  REQUIRE(def != nullptr);
-  REQUIRE(def->required_capabilities.empty());
-  REQUIRE_FALSE(def->deferred);
-  REQUIRE(def->category.has_value());
-  REQUIRE(*def->category == "runtime");
-  REQUIRE(def->input_schema_json.contains("\"name\""));
-  REQUIRE(def->input_schema_json.contains("\"category\""));
-  REQUIRE(def->input_schema_json.contains("\"capability\""));
-}
-
-TEST_CASE("register_memory_recall advertises read_memory and active memory metadata", "[unit][tool][memory_recall]") {
+TEST_CASE("register_memory_recall advertises read_memory and its input schema", "[unit][tool][memory_recall]") {
   tool::Registry registry;
   REQUIRE(tool::register_memory_recall(registry).has_value());
   REQUIRE(registry.size() == 1);
@@ -626,16 +499,12 @@ TEST_CASE("register_memory_recall advertises read_memory and active memory metad
   REQUIRE(def != nullptr);
   REQUIRE(def->required_capabilities.size() == 1);
   REQUIRE(def->required_capabilities[0] == core::Capability::read_memory);
-  REQUIRE_FALSE(def->deferred);
-  REQUIRE(def->category.has_value());
-  REQUIRE(*def->category == "memory");
   REQUIRE(def->input_schema_json.contains("\"query\""));
   REQUIRE(def->input_schema_json.contains("\"limit\""));
   REQUIRE(def->input_schema_json.contains("\"kinds\""));
 }
 
-TEST_CASE("register_memory_remember advertises write_memory and active memory metadata",
-          "[unit][tool][memory_remember]") {
+TEST_CASE("register_memory_remember advertises write_memory and its input schema", "[unit][tool][memory_remember]") {
   tool::Registry registry;
   REQUIRE(tool::register_memory_remember(registry).has_value());
   REQUIRE(registry.size() == 1);
@@ -643,9 +512,6 @@ TEST_CASE("register_memory_remember advertises write_memory and active memory me
   REQUIRE(def != nullptr);
   REQUIRE(def->required_capabilities.size() == 1);
   REQUIRE(def->required_capabilities[0] == core::Capability::write_memory);
-  REQUIRE_FALSE(def->deferred);
-  REQUIRE(def->category.has_value());
-  REQUIRE(*def->category == "memory");
   REQUIRE(def->input_schema_json.contains("\"id\""));
   REQUIRE(def->input_schema_json.contains("\"kind\""));
   REQUIRE(def->input_schema_json.contains("\"title\""));
@@ -653,8 +519,7 @@ TEST_CASE("register_memory_remember advertises write_memory and active memory me
   REQUIRE(def->input_schema_json.contains("\"importance\""));
 }
 
-TEST_CASE("register_memory_forget advertises write_memory and deferred memory metadata",
-          "[unit][tool][memory_forget]") {
+TEST_CASE("register_memory_forget advertises write_memory and its input schema", "[unit][tool][memory_forget]") {
   tool::Registry registry;
   REQUIRE(tool::register_memory_forget(registry).has_value());
   REQUIRE(registry.size() == 1);
@@ -662,9 +527,6 @@ TEST_CASE("register_memory_forget advertises write_memory and deferred memory me
   REQUIRE(def != nullptr);
   REQUIRE(def->required_capabilities.size() == 1);
   REQUIRE(def->required_capabilities[0] == core::Capability::write_memory);
-  REQUIRE(def->deferred);
-  REQUIRE(def->category.has_value());
-  REQUIRE(*def->category == "memory");
   REQUIRE(def->input_schema_json.contains("\"id\""));
 }
 
@@ -672,141 +534,10 @@ TEST_CASE("register_builtins seeds the file tool catalog", "[unit][tool][builtin
   tool::Registry registry;
   REQUIRE(tool::register_builtins(registry).has_value());
   const auto catalog = registry.catalog();
-  REQUIRE(catalog.size() == 4);
+  REQUIRE(catalog.size() == 3);
   REQUIRE(catalog[0].name == tool::kFileReadName);
   REQUIRE(catalog[1].name == tool::kFileWriteName);
   REQUIRE(catalog[2].name == tool::kFileEditName);
-  REQUIRE(catalog[3].name == tool::kToolSearchName);
-}
-
-TEST_CASE("ToolSearch returns structured tool metadata by exact name", "[unit][tool][tool_search]") {
-  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_read(registry).has_value());
-    REQUIRE(tool::register_tool_search(registry).has_value());
-
-    auto rules = single_rule(permission::Rule{
-        .verdict = permission::Verdict::allow,
-        .tool_pattern = std::string{tool::kToolSearchName},
-    });
-    permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
-
-    auto result = co_await registry.dispatch(tool::kToolSearchName, R"({"name":"FileRead"})", ctx);
-    REQUIRE(result.has_value());
-    REQUIRE(result->text.starts_with("ToolSearch: 1 match"));
-    REQUIRE(result->text.contains("FileRead"));
-    REQUIRE(result->data_json.has_value());
-    const auto data = nlohmann::json::parse(*result->data_json);
-    REQUIRE(data["kind"] == "tool_search");
-    REQUIRE(data["query"]["name"] == "FileRead");
-    REQUIRE(data["match_count"] == 1);
-    REQUIRE(data["matches"].size() == 1);
-    const auto& match = data["matches"][0];
-    REQUIRE(match["name"] == "FileRead");
-    REQUIRE(match["category"] == "file");
-    REQUIRE(match["deferred"] == false);
-    REQUIRE(match["description"].get<std::string>().contains("Read"));
-    REQUIRE(match["input_schema"]["properties"].contains("path"));
-    REQUIRE(match["required_capabilities"] == nlohmann::json::array({"read_file"}));
-    REQUIRE(result->usage.match_count.has_value());
-    REQUIRE(*result->usage.match_count == 1);
-  });
-}
-
-TEST_CASE("ToolSearch filters late-registered deferred tools by category and capability", "[unit][tool][tool_search]") {
-  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_tool_search(registry).has_value());
-
-    auto memory = core::ToolDef::with_no_input("MemoryRecall", "Recall long-term memory.");
-    memory.required_capabilities = {core::Capability::read_memory};
-    memory.deferred = true;
-    memory.category = "memory";
-    REQUIRE(registry.add(std::move(memory), make_echo_handler()).has_value());
-
-    auto rules = single_rule(permission::Rule{
-        .verdict = permission::Verdict::allow,
-        .tool_pattern = std::string{tool::kToolSearchName},
-    });
-    permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
-
-    auto result =
-        co_await registry.dispatch(tool::kToolSearchName, R"({"category":"memory","capability":"read_memory"})", ctx);
-    REQUIRE(result.has_value());
-    REQUIRE(result->text.contains("MemoryRecall [memory] [deferred]"));
-    REQUIRE(result->data_json.has_value());
-    const auto data = nlohmann::json::parse(*result->data_json);
-    REQUIRE(data["query"]["category"] == "memory");
-    REQUIRE(data["query"]["capability"] == "read_memory");
-    REQUIRE(data["match_count"] == 1);
-    REQUIRE(data["matches"][0]["name"] == "MemoryRecall");
-    REQUIRE(data["matches"][0]["deferred"] == true);
-    REQUIRE(data["matches"][0]["required_capabilities"] == nlohmann::json::array({"read_memory"}));
-  });
-}
-
-TEST_CASE("ToolSearch reads the dispatching registry after Registry move", "[unit][tool][tool_search]") {
-  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry original;
-    REQUIRE(tool::register_tool_search(original).has_value());
-
-    tool::Registry registry = std::move(original);
-    REQUIRE(tool::register_file_read(registry).has_value());
-
-    auto rules = single_rule(permission::Rule{
-        .verdict = permission::Verdict::allow,
-        .tool_pattern = std::string{tool::kToolSearchName},
-    });
-    permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
-
-    auto result = co_await registry.dispatch(tool::kToolSearchName, R"({"name":"FileRead"})", ctx);
-    REQUIRE(result.has_value());
-    REQUIRE(result->data_json.has_value());
-    const auto data = nlohmann::json::parse(*result->data_json);
-    REQUIRE(data["match_count"] == 1);
-    REQUIRE(data["matches"][0]["name"] == "FileRead");
-  });
-}
-
-TEST_CASE("ToolSearch rejects malformed selectors as invalid_argument", "[unit][tool][tool_search]") {
-  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_tool_search(registry).has_value());
-
-    auto rules = single_rule(permission::Rule{
-        .verdict = permission::Verdict::allow,
-        .tool_pattern = std::string{tool::kToolSearchName},
-    });
-    permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
-
-    auto bad_json = co_await registry.dispatch(tool::kToolSearchName, "{not-json}", ctx);
-    REQUIRE_FALSE(bad_json.has_value());
-    REQUIRE(bad_json.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto non_object = co_await registry.dispatch(tool::kToolSearchName, "[]", ctx);
-    REQUIRE_FALSE(non_object.has_value());
-    REQUIRE(non_object.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto missing_selector = co_await registry.dispatch(tool::kToolSearchName, "{}", ctx);
-    REQUIRE_FALSE(missing_selector.has_value());
-    REQUIRE(missing_selector.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto wrong_type = co_await registry.dispatch(tool::kToolSearchName, R"({"name":42})", ctx);
-    REQUIRE_FALSE(wrong_type.has_value());
-    REQUIRE(wrong_type.error().kind() == core::ErrorKind::invalid_argument);
-    REQUIRE(context_has(wrong_type.error(), "field", "name"));
-
-    auto unknown_capability = co_await registry.dispatch(tool::kToolSearchName, R"({"capability":"warp_drive"})", ctx);
-    REQUIRE_FALSE(unknown_capability.has_value());
-    REQUIRE(unknown_capability.error().kind() == core::ErrorKind::invalid_argument);
-    REQUIRE(context_has(unknown_capability.error(), "capability", "warp_drive"));
-
-    REQUIRE(sink.events().size() == 5);
-  });
 }
 
 TEST_CASE("MemoryRecall delegates parsed query through DispatchContext", "[unit][tool][memory_recall]") {
@@ -2584,8 +2315,6 @@ async::Awaitable<core::Result<tool::Output>> noop_error_handler(std::string_view
       .description = "noop",
       .input_schema_json = "{}",
       .required_capabilities = {},
-      .deferred = false,
-      .category = {},
   };
 }
 

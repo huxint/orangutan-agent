@@ -76,8 +76,6 @@ core::Result<void> register_memory_forget(Registry& registry) {
                      "result returns confirmation text plus structured removed-key metadata.",
       .input_schema_json = std::string{kMemoryForgetSchema},
       .required_capabilities = {core::Capability::write_memory},
-      .deferred = true,
-      .category = "memory",
   };
 
   return registry.add_prepared(std::move(def), [](std::string_view input_json) -> core::Result<PreparedCall> {

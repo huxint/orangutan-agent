@@ -171,12 +171,6 @@ struct DispatchContext {
   /// exit. The pointer is non-owning; the caller (typically the agent loop)
   /// keeps the bus alive across dispatch invocations.
   hook::Bus* bus{nullptr};
-  /// Registry currently running this dispatch. Set by `Registry::dispatch`
-  /// before any handler runs and restored when dispatch exits. Most handlers
-  /// ignore it; metadata tools such as `ToolSearch` use it to inspect the
-  /// live catalog without capturing a self-reference inside a movable
-  /// `Registry`.
-  const Registry* registry{nullptr};
   /// Optional long-term memory recall service. When set, `MemoryRecall` calls
   /// it with the parsed query, limit, and kind spellings, and returns the
   /// produced output through the ordinary dispatch path. When unset,

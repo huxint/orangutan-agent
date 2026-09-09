@@ -267,8 +267,6 @@ core::Result<void> register_file_read(Registry& registry) {
                      "kind, path, text, fingerprint, start_line, end_line, returned_bytes, and truncated.",
       .input_schema_json = std::string{kFileReadSchema},
       .required_capabilities = {core::Capability::read_file},
-      .deferred = false,
-      .category = "file",
   };
   return registry.add_prepared(std::move(def), &prepare_file_read);
 }

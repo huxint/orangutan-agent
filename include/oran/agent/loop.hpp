@@ -11,14 +11,13 @@
 #include <asio/any_io_executor.hpp>
 
 #include <oran/async/awaitable_fwd.hpp>
-#include <oran/config/config.hpp>
 #include <oran/core/content.hpp>
 #include <oran/core/message.hpp>
 #include <oran/core/result.hpp>
 #include <oran/core/stop_reason.hpp>
 #include <oran/core/tool_def.hpp>
 #include <oran/core/turn_id.hpp>
-#include <oran/prompt/builder.hpp>
+#include <oran/prompt/render.hpp>
 #include <oran/provider/cache.hpp>
 #include <oran/provider/system.hpp>
 #include <oran/provider/types.hpp>
@@ -42,7 +41,7 @@ class ToolScheduler;
 
 struct LoopOptions {
   std::uint32_t max_iterations{16};
-  prompt::BuilderOptions prompt_options{};
+  prompt::SectionVersions prompt_versions{};
 
   friend bool operator==(const LoopOptions&, const LoopOptions&) = default;
 };
@@ -66,16 +65,15 @@ struct RunTurnInputs {
   /// Supplying text is an explicit override for tests or embedders that already
   /// own a repository-versioned preamble.
   std::string_view system_preamble{};
-  /// Registry catalogue used for prompt rendering and native provider tool
-  /// definitions. The active subset is sorted by tool name.
+  /// Available definitions. The selected native catalogue is sorted once per
+  /// turn and shared by prompt fingerprinting and every provider request.
   std::span<const core::ToolDef> tool_catalog{};
-  config::PromptActiveToolsConfig active_tools{};
-  /// Sorted promotion snapshot from `SessionState::promotion_snapshot(now)`.
-  std::span<const std::string> promoted_tools{};
+  /// Absent selects all available tools; an explicit empty list selects none.
+  std::optional<std::span<const std::string>> active_tools{};
   std::string_view skills_catalog{};
   std::string_view memory_framing{};
   std::string_view per_agent_overlay{};
-  /// Section (7), already including the current user turn. The loop copies
+  /// Conversation tail, already including the current user turn. The loop copies
   /// these messages into the provider request; the span only needs to remain
   /// valid until the coroutine is awaited to completion.
   std::span<const core::Message> conversation_tail{};

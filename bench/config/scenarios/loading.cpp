@@ -21,7 +21,7 @@ constexpr auto kConfigText = std::string_view{R"json({
       "active_tools": [
         "FileRead",
         "FileEdit",
-        "ToolSearch"
+        "MemoryRemember"
       ]
     }
   },

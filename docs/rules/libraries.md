@@ -8,7 +8,7 @@ and measured or estimated compile cost here before adding it to the build.
 | --- | --- | --- | --- | --- |
 | `asio` | 1.36.0 | Async executors, coroutines and cancellation | BSL-1.0 | Executor handles may be public; implementation headers have moderate cost. |
 | `libcurl` | >=8.11.0, system | HTTP/SSE transport | curl | Private to `oran-http`; moderate cost. |
-| `nlohmann_json` | 3.12.0 | Config, tool, provider, agent, memory and bootstrap JSON | MIT | Implementation files only; moderate cost. |
+| `nlohmann_json` | 3.12.0 | Config, tool, provider, memory and bootstrap JSON | MIT | Implementation files only; moderate cost. |
 | `re2` | 2025.11.05 | Configuration validation and permission input patterns | BSD-3-Clause | Private compiled regex owner; moderate cost. |
 | `sqlite3` | 3.51.0+0 | Storage with FTS5 lexical memory | Public domain | C API private to `oran-storage`; moderate cost. |
 | `libsodium` | 1.0.21 | Approval authentication and random keys | ISC | Private to `oran-permission`; low cost. |

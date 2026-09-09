@@ -38,8 +38,8 @@ iterations, and the next prompt observes accepted memory updates. An unavailable
 index is explicit context for the model; cancellation still ends the turn.
 
 Memory adapters borrow one backend and capture the host's scope. They
-do not capture session state or discover configuration. Filesystem and catalogue
-tools are registered together; the session adds memory tools when memory services
+do not capture session state or discover configuration. The session registers
+filesystem tools and adds memory tools when memory services
 exist. Recall and remember are visible in the default catalogue so the model can
 inspect relevant durable notes by ID and save stable decisions or corrections
 during ordinary work. The index, content reads and writes share the dispatch
@@ -48,7 +48,10 @@ model-use guidance. Every turn joins its borrowed tool context before returning
 or persisting.
 
 Sessions share the broker, workspace, hook and audit services. Each session owns
-its rule values and promotion state. Without an approval consumer, an `ask`
+its rule values. Configuration becomes an optional list of tool names at the
+loop boundary; it does not enter prompt rendering or native protocol mapping.
+An injected registry exposes custom tools through the same selection function.
+The next prompt observes host registration changes. Without an approval consumer, an `ask`
 decision fails closed. Embedders may bind an explicit approval sink through the
 hook bus.
 

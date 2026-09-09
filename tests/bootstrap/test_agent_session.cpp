@@ -602,53 +602,82 @@ TEST_CASE("AgentSession publishes provider hooks through RuntimeAssembly",
   });
 }
 
-TEST_CASE("AgentSession feeds ToolSearch results back into per-session state",
-          "[unit][bootstrap][prompt_runner][session_state]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-observe"};
-  test::run_async(
-      [&temp](asio::io_context& io) -> async::Awaitable<void> {
-        auto cfg = config::Config{};
-        auto assembly = build_assembly(temp.path(), io, false);
-        std::vector<provider::ScriptedTurn> plan;
-        plan.push_back(provider::ScriptedTurn{
-            .response =
-                provider::Response{
-                    .blocks = {core::ToolUseContent{
-                        .id = "search-1",
-                        .name = "ToolSearch",
-                        .input_json = R"({"name":"FileRead"})",
-                    }},
-                    .stop_reason = core::StopReason::tool_use,
-                    .usage = provider::Usage{.input_tokens = 1,
-                                             .output_tokens = 1,
-                                             .cache_creation_tokens = 0,
-                                             .cache_read_tokens = 0,
-                                             .cost_estimate = std::nullopt},
-                    .model_used = std::string{"fake-1"},
-                    .route_profile_used = std::nullopt,
-                },
-            .deltas = {},
-            .error = std::nullopt,
-            .latency = {},
-        });
-        plan.push_back(provider::ScriptedTurn{
-            .response = text_response("searched"),
-            .deltas = {},
-            .error = std::nullopt,
-            .latency = {},
-        });
-        provider::FakeProvider fake{std::move(plan)};
+TEST_CASE("AgentSession exposes custom tools directly and refreshes them at the next prompt",
+          "[integration][bootstrap][catalog]") {
+  TempDir temp{"oran-native-custom-tools"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = parse_config(R"({"permissions":{"allow":[{"tool_pattern":"CustomTool"}]}})");
+    auto assembly = build_assembly(temp.path(), io, false, false, false);
+    tool::Registry registry;
+    std::size_t calls = 0;
+    REQUIRE(registry.add(
+        core::ToolDef::with_no_input("CustomTool", "Read host context"),
+        [&calls](std::string_view, tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+          ++calls;
+          co_return tool::Output::text_only("host context");
+        }));
+    agent::ToolScheduler scheduler{io.get_executor(), registry};
+    RecordingProvider recording{
+        {tool_response("CustomTool", "custom-1", "{}"), text_response("done"), text_response("continued")}};
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.registry = &registry;
+    options.scheduler = &scheduler;
+    auto session = bootstrap::AgentSession::create(std::move(options));
+    REQUIRE(session.has_value());
 
-        auto runner = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, fake));
-        REQUIRE(runner.has_value());
-        auto prompt = orangutan::agent::PromptRequest{.prompt = "search"};
-        auto result = co_await (*runner)->run_prompt(std::move(prompt));
+    auto result = co_await (*session)->run_prompt({.prompt = "Use the host context."});
+    REQUIRE(result.has_value());
+    REQUIRE(calls == 1);
+    auto requests = recording.requests();
+    REQUIRE(requests.size() == 2);
+    REQUIRE(requests[0].tools == registry.catalog());
+    REQUIRE(requests[1].tools == requests[0].tools);
+    REQUIRE(requests[0].system_prompt == requests[1].system_prompt);
+    REQUIRE(requests[0].cache == requests[1].cache);
+    REQUIRE(tool_result_output_in(requests[1], "custom-1") == "host context");
 
-        REQUIRE(result.has_value());
-        REQUIRE(result->text == "searched");
-        REQUIRE(fake.turns_consumed() == 2);
-      },
-      std::chrono::seconds{3});
+    REQUIRE(registry.add(core::ToolDef::with_no_input("AddedTool", "New host service"),
+                         [](std::string_view, tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+                           co_return tool::Output::text_only("new context");
+                         }));
+    result = co_await (*session)->run_prompt({.prompt = "Continue."});
+    REQUIRE(result.has_value());
+    requests = recording.requests();
+    REQUIRE(requests.size() == 3);
+    REQUIRE(requests[2].tools.size() == 2);
+    REQUIRE(requests[2].tools[0].name == "AddedTool");
+    REQUIRE(requests[2].tools[1].name == "CustomTool");
+    REQUIRE(requests[2].system_prompt == requests[0].system_prompt);
+    REQUIRE(requests[2].cache.has_value());
+    REQUIRE(requests[0].cache.has_value());
+    REQUIRE(requests[2].cache->prefix_hash != requests[0].cache->prefix_hash);
+  });
+}
+
+TEST_CASE("AgentSession preserves explicit tool subsets and empty selections", "[integration][bootstrap][catalog]") {
+  bool empty = false;
+  SECTION("explicit subset") {}
+  SECTION("explicit empty list") {
+    empty = true;
+  }
+  TempDir temp{"oran-native-selected-tools"};
+  test::run_async([&temp, empty](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = parse_config(empty ? R"({"runtime":{"prompt":{"active_tools":[]}}})"
+                                  : R"({"runtime":{"prompt":{"active_tools":["FileRead"]}}})");
+    auto assembly = build_assembly(temp.path(), io, false, false, false);
+    RecordingProvider recording{{text_response("done")}};
+    auto session = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, recording));
+    REQUIRE(session.has_value());
+    const auto result = co_await (*session)->run_prompt({.prompt = "Hello"});
+    REQUIRE(result.has_value());
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 1);
+    REQUIRE(requests[0].tools.size() == (empty ? 0 : 1));
+    if (!empty) {
+      REQUIRE(requests[0].tools[0].name == "FileRead");
+    }
+    REQUIRE_FALSE(requests[0].system_prompt->contains("FileWrite"));
+  });
 }
 
 TEST_CASE("AgentSession renders memory framing once per prompt before loop iterations",
@@ -1067,6 +1096,7 @@ TEST_CASE("AgentSession dispatches MemoryForget through long-term backend",
     const auto requests = recording.requests();
     REQUIRE(requests.size() == 2);
     const auto output = tool_result_output_in(requests[1], "memory-forget-1");
+    REQUIRE(std::ranges::contains(requests[0].tools, std::string_view{"MemoryForget"}, &core::ToolDef::name));
     REQUIRE(output.contains("MemoryForget: removed record lt-tool-forget"));
     const auto data_json = tool_result_data_json_in(requests[1], "memory-forget-1");
     REQUIRE(data_json.has_value());
@@ -1148,7 +1178,7 @@ TEST_CASE("AgentSession renders default system preamble once per prompt before l
     REQUIRE(requests[1].system_prompt.has_value());
     REQUIRE(requests[0].system_prompt->contains("You are Orangutan"));
     REQUIRE(requests[0].system_prompt->contains("Operating principles:"));
-    REQUIRE(requests[0].system_prompt->contains("Tool: FileRead"));
+    REQUIRE_FALSE(requests[0].system_prompt->contains("Tool: FileRead"));
     REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
   });
 }
@@ -1564,9 +1594,14 @@ TEST_CASE("an automatic memory index cannot be rewritten into full prompt conten
 
 TEST_CASE("natural memory use does not grant permission to write notes",
           "[integration][bootstrap][memory][core_boundary]") {
+  bool advertised = true;
+  SECTION("default tool exposure") {}
+  SECTION("model names an unadvertised tool") {
+    advertised = false;
+  }
   TempDir temp{"oran-memory-write-permission"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto cfg = config::Config{};
+  test::run_async([&temp, advertised](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = advertised ? config::Config{} : parse_config(R"({"runtime":{"prompt":{"active_tools":[]}}})");
     auto assembly = build_assembly(temp.path(), io, false);
     RecordingProvider provider{{
         tool_response("MemoryRemember",
@@ -1580,6 +1615,8 @@ TEST_CASE("natural memory use does not grant permission to write notes",
     REQUIRE(result.has_value());
     const auto requests = provider.requests();
     REQUIRE(requests.size() == 2);
+    CHECK(std::ranges::contains(requests[0].tools, std::string_view{"MemoryRemember"}, &core::ToolDef::name) ==
+          advertised);
     CHECK(tool_result_output_in(requests[1], "save").contains("approval"));
     auto stored = co_await assembly.longterm_memory_backend()->get({.id = "style", .scope_key = "scope-A"});
     REQUIRE_FALSE(stored.has_value());
@@ -1604,10 +1641,11 @@ TEST_CASE("a session advertises memory tools only when memory is available",
     const auto requests = recording.requests();
     REQUIRE(requests.size() == 1);
     REQUIRE(requests.front().system_prompt.has_value());
-    CHECK(requests.front().system_prompt->contains("FileRead"));
-    CHECK_FALSE(requests.front().system_prompt->contains("Tool: MemoryRecall"));
-    CHECK_FALSE(requests.front().system_prompt->contains("Tool: MemoryRemember"));
-    CHECK_FALSE(requests.front().system_prompt->contains("Tool: MemoryForget"));
+    CHECK(std::ranges::contains(requests.front().tools, std::string_view{"FileRead"}, &core::ToolDef::name));
+    CHECK_FALSE(std::ranges::contains(requests.front().tools, std::string_view{"MemoryRecall"}, &core::ToolDef::name));
+    CHECK_FALSE(
+        std::ranges::contains(requests.front().tools, std::string_view{"MemoryRemember"}, &core::ToolDef::name));
+    CHECK_FALSE(std::ranges::contains(requests.front().tools, std::string_view{"MemoryForget"}, &core::ToolDef::name));
   });
 }
 

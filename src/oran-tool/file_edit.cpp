@@ -281,8 +281,6 @@ core::Result<void> register_file_edit(Registry& registry) {
                      "bytes_read, bytes_written, files_touched, and match_count.",
       .input_schema_json = std::string{kFileEditSchema},
       .required_capabilities = {core::Capability::edit_file},
-      .deferred = false,
-      .category = "file",
   };
   return registry.add_prepared(std::move(def), &prepare_file_edit);
 }

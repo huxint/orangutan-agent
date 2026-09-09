@@ -1,45 +1,61 @@
 # Runtime Prompt Design
 
-Render prompt sections as pure functions of their inputs. Stable content must
-produce identical bytes across provider/tool iterations. This rule governs the
-prompts emitted by Orangutan, not development-agent routing instructions.
+[prompt::render](../../include/oran/prompt/render.hpp) is a synchronous value
+transformation over core messages, tool values and caller text. It needs no
+registry, configuration, executor or cache owner. Stable inputs produce
+identical bytes across provider/tool iterations.
+This rule governs runtime prompts, not development-agent routing instructions.
 
-## Section Order
+## Text Section Order
 
 1. System preamble: identity, operating principles and response contract.
-2. Active tool catalogue: registered names, descriptions and JSON schemas.
-3. Deferred-tool index: compact names and descriptions.
-4. Optional caller-supplied skill catalogue.
-5. Scoped memory index or exact caller framing selected once at the prompt boundary.
-6. Stable per-agent instructions.
-7. Conversation messages, including the current user and tool results.
+2. Optional caller-supplied skill catalogue.
+3. Scoped memory index or exact caller framing selected at the prompt boundary.
+4. Stable per-agent instructions.
+5. Conversation messages, including the current user and tool results.
 
-Sections 1–6 form the cached prefix. The conversation is dynamic. Clocks, request
-IDs, trace IDs, counters and status narration stay out of stable sections. A
-changed stable input deliberately changes the content hash. Bump section versions
-when rendering rules change; avoid per-request version churn.
+Sections 1–4 form the stable text prefix, with the cache breakpoint on section 4.
+Conversation is dynamic. Clocks, request IDs, trace IDs, counters and status
+narration stay out of stable sections. Bump section versions when rendering rules
+change; avoid per-request version churn.
 
-Tool descriptions derive from `ToolDef`; catalogue rendering never grants a
-capability. `prompt::is_default_active_tool` supplies the shared default selection
-for cached catalogues and provider-native tool declarations. `AgentRun` is active
-when registered; child sessions remove disabled delegation from their catalogue
-and explicit active-tool selection. `MemoryRecall` and `MemoryRemember` are
-active by default so the agent can inspect and record durable context without
-first discovering a deferred tool. `MemoryForget` remains deferred. The default
-memory section is a bounded index of IDs, titles and content cues. Complete notes
-enter the dynamic conversation through model-directed reads. Scores, read times
-and mutable counters stay out of index text. Index loading happens once before
-the loop, so tool iterations reuse the prefix and accepted writes change the next
-prompt's index. The preamble defines consultation and same-turn durable learning
-triggers; [memory-system](../design-docs/memory-system.md) owns their semantics
-and the distinction between model guidance and runtime guarantees.
+## Native Tools And Cache Identity
 
-Provider adapters map the resulting sections into their protocol's cache hints.
-`bench-agent` compares stable-prefix behavior across changing conversation tails.
+The loop selects one owned, sorted tool catalogue for the entire turn through
+`tool::select_tools`. The [tool contract](../design-docs/tool-runtime.md) owns
+selection and authority. Both supported protocols receive descriptions and JSON
+schemas through `provider::Request::tools`; system text contains neither a copy
+of the schemas nor a deferred-tool index. Child sessions omit disabled delegation
+from both their available catalogue and explicit selection.
+
+The renderer receives the exact ordered native definitions to fingerprint their
+names, descriptions and opaque schema bytes. Required capabilities remain local
+permission metadata. Field lengths preserve hash boundaries. The tool fingerprint
+and its cache version join stable text in `RenderedPrompt::prefix_hash`, so a
+schema, description, selection or order change invalidates the effective prefix
+without adding tool text. Conversation changes leave that identity stable.
+
+`prefix_bytes` counts stable text and native name/description/schema bytes. It
+excludes protocol framing and is neither a token count nor serialized request
+size. `make_prompt_cache_hints` uses this count for the configured eligibility
+floor. The [provider contract](../design-docs/api-portability.md) owns how those
+internal hints reach a protocol adapter.
+
+## Memory Context
+
+Bound MemoryRecall, MemoryRemember and MemoryForget tools are directly available
+by default. The memory section is a bounded index of IDs, titles and content
+cues. Complete notes enter the dynamic conversation through model-directed reads.
+Scores, read times and mutable counters stay out of index text. Index loading
+happens once before the loop, so tool iterations reuse the prefix and accepted
+writes change the next prompt's index. The preamble defines consultation and
+same-turn durable learning triggers; [memory-system](../design-docs/memory-system.md)
+owns their semantics and the distinction between guidance and runtime guarantees.
+
+`bench-prompt` exercises pure rendering with full and reduced native catalogues.
 `scripts/check-prompt-preamble.sh` checks the default system preamble for dynamic
-inputs; behavioral tests check bytes and hashes.
+inputs; behavioral tests check bytes, tool fingerprints and cache invalidation.
 
 For a new model-visible surface, consult the relevant proven shape in
 <https://github.com/Piebald-AI/claude-code-system-prompts>, then record the adopted
-contract in its owning design document. Existing reductions preserve section
-membership rather than creating new prompt surfaces.
+contract in its owning design document.

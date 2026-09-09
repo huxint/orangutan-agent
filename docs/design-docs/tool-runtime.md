@@ -44,7 +44,7 @@ its own argument shape.
 `DispatchContext` carries identity, rules, audit, workspace, approval and injected
 memory services. A tool receives these dependencies explicitly. Application
 code supplies bindings once instead of registering alternate dispatch paths.
-`register_builtins` installs filesystem tools and catalogue discovery;
+`register_builtins` installs the three filesystem tools;
 `register_memory_tools` adds the three memory tools when the host supplies their
 services. `register_agent_run` adds a configured-name child runner supplied by
 the host. A session advertises tools available through its bindings.
@@ -82,17 +82,31 @@ This lifetime obligation also applies to borrowed audit, workspace and handlers.
 Calls retain the scheduler's lock state through their cleanup, including after a
 cancelled batch returns.
 
-## Results And Prompt Catalogue
+## Results And Tool Selection
 
 `Output` separates bounded model-visible text from structured JSON, attachments,
 usage and error status. Empty, invalid or oversized output is handled by the
 owning output contract. Provider/tool loops preserve tool-call IDs so each result
 matches the call that produced it.
 
-Catalogue rendering is deterministic from `ToolDef`. Active tools expose full
-schemas; deferred tools expose a compact index and are discovered through
-`ToolSearch`. Promotion updates the next prompt boundary. The catalogue never
-changes permission policy.
+`ToolDef` contains a name, description, input schema and required capabilities.
+`select_tools` takes a catalogue snapshot and an optional list of names, without
+configuration or services. Absence selects all definitions, including custom
+tools; an empty list selects none. Explicit names must exist. Repeated requested
+names produce one declaration, ambiguous catalogue entries fail, and the result
+owns its definitions sorted by name.
+
+The loop selects once per turn and sends descriptions and schemas through native
+provider declarations. There is no deferred index, discovery tool or promotion
+state. The prompt renderer only fingerprints the selected definitions. Hosts
+that previously listed ToolSearch must remove that name; the registration and
+promotion APIs and the `ToolDef::deferred` and `ToolDef::category` fields have
+been removed.
+
+Selection controls model exposure, not authority. A call naming an unadvertised
+registered tool still goes through ordinary dispatch, including permission,
+hooks, approval and child-policy intersection. Catalogue selection never grants
+a capability. [Prompt design](../rules/prompt-design.md) owns cache identity.
 
 ## File And Memory Tools
 
