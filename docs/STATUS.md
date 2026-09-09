@@ -101,9 +101,30 @@ MemoryRecall and MemoryRemember are active in the default catalogue. The runtime
 preamble defines proactive consultation and same-turn durable correction; the
 index makes existing knowledge discoverable before a model chooses its next
 action. Session configuration controls automatic orientation, and all reads and
-writes retain their permission boundary. The next memory work is deployment-model
-behavioral evaluation and persisted working context before history truncation.
-Compaction and record provenance require the pending backup/import boundary.
+writes retain their permission boundary.
+
+Recommended next slices, not yet implemented:
+
+1. **Tool context reduction:** scope deferred-tool discovery/promotion and
+   duplicate tool-schema rendering as one complete change. Check actual host
+   use of custom registries and explicit tool selection before removing the
+   discovery state. Keep authorization at dispatch and preserve provider-native
+   tool declarations and cache behavior.
+2. **Development scaffolding cleanup:** remove unused success stubs, empty build
+   wiring and unconsumed options, along with their advertised entry points and
+   stale documentation. Retain the checks that actually run.
+3. **Session working memory:** persist a compact view of goals, constraints,
+   decisions, completed work and pending work alongside recent conversation.
+   Address the applicable backup/import boundary before persistence changes;
+   evaluate spontaneous memory use with the deployment model separately from
+   controlled-provider tests.
+4. **Build configuration:** make existing LTO/sanitizer options reliably affect
+   compilation and linking, and consolidate flag setup to eliminate manual
+   overrides. Use ordinary build/test targets for verification.
+
+The first slice combines the two tool-related directions; the
+[live debt](exec-plans/tech-debt-tracker.md) records the concrete findings and
+completion criteria. These recommendations do not change current contracts.
 
 The library provider/tool/session loop remains the acceptance boundary:
 authorized tool execution, scoped memory recall, persisted continuation and
