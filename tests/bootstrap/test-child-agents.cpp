@@ -235,6 +235,9 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
     REQUIRE(child_request.messages[0].blocks == core::Message::user_text("inspect").blocks);
     REQUIRE(child_request.system_prompt.has_value());
     REQUIRE(child_request.system_prompt->contains("Worker instructions"));
+    REQUIRE(child_request.system_prompt->contains("Memory index:"));
+    REQUIRE(child_request.system_prompt->contains("sharedanchor in scope-A"));
+    REQUIRE_FALSE(child_request.system_prompt->contains("sharedanchor in scope-B"));
     REQUIRE_FALSE(child_request.system_prompt->contains("Parent instructions"));
     REQUIRE_FALSE(std::ranges::contains(child_request.tools, std::string{"AgentRun"}, &core::ToolDef::name));
     const auto& recall = result_in(provider.requests[3], "recall-1");
@@ -263,12 +266,57 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
     REQUIRE(traces->size() == 1);
     REQUIRE(traces->front().parent_turn_id == parent_turn);
     REQUIRE(core::format_turn_id_hex(traces->front().session_id) == metadata["session_id"].get<std::string>());
-    REQUIRE(events.size() == 2);
-    REQUIRE(events[0].who.agent_key == "worker");
-    REQUIRE(events[0].who.scope_key == "scope-A");
-    REQUIRE(events[0].who.identity != "owner");
-    REQUIRE(events[1].who.agent_key == "parent");
-    REQUIRE(events[1].who.identity == "owner");
+    REQUIRE(events.size() == 5);
+    CHECK(std::ranges::count_if(events, [](const auto& event) {
+            return event.tool_name == "MemoryRecall" && event.who.agent_key == "parent";
+          }) == 2);
+    CHECK(std::ranges::count_if(events, [](const auto& event) {
+            return event.tool_name == "MemoryRecall" && event.who.agent_key == "worker";
+          }) == 2);
+    for (const auto& event : events) {
+      CHECK(event.who.scope_key == "scope-A");
+      if (event.who.agent_key == "worker") {
+        CHECK(event.who.identity != "owner");
+      } else {
+        CHECK(event.who.identity == "owner");
+      }
+    }
+    REQUIRE(events.back().tool_name == "AgentRun");
+    REQUIRE(events.back().who.agent_key == "parent");
+  });
+}
+
+TEST_CASE("a child memory index cannot exceed its parent's read permission",
+          "[integration][bootstrap][collaboration][memory]") {
+  orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    SessionFixture fixture{
+        io.get_executor(),
+        policies(R"({"allow":[{"tool_pattern":"AgentRun"}],"deny":[{"tool_pattern":"MemoryRecall"}]})",
+                 R"({"allow":[{"tool_pattern":"MemoryRecall"}]})")};
+    memory::longterm::Record note;
+    note.key = {.id = "private", .scope_key = "scope-A"};
+    note.title = "Private note";
+    note.body = "PARENT_PRIVATE_MEMORY";
+    auto stored = co_await fixture.assembly.longterm_memory_backend()->upsert({.record = note});
+    REQUIRE(stored.has_value());
+    ScriptedProvider provider{{
+        calls({call("child", "AgentRun", R"({"agent":"worker","prompt":"Review the task"})")}),
+        answer("reviewed the available context"),
+        answer("done"),
+    }};
+    auto session = bootstrap::AgentSession::create(fixture.options(provider));
+    REQUIRE(session.has_value());
+    auto result = co_await (*session)->run_prompt({.prompt = "Delegate the review"});
+    REQUIRE(result.has_value());
+    REQUIRE(provider.requests.size() == 3);
+    for (const auto& request : provider.requests) {
+      REQUIRE(request.system_prompt.has_value());
+      CHECK(request.system_prompt->contains("Memory index unavailable (permission_denied)"));
+      CHECK_FALSE(request.system_prompt->contains("PARENT_PRIVATE_MEMORY"));
+    }
+    auto after = co_await fixture.assembly.longterm_memory_backend()->get(note.key);
+    REQUIRE(after.has_value());
+    CHECK(*after == note);
   });
 }
 

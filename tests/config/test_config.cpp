@@ -518,8 +518,8 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->trace().enabled);
 
   REQUIRE(result->hooks().timeout_ms == 2000);
-  REQUIRE_FALSE(result->memory().longterm.recall.enabled);
-  REQUIRE(result->memory().longterm.recall.limit == 5);
+  REQUIRE(result->memory().longterm.recall.enabled);
+  REQUIRE(result->memory().longterm.recall.limit == 20);
 
   REQUIRE(result->permissions().rules.size() == 7);
   REQUIRE(result->agents().size() == 1);
@@ -826,8 +826,8 @@ TEST_CASE("Config::parse defaults memory recall policy when absent", "[unit][con
   auto result = config::Config::parse(R"json({"memory": {}})json");
 
   REQUIRE(result.has_value());
-  REQUIRE_FALSE(result->memory().longterm.recall.enabled);
-  REQUIRE(result->memory().longterm.recall.limit == 5);
+  REQUIRE(result->memory().longterm.recall.enabled);
+  REQUIRE(result->memory().longterm.recall.limit == 20);
   REQUIRE(result->memory().longterm.recall.kinds.empty());
 }
 

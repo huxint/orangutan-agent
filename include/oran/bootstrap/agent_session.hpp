@@ -27,8 +27,8 @@ namespace orangutan::bootstrap {
 class RuntimeAssembly;
 
 struct LongtermRecallOptions {
-  bool enabled{false};
-  std::size_t limit{5};
+  bool enabled{true};
+  std::size_t limit{20};
   std::vector<std::string> kinds{};
 };
 
@@ -46,7 +46,9 @@ struct AgentSessionOptions {
   std::string identity{"owner"};
   std::string origin{"owner"};
   std::string system_preamble{};
-  LongtermRecallOptions longterm_recall{};
+  /// Absent: use config.memory.longterm.recall when a backend is available and
+  /// exact memory_framing is empty. A supplied value is an explicit override.
+  std::optional<LongtermRecallOptions> longterm_recall{};
   std::string memory_framing{};
   std::string per_agent_overlay{};
   std::string trace_context_json{"{}"};

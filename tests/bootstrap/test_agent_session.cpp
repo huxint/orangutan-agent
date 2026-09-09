@@ -136,6 +136,16 @@ provider::Response text_response(std::string text) {
   };
 }
 
+provider::Response tool_response(std::string name, std::string id, std::string input) {
+  return provider::Response{
+      .blocks = {core::ToolUseContent{.id = std::move(id), .name = std::move(name), .input_json = std::move(input)}},
+      .stop_reason = core::StopReason::tool_use,
+      .usage = {},
+      .model_used = std::string{"fake-1"},
+      .route_profile_used = std::nullopt,
+  };
+}
+
 std::string tool_result_output_in(const provider::Request& request, std::string_view tool_use_id) {
   for (const auto& message : request.messages) {
     for (const auto& block : message.blocks) {
@@ -688,14 +698,15 @@ TEST_CASE("AgentSession renders memory framing once per prompt before loop itera
   });
 }
 
-TEST_CASE("AgentSession leaves long-term recall disabled by default", "[unit][bootstrap][prompt_runner][memory]") {
+TEST_CASE("AgentSession exposes memory orientation by default without a recall hint",
+          "[unit][bootstrap][prompt_runner][memory]") {
   TempDir temp{"oran-bootstrap-prompt-runner-longterm-default-off"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false);
     REQUIRE(assembly.longterm_memory_backend() != nullptr);
     auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
-        .record = make_longterm_record("lt-default-off", "Recall should stay out unless explicitly enabled."),
+        .record = make_longterm_record("lt-default", "Prefer small changes with clear reasons."),
     });
     REQUIRE(upserted.has_value());
 
@@ -703,13 +714,16 @@ TEST_CASE("AgentSession leaves long-term recall disabled by default", "[unit][bo
     auto runner = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, recording));
     REQUIRE(runner.has_value());
 
-    auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "recall"});
+    auto result =
+        co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "Help me review this change."});
 
     REQUIRE(result.has_value());
     const auto requests = recording.requests();
     REQUIRE(requests.size() == 1);
     REQUIRE(requests[0].system_prompt.has_value());
-    REQUIRE_FALSE(requests[0].system_prompt->contains("Long-term memory:"));
+    REQUIRE(requests[0].system_prompt->contains("Memory index:"));
+    REQUIRE(requests[0].system_prompt->contains("lt-default"));
+    REQUIRE(requests[0].system_prompt->contains("Prefer small changes with clear reasons."));
   });
 }
 
@@ -761,10 +775,9 @@ TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
     REQUIRE(requests.size() == 2);
     REQUIRE(requests[0].system_prompt.has_value());
     REQUIRE(requests[1].system_prompt.has_value());
-    REQUIRE(requests[0].system_prompt->contains("Long-term memory:"));
+    REQUIRE(requests[0].system_prompt->contains("Memory index:"));
     REQUIRE(requests[0].system_prompt->contains("Recall plumbing reaches the prompt boundary."));
     REQUIRE_FALSE(requests[0].system_prompt->contains("another workspace"));
-    REQUIRE(requests[0].system_prompt->contains("tags: recall"));
     REQUIRE(*requests[0].system_prompt == *requests[1].system_prompt);
 
     REQUIRE(hook_captures.size() == 1);
@@ -774,16 +787,16 @@ TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
     REQUIRE(read->who.scope_key == "scope-A");
     REQUIRE(read->who.agent_key == "coder");
     REQUIRE(read->who.identity == "operator-1");
-    REQUIRE(read->source == "MemoryRecall");
-    REQUIRE(read->query == "recall plumbing");
-    REQUIRE(read->redacted_query_bytes == std::string_view{"recall plumbing"}.size());
+    REQUIRE(read->source == "MemoryRecall:index");
+    REQUIRE(read->query.empty());
+    REQUIRE(read->redacted_query_bytes == 0);
     REQUIRE(read->limit == 5);
     REQUIRE(read->kinds.empty());
     REQUIRE(read->match_count == 1);
     REQUIRE(read->hits.size() == 1);
     REQUIRE(read->hits[0].record.id == "lt-recall-1");
     REQUIRE(read->hits[0].record.body == "Recall plumbing reaches the prompt boundary.");
-    REQUIRE(read->hits[0].record.tags == std::vector<std::string>{"recall"});
+    REQUIRE(read->hits[0].record.tags.empty());
     REQUIRE(read->hits[0].redacted_record.has_value());
     REQUIRE(read->hits[0].redacted_record->body_bytes ==
             std::string_view{"Recall plumbing reaches the prompt boundary."}.size());
@@ -821,7 +834,9 @@ TEST_CASE("AgentSession dispatches MemoryRecall through long-term runtime",
         text_response("done"),
     }};
 
-    auto runner = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, recording));
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.longterm_recall = bootstrap::LongtermRecallOptions{.enabled = false};
+    auto runner = bootstrap::AgentSession::create(std::move(options));
     REQUIRE(runner.has_value());
 
     auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "use memory"});
@@ -1393,7 +1408,7 @@ TEST_CASE("AgentSession multi-tool batches complete on a multi-worker runtime",
   REQUIRE(fake.turns_consumed() == kToolTurns + 1);
 }
 
-TEST_CASE("automatic recall refuses denied memory before calling the provider",
+TEST_CASE("automatic orientation reports denied memory without leaking it or blocking ordinary work",
           "[integration][bootstrap][memory][core_boundary]") {
   TempDir temp{"oran-recall-policy"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
@@ -1408,16 +1423,167 @@ TEST_CASE("automatic recall refuses denied memory before calling the provider",
     assembly.hook_bus().bind(sink, {hook::Event::memory_read_after});
     RecordingProvider recording{{text_response("unexpected")}};
     auto options = base_runner_options(io, assembly, cfg, recording);
-    options.longterm_recall.enabled = true;
+    options.longterm_recall = bootstrap::LongtermRecallOptions{.enabled = true};
     auto session = bootstrap::AgentSession::create(std::move(options));
     REQUIRE(session.has_value());
 
     auto result = co_await (*session)->run_prompt({.prompt = "Private recall"});
 
-    REQUIRE_FALSE(result.has_value());
-    CHECK(result.error().kind() == core::ErrorKind::permission_denied);
-    CHECK(recording.requests().empty());
+    REQUIRE(result.has_value());
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 1);
+    REQUIRE(requests.front().system_prompt.has_value());
+    CHECK(requests.front().system_prompt->contains("Memory index unavailable (permission_denied)"));
+    CHECK_FALSE(requests.front().system_prompt->contains("Private recall content"));
+    CHECK_FALSE(requests.front().system_prompt->contains("No saved notes match this index"));
     CHECK(captures.empty());
+  });
+}
+
+TEST_CASE("memory corrections become visible and readable in a fresh session",
+          "[integration][bootstrap][memory][core_boundary][preservation]") {
+  TempDir temp{"oran-memory-learning-loop"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = parse_config(R"({"permissions":{"allow":[{"tool_pattern":"MemoryRemember"}]}})");
+    auto original = make_longterm_record("response-style", "Use English for explanations.\n");
+    original.kind = memory::longterm::RecordKind::feedback;
+    original.title = "Response style";
+    original.body += std::string(1000, 'x') + "ORIGINAL_FULL_DETAIL";
+    {
+      auto assembly = build_assembly(temp.path(), io, false);
+      auto seeded = co_await assembly.longterm_memory_backend()->upsert({.record = original});
+      REQUIRE(seeded.has_value());
+      RecordingProvider provider{{
+          tool_response("MemoryRecall", "read-old", R"({"id":"response-style"})"),
+          tool_response(
+              "MemoryRemember",
+              "correct",
+              R"({"id":"response-style","kind":"feedback","title":"Response style","body":"用中文给出简洁结论。需要时再解释理由。"})"),
+          text_response("我会先给出简洁的中文结论。"),
+      }};
+      auto session = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, provider));
+      REQUIRE(session.has_value());
+      auto first = co_await (*session)->run_prompt({.prompt = "以后用中文给我结论，理由放到必要的时候再说。"});
+      REQUIRE(first.has_value());
+      const auto requests = provider.requests();
+      REQUIRE(requests.size() == 3);
+      REQUIRE(requests[0].system_prompt.has_value());
+      CHECK(requests[0].system_prompt->contains("response-style"));
+      CHECK_FALSE(requests[0].system_prompt->contains("ORIGINAL_FULL_DETAIL"));
+      CHECK(requests[0].system_prompt == requests[1].system_prompt);
+      CHECK(requests[1].system_prompt == requests[2].system_prompt);
+      CHECK(tool_result_output_in(requests[1], "read-old").contains("ORIGINAL_FULL_DETAIL"));
+      CHECK(tool_result_output_in(requests[2], "correct").contains("saved feedback record response-style"));
+      auto saved = co_await assembly.longterm_memory_backend()->get(original.key);
+      REQUIRE(saved.has_value());
+      CHECK(saved->created_at == original.created_at);
+      CHECK(saved->body == "用中文给出简洁结论。需要时再解释理由。");
+    }
+    {
+      auto reopened = build_assembly(temp.path(), io, false);
+      RecordingProvider provider{{
+          tool_response("MemoryRecall", "apply", R"({"id":"response-style"})"),
+          text_response("这个改动可行。"),
+      }};
+      auto session = bootstrap::AgentSession::create(base_runner_options(io, reopened, cfg, provider));
+      REQUIRE(session.has_value());
+      auto next = co_await (*session)->run_prompt({.prompt = "帮我评估这个改动。"});
+      REQUIRE(next.has_value());
+      const auto requests = provider.requests();
+      REQUIRE(requests.size() == 2);
+      REQUIRE(requests.front().system_prompt.has_value());
+      CHECK(requests.front().system_prompt->contains("用中文给出简洁结论"));
+      CHECK_FALSE(requests.front().system_prompt->contains("Use English for explanations"));
+      CHECK(tool_result_output_in(requests[1], "apply").contains("需要时再解释理由"));
+      auto index = co_await memory::longterm::index(*reopened.longterm_memory_backend(), {.scope_key = "scope-A"});
+      REQUIRE(index.has_value());
+      REQUIRE(index->entries.size() == 1);
+      CHECK(index->entries.front().key.id == "response-style");
+    }
+  });
+}
+
+TEST_CASE("session memory orientation consumes configuration and honors opt-out",
+          "[integration][bootstrap][memory][core_boundary]") {
+  TempDir temp{"oran-memory-config"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = parse_config(R"({"memory":{"longterm":{"recall":{"enabled":false}}}})");
+    auto assembly = build_assembly(temp.path(), io, false);
+    auto seeded = co_await assembly.longterm_memory_backend()->upsert(
+        {.record = make_longterm_record("stored", "Saved context.")});
+    REQUIRE(seeded.has_value());
+    std::vector<MemoryHookCapture> captures;
+    MemoryCaptureSink sink{captures};
+    assembly.hook_bus().bind(sink, {hook::Event::memory_read_after});
+    RecordingProvider provider{{text_response("done")}};
+    auto session = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, provider));
+    REQUIRE(session.has_value());
+    auto result = co_await (*session)->run_prompt({.prompt = "Hello"});
+    REQUIRE(result.has_value());
+    REQUIRE(provider.requests().size() == 1);
+    CHECK_FALSE(provider.requests().front().system_prompt->contains("Memory index:"));
+    CHECK(captures.empty());
+  });
+}
+
+TEST_CASE("an automatic memory index cannot be rewritten into full prompt content",
+          "[integration][bootstrap][memory][hook]") {
+  TempDir temp{"oran-memory-index-rewrite"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    auto seeded = co_await assembly.longterm_memory_backend()->upsert({
+        .record = make_longterm_record("note", "DETAIL_MUST_STAY_OUT_OF_AUTOMATIC_PREFIX"),
+    });
+    REQUIRE(seeded.has_value());
+    hook::InProcessSink rewrite{
+        "rewrite-index",
+        [](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; }};
+    rewrite.set_blocking_handler(
+        [](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+          auto decision = hook::HookDecision{};
+          if (std::get<hook::ToolBeforePayload>(*payload).tool_name == "MemoryRecall") {
+            decision.kind = hook::HookDecisionKind::rewrite;
+            decision.rewritten_input_json = R"({"id":"note"})";
+          }
+          co_return decision;
+        });
+    assembly.hook_bus().bind(rewrite, {hook::Event::tool_before});
+    RecordingProvider provider{{text_response("done")}};
+    auto session = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, provider));
+    REQUIRE(session.has_value());
+    auto result = co_await (*session)->run_prompt({.prompt = "Hello"});
+    REQUIRE(result.has_value());
+    const auto requests = provider.requests();
+    REQUIRE(requests.size() == 1);
+    REQUIRE(requests.front().system_prompt.has_value());
+    CHECK(requests.front().system_prompt->contains("Memory index unavailable"));
+    CHECK_FALSE(requests.front().system_prompt->contains("DETAIL_MUST_STAY_OUT_OF_AUTOMATIC_PREFIX"));
+  });
+}
+
+TEST_CASE("natural memory use does not grant permission to write notes",
+          "[integration][bootstrap][memory][core_boundary]") {
+  TempDir temp{"oran-memory-write-permission"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false);
+    RecordingProvider provider{{
+        tool_response("MemoryRemember",
+                      "save",
+                      R"({"id":"style","kind":"user","title":"Response style","body":"Prefer concise replies."})"),
+        text_response("Persistence was not authorized."),
+    }};
+    auto session = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, provider));
+    REQUIRE(session.has_value());
+    auto result = co_await (*session)->run_prompt({.prompt = "Keep your explanations brief."});
+    REQUIRE(result.has_value());
+    const auto requests = provider.requests();
+    REQUIRE(requests.size() == 2);
+    CHECK(tool_result_output_in(requests[1], "save").contains("approval"));
+    auto stored = co_await assembly.longterm_memory_backend()->get({.id = "style", .scope_key = "scope-A"});
+    REQUIRE_FALSE(stored.has_value());
+    CHECK(stored.error().kind() == core::ErrorKind::not_found);
   });
 }
 
@@ -1439,9 +1605,9 @@ TEST_CASE("a session advertises memory tools only when memory is available",
     REQUIRE(requests.size() == 1);
     REQUIRE(requests.front().system_prompt.has_value());
     CHECK(requests.front().system_prompt->contains("FileRead"));
-    CHECK_FALSE(requests.front().system_prompt->contains("MemoryRecall"));
-    CHECK_FALSE(requests.front().system_prompt->contains("MemoryRemember"));
-    CHECK_FALSE(requests.front().system_prompt->contains("MemoryForget"));
+    CHECK_FALSE(requests.front().system_prompt->contains("Tool: MemoryRecall"));
+    CHECK_FALSE(requests.front().system_prompt->contains("Tool: MemoryRemember"));
+    CHECK_FALSE(requests.front().system_prompt->contains("Tool: MemoryForget"));
   });
 }
 

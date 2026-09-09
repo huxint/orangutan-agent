@@ -96,8 +96,8 @@ TEST_CASE("Builder renders the default active tool set and a deferred index", "[
     REQUIRE(section(*result, "tool_catalog").content.find("Tool: FileRead") <
             section(*result, "tool_catalog").content.find("Tool: FileWrite"));
     REQUIRE(section(*result, "tool_catalog").content.contains("Tool: ToolSearch"));
-    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("MemoryRecall"));
-    REQUIRE(section(*result, "deferred_tools").content == "MemoryRecall - Recall memory");
+    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: MemoryRecall"));
+    REQUIRE(section(*result, "deferred_tools").content.empty());
     REQUIRE(section(*result, "per_agent_overlay").is_breakpoint);
     REQUIRE(std::ranges::count(result->sections, true, &prompt::CacheSection::is_breakpoint) == 1);
   });
@@ -167,8 +167,8 @@ TEST_CASE("Builder applies a promotion snapshot to the next active catalog", "[u
     REQUIRE(result.has_value());
     REQUIRE(section(*result, "tool_catalog").content.contains("Tool: MemoryRecall"));
     REQUIRE(section(*result, "tool_catalog").content.contains("Tool: FileRead"));
-    REQUIRE_FALSE(section(*result, "tool_catalog").content.contains("Tool: MemoryRemember"));
-    REQUIRE(section(*result, "deferred_tools").content == "MemoryRemember - Store memory");
+    REQUIRE(section(*result, "tool_catalog").content.contains("Tool: MemoryRemember"));
+    REQUIRE(section(*result, "deferred_tools").content.empty());
   });
 }
 
@@ -268,7 +268,7 @@ TEST_CASE("Builder cache versions invalidate the prefix hash without changing co
         tool_def("FileRead", "Read a file"),
     };
     auto options = prompt::BuilderOptions{};
-    options.versions.tool_catalog = 4;
+    options.versions.tool_catalog = 5;
 
     prompt::Builder v1;
     prompt::Builder v2{options};
@@ -279,8 +279,8 @@ TEST_CASE("Builder cache versions invalidate the prefix hash without changing co
     REQUIRE(second.has_value());
     REQUIRE(section(*first, "tool_catalog").content == section(*second, "tool_catalog").content);
     REQUIRE(section(*first, "tool_catalog").content_hash == section(*second, "tool_catalog").content_hash);
-    REQUIRE(section(*first, "tool_catalog").cache_version == 3);
-    REQUIRE(section(*second, "tool_catalog").cache_version == 4);
+    REQUIRE(section(*first, "tool_catalog").cache_version == 4);
+    REQUIRE(section(*second, "tool_catalog").cache_version == 5);
     REQUIRE(first->prefix_hash != second->prefix_hash);
   });
 }

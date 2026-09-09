@@ -7,7 +7,7 @@ composes persisted context, scoped memory recall and explicit permission policy.
 ## Turn Contract
 
 1. Resolve the agent/session identity and permission policy before execution.
-2. Load bounded history, retain complete exchanges and recall scoped memory once.
+2. Load bounded history, retain complete exchanges and load the scoped memory index.
 3. Build a deterministic prefix and append the user's message as dynamic context.
 4. Request a provider response. Tool-use responses dispatch through one scheduler
    and registry; append their ordered results and request the next response.
@@ -35,8 +35,10 @@ remain intact. Deferred tool promotion affects the next prompt boundary.
 history and prompt values, removes the incomplete leading exchange and returns
 `PreparedConversation`. Its `history_size` marks the first message to persist after
 success. It requires no services or clock. Provider, tool and storage coordination
-stays in the session runner. Prompt recall uses the same authorized dispatch path
-as model-requested recall. Do not add mutable application registries or
+stays in the session runner. Automatic memory orientation uses the same
+authorized dispatch path as model-requested reads. Model-directed exact-ID reads,
+topic search and same-turn correction writes use the ordinary tool loop; the
+[memory contract](memory-system.md) owns their behavior. Do not add mutable application registries or
 cross-agent state to the loop.
 
 ## Agent Collaboration

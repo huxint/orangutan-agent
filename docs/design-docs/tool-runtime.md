@@ -111,8 +111,11 @@ Workspace write intent only carries parent-creation permission. Write modes belo
 to the typed write request and the IO operation.
 
 MemoryRecall, MemoryRemember and MemoryForget receive a host-bound scope through
-injected handlers. They cannot select another scope in tool JSON. [memory-system](memory-system.md)
-owns record and prompt recall semantics.
+injected handlers. They cannot select another scope in tool JSON. Their JSON shape,
+bounds, uniqueness and record-kind values are prepared into typed requests before
+path admission, permission evaluation or approval; handlers perform only the
+host-bound memory effect. [memory-system](memory-system.md) owns record and prompt
+recall semantics.
 
 ## Child Agent Tool
 
@@ -122,7 +125,10 @@ the handler rejects unknown names, extra fields and prompts outside 1–16384
 UTF-8 bytes before invoking the host binding. Identity, session, memory scope,
 provider route and policy come from the host.
 
-The result text is the child's completed answer. Structured output contains
+The agent and prompt fields are prepared before authorization; the host binding
+receives only the typed request and supplies identity, session, memory scope,
+provider route and policy. The result text is the child's completed answer.
+Structured output contains
 `kind=agent_run`, the configured agent name and its session ID. Output caps,
 permissions, approvals, hooks and audit use the ordinary dispatch path. Child
 admission exhaustion returns `mailbox_overflowed` with `reason=child_limit` as a

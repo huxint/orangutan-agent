@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -87,6 +88,8 @@ struct TouchRequest {
 struct RecallRequest {
   Query query;
   std::size_t limit{0};
+  /// Exact read within query.scope_key; mutually exclusive with query.text.
+  std::string record_id{};
 
   friend bool operator==(const RecallRequest&, const RecallRequest&) = default;
 };
@@ -96,6 +99,36 @@ struct RecallResult {
   Framing framing;
 
   friend bool operator==(const RecallResult&, const RecallResult&) = default;
+};
+
+inline constexpr std::size_t kMaxIndexBytes = 8192;
+
+struct IndexRequest {
+  std::string scope_key{};
+  std::vector<RecordKind> kinds{};
+  std::size_t limit{20};
+  std::size_t offset{0};
+  std::size_t max_bytes{kMaxIndexBytes};
+};
+
+/// A discovery cue, not a copy of the note. Existing records need no migration.
+struct IndexEntry {
+  RecordKey key{};
+  RecordKind kind{RecordKind::project};
+  std::string title{};
+  std::string summary{};
+
+  friend bool operator==(const IndexEntry&, const IndexEntry&) = default;
+};
+
+struct IndexResult {
+  std::vector<IndexEntry> entries{};
+  Framing framing{};
+  std::optional<std::size_t> next_offset{};
+  /// Legacy IDs too large to fit even one entry are reported and skipped.
+  std::size_t omitted_count{0};
+
+  friend bool operator==(const IndexResult&, const IndexResult&) = default;
 };
 
 /// Scoped storage effects; implementations validate inputs before accessing storage.
@@ -112,6 +145,9 @@ public:
   [[nodiscard]] virtual async::Awaitable<core::Result<Record>> get(RecordKey key) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query,
                                                                                       std::size_t limit) = 0;
+  /// Return bounded cues and at most one look-ahead entry, without returning
+  /// full bodies or acquiring a writer.
+  [[nodiscard]] virtual async::Awaitable<core::Result<std::vector<IndexEntry>>> list(IndexRequest request) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<Record>> upsert(WriteRequest request) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<Record>> touch(TouchRequest request) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<void>> remove(RecordKey key) = 0;
@@ -132,6 +168,7 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<Record>> get(RecordKey key) override;
   [[nodiscard]] async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query, std::size_t limit) override;
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<IndexEntry>>> list(IndexRequest request) override;
   [[nodiscard]] async::Awaitable<core::Result<Record>> upsert(WriteRequest request) override;
   [[nodiscard]] async::Awaitable<core::Result<Record>> touch(TouchRequest request) override;
   [[nodiscard]] async::Awaitable<core::Result<void>> remove(RecordKey key) override;
@@ -141,17 +178,26 @@ private:
   Fts5BackendOptions options_;
 };
 
-/// Search, update read timestamps and render owned prompt framing.
+/// Read an exact ID or search topic words, then update read timestamps and render.
 /// The backend must outlive the awaited operation.
 [[nodiscard]] async::Awaitable<core::Result<RecallResult>> recall(Backend& backend, RecallRequest request);
 
+/// Browse bounded metadata without touching read timestamps or returning bodies.
+[[nodiscard]] async::Awaitable<core::Result<IndexResult>> index(Backend& backend, IndexRequest request);
+
+/// Pure projection and budgeting. Candidates include one look-ahead row for paging.
+[[nodiscard]] core::Result<IndexResult> make_index(std::span<const IndexEntry> candidates, const IndexRequest& request);
+
 [[nodiscard]] Framing render_recall_framing(std::span<const SearchHit> hits);
+[[nodiscard]] std::string render_index_data_json(const IndexResult& index);
 [[nodiscard]] std::string render_recall_data_json(std::span<const SearchHit> hits);
 [[nodiscard]] std::string render_remember_data_json(const Record& record);
 [[nodiscard]] std::string render_forget_data_json(const RecordKey& key);
 [[nodiscard]] core::Result<void> validate_key(const RecordKey& key);
 [[nodiscard]] core::Result<void> validate_record(const Record& record);
 [[nodiscard]] core::Result<void> validate_query(const Query& query, std::size_t limit);
+[[nodiscard]] core::Result<void> validate_recall_request(const RecallRequest& request);
+[[nodiscard]] core::Result<void> validate_index_request(const IndexRequest& request);
 [[nodiscard]] core::Result<void> validate_write_request(const WriteRequest& request);
 [[nodiscard]] core::Result<void> validate_touch_request(const TouchRequest& request);
 

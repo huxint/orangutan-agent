@@ -212,7 +212,8 @@ struct MemoryReadHitPayload {
 /// at either the prompt boundary or the `MemoryRecall` tool boundary.
 struct MemoryReadPayload {
   Identity who;
-  /// Producer label such as `prompt_boundary` or `MemoryRecall`.
+  /// MemoryRecall supplies full records. MemoryRecall:index supplies only
+  /// discovery cues in hit titles/bodies; other record metadata is unset.
   std::string source;
   /// Raw recall query for trusted-local sinks. If `redacted_query_bytes` is set,
   /// `Bus` clears this field for non-trusted sinks.

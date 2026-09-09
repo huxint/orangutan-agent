@@ -3,6 +3,7 @@
 #include <oran/tool/builtins.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <expected>
@@ -20,6 +21,7 @@
 #include <oran/tool/output.hpp>
 #include <oran/tool/registry.hpp>
 
+#include "_impl/memory_input.hpp"
 #include "_impl/parse_input.hpp"
 
 namespace orangutan::tool {
@@ -28,6 +30,9 @@ namespace {
 using json = nlohmann::json;
 
 constexpr double kDefaultMemoryImportance = 0.5;
+constexpr auto kMemoryKinds = std::array<std::string_view, 5>{"user", "feedback", "project", "reference", "team"};
+constexpr auto kMemoryRememberFields = std::to_array<std::string_view>(
+    {"id", "kind", "title", "body", "importance", "tags", "linked_record_ids", "shadow"});
 
 constexpr std::string_view kMemoryRememberSchema =
     R"({"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["user","feedback","project","reference","team"]},"title":{"type":"string"},"body":{"type":"string"},"importance":{"type":"number","minimum":0,"maximum":1},"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true},"linked_record_ids":{"type":"array","items":{"type":"string"},"uniqueItems":true},"shadow":{"type":"boolean"}},"required":["id","kind","title","body"],"additionalProperties":false})";
@@ -37,9 +42,12 @@ constexpr std::string_view kMemoryRememberSchema =
   if (!value) {
     return std::unexpected(std::move(value).error());
   }
-  if (value->empty()) {
-    return std::unexpected(core::Error::invalid_argument("MemoryRemember: string field must be non-empty")
-                               .with("field", std::string{field}));
+  if (auto valid = detail::validate_memory_text(*value, field, field == "body"); !valid) {
+    return std::unexpected(std::move(valid).error());
+  }
+  if (field == "kind" && !std::ranges::contains(kMemoryKinds, std::string_view{*value})) {
+    return std::unexpected(
+        core::Error::invalid_argument("MemoryRemember: unknown kind").with("field", "kind").with("kind", *value));
   }
   return std::move(*value);
 }
@@ -92,10 +100,8 @@ constexpr std::string_view kMemoryRememberSchema =
                                  .with("index", std::to_string(i)));
     }
     auto value = item.get<std::string>();
-    if (value.empty()) {
-      return std::unexpected(core::Error::invalid_argument("MemoryRemember: array item must be non-empty")
-                                 .with("field", key)
-                                 .with("index", std::to_string(i)));
+    if (auto valid = detail::validate_memory_text(value, field); !valid) {
+      return std::unexpected(std::move(valid).error());
     }
     if (std::ranges::contains(values, value)) {
       return std::unexpected(core::Error::invalid_argument("MemoryRemember: array values must be unique")
@@ -108,7 +114,7 @@ constexpr std::string_view kMemoryRememberSchema =
 }
 
 [[nodiscard]] core::Result<MemoryRememberRequest> parse_remember(std::string_view input_json) {
-  auto parsed = detail::parse_input_object(input_json, kMemoryRememberName);
+  auto parsed = detail::parse_input_object(input_json, kMemoryRememberName, kMemoryRememberFields);
   if (!parsed) {
     return std::unexpected(std::move(parsed).error());
   }
@@ -158,19 +164,15 @@ constexpr std::string_view kMemoryRememberSchema =
   };
 }
 
-[[nodiscard]] async::Awaitable<core::Result<Output>> memory_remember_handler(std::string_view input_json,
+[[nodiscard]] async::Awaitable<core::Result<Output>> memory_remember_handler(MemoryRememberRequest request,
                                                                              DispatchContext& ctx) {
-  auto parsed = parse_remember(input_json);
-  if (!parsed) {
-    co_return std::unexpected(std::move(parsed).error());
-  }
   if (!ctx.memory_remember) {
     co_return std::unexpected(core::Error::invalid_argument("MemoryRemember: runtime service is not available")
                                   .with("reason", "memory_runtime_unavailable")
-                                  .with("id", parsed->id));
+                                  .with("id", request.id));
   }
 
-  co_return co_await ctx.memory_remember(std::move(*parsed), ctx);
+  co_return co_await ctx.memory_remember(std::move(request), ctx);
 }
 
 }  // namespace
@@ -178,16 +180,28 @@ constexpr std::string_view kMemoryRememberSchema =
 core::Result<void> register_memory_remember(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kMemoryRememberName},
-      .description = "Create or replace one long-term memory record in the current agent scope. The runtime supplies "
-                     "scope and timestamps; the result returns confirmation text plus structured saved-record "
-                     "metadata.",
+      .description = "Save a durable preference, correction, decision, or reference for future work without waiting "
+                     "for the user to ask you to remember it. Write in the same turn that you learn it. Read an "
+                     "existing related note and reuse its id to correct it, instead of creating contradictory "
+                     "duplicates. Store one lesson per note: a discoverable title, then a concise fact followed "
+                     "by why it matters and when to apply it. The opening sentence becomes its index cue. "
+                     "Do not save guesses, secrets, transient task progress, or facts easily re-read from code. "
+                     "The host supplies scope and timestamps; a successful result confirms persistence.",
       .input_schema_json = std::string{kMemoryRememberSchema},
       .required_capabilities = {core::Capability::write_memory},
-      .deferred = true,
+      .deferred = false,
       .category = "memory",
   };
 
-  return registry.add(std::move(def), &memory_remember_handler);
+  return registry.add_prepared(std::move(def), [](std::string_view input_json) -> core::Result<PreparedCall> {
+    auto parsed = parse_remember(input_json);
+    if (!parsed) {
+      return std::unexpected(std::move(parsed).error());
+    }
+    return PreparedCall{.path = std::nullopt, .execute = [request = std::move(*parsed)](DispatchContext& ctx) mutable {
+                          return memory_remember_handler(std::move(request), ctx);
+                        }};
+  });
 }
 
 }  // namespace orangutan::tool

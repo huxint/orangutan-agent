@@ -2,6 +2,7 @@
 
 #include <oran/tool/builtins.hpp>
 
+#include <array>
 #include <expected>
 #include <string>
 #include <string_view>
@@ -16,6 +17,7 @@
 #include <oran/tool/output.hpp>
 #include <oran/tool/registry.hpp>
 
+#include "_impl/memory_input.hpp"
 #include "_impl/parse_input.hpp"
 
 namespace orangutan::tool {
@@ -25,20 +27,21 @@ using json = nlohmann::json;
 
 constexpr std::string_view kMemoryForgetSchema =
     R"({"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false})";
+constexpr auto kMemoryForgetFields = std::to_array<std::string_view>({"id"});
 
 [[nodiscard]] core::Result<std::string> require_non_empty_id(const json& parsed) {
   auto id = detail::require_string_field(parsed, kMemoryForgetName, "id");
   if (!id) {
     return std::unexpected(std::move(id).error());
   }
-  if (id->empty()) {
-    return std::unexpected(core::Error::invalid_argument("MemoryForget: `id` must be non-empty").with("field", "id"));
+  if (auto valid = detail::validate_memory_text(*id, "id"); !valid) {
+    return std::unexpected(std::move(valid).error());
   }
   return std::move(*id);
 }
 
 [[nodiscard]] core::Result<MemoryForgetRequest> parse_forget(std::string_view input_json) {
-  auto parsed = detail::parse_input_object(input_json, kMemoryForgetName);
+  auto parsed = detail::parse_input_object(input_json, kMemoryForgetName, kMemoryForgetFields);
   if (!parsed) {
     return std::unexpected(std::move(parsed).error());
   }
@@ -53,19 +56,15 @@ constexpr std::string_view kMemoryForgetSchema =
   };
 }
 
-[[nodiscard]] async::Awaitable<core::Result<Output>> memory_forget_handler(std::string_view input_json,
+[[nodiscard]] async::Awaitable<core::Result<Output>> memory_forget_handler(MemoryForgetRequest request,
                                                                            DispatchContext& ctx) {
-  auto parsed = parse_forget(input_json);
-  if (!parsed) {
-    co_return std::unexpected(std::move(parsed).error());
-  }
   if (!ctx.memory_forget) {
     co_return std::unexpected(core::Error::invalid_argument("MemoryForget: runtime service is not available")
                                   .with("reason", "memory_runtime_unavailable")
-                                  .with("id", parsed->id));
+                                  .with("id", request.id));
   }
 
-  co_return co_await ctx.memory_forget(std::move(*parsed), ctx);
+  co_return co_await ctx.memory_forget(std::move(request), ctx);
 }
 
 }  // namespace
@@ -81,7 +80,15 @@ core::Result<void> register_memory_forget(Registry& registry) {
       .category = "memory",
   };
 
-  return registry.add(std::move(def), &memory_forget_handler);
+  return registry.add_prepared(std::move(def), [](std::string_view input_json) -> core::Result<PreparedCall> {
+    auto parsed = parse_forget(input_json);
+    if (!parsed) {
+      return std::unexpected(std::move(parsed).error());
+    }
+    return PreparedCall{.path = std::nullopt, .execute = [request = std::move(*parsed)](DispatchContext& ctx) mutable {
+                          return memory_forget_handler(std::move(request), ctx);
+                        }};
+  });
 }
 
 }  // namespace orangutan::tool

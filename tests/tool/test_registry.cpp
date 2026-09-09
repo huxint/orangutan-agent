@@ -618,7 +618,7 @@ TEST_CASE("register_tool_search advertises a capability-free runtime lookup", "[
   REQUIRE(def->input_schema_json.contains("\"capability\""));
 }
 
-TEST_CASE("register_memory_recall advertises read_memory and deferred memory metadata", "[unit][tool][memory_recall]") {
+TEST_CASE("register_memory_recall advertises read_memory and active memory metadata", "[unit][tool][memory_recall]") {
   tool::Registry registry;
   REQUIRE(tool::register_memory_recall(registry).has_value());
   REQUIRE(registry.size() == 1);
@@ -626,7 +626,7 @@ TEST_CASE("register_memory_recall advertises read_memory and deferred memory met
   REQUIRE(def != nullptr);
   REQUIRE(def->required_capabilities.size() == 1);
   REQUIRE(def->required_capabilities[0] == core::Capability::read_memory);
-  REQUIRE(def->deferred);
+  REQUIRE_FALSE(def->deferred);
   REQUIRE(def->category.has_value());
   REQUIRE(*def->category == "memory");
   REQUIRE(def->input_schema_json.contains("\"query\""));
@@ -634,7 +634,7 @@ TEST_CASE("register_memory_recall advertises read_memory and deferred memory met
   REQUIRE(def->input_schema_json.contains("\"kinds\""));
 }
 
-TEST_CASE("register_memory_remember advertises write_memory and deferred memory metadata",
+TEST_CASE("register_memory_remember advertises write_memory and active memory metadata",
           "[unit][tool][memory_remember]") {
   tool::Registry registry;
   REQUIRE(tool::register_memory_remember(registry).has_value());
@@ -643,7 +643,7 @@ TEST_CASE("register_memory_remember advertises write_memory and deferred memory 
   REQUIRE(def != nullptr);
   REQUIRE(def->required_capabilities.size() == 1);
   REQUIRE(def->required_capabilities[0] == core::Capability::write_memory);
-  REQUIRE(def->deferred);
+  REQUIRE_FALSE(def->deferred);
   REQUIRE(def->category.has_value());
   REQUIRE(*def->category == "memory");
   REQUIRE(def->input_schema_json.contains("\"id\""));
@@ -872,6 +872,78 @@ TEST_CASE("MemoryRecall reports missing runtime service as a model-repairable er
   });
 }
 
+TEST_CASE("MemoryRecall exposes index browsing and exact note reads", "[unit][tool][memory_recall]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    auto registered = tool::register_memory_recall(registry);
+    REQUIRE(registered.has_value());
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kMemoryRecallName},
+        .capability = core::Capability::read_memory,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    std::vector<tool::MemoryRecallRequest> seen;
+    ctx.memory_recall = [&seen](tool::MemoryRecallRequest request,
+                                tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+      seen.push_back(std::move(request));
+      co_return tool::Output::text_only("ok");
+    };
+    auto browse = co_await registry.dispatch(tool::kMemoryRecallName, "{}", ctx);
+    auto page = co_await registry.dispatch(tool::kMemoryRecallName, R"({"offset":20,"kinds":["feedback"]})", ctx);
+    auto read = co_await registry.dispatch(tool::kMemoryRecallName, R"({"id":"中文-偏好"})", ctx);
+    REQUIRE(browse.has_value());
+    REQUIRE(page.has_value());
+    REQUIRE(read.has_value());
+    REQUIRE(seen.size() == 3);
+    CHECK(seen[0].query.empty());
+    CHECK(seen[0].id.empty());
+    CHECK(seen[0].limit == 20);
+    CHECK(seen[1].offset == 20);
+    CHECK(seen[1].kinds == std::vector<std::string>{"feedback"});
+    CHECK(seen[2].id == "中文-偏好");
+    CHECK(seen[2].limit == 1);
+  });
+}
+
+TEST_CASE("ambiguous or malformed memory selectors fail before approval", "[unit][tool][memory_recall][approval]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    auto registered = tool::register_memory_recall(registry);
+    REQUIRE(registered.has_value());
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::ask,
+        .tool_pattern = std::string{tool::kMemoryRecallName},
+        .capability = core::Capability::read_memory,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    const auto malformed = std::vector<std::string>{
+        R"({"id":"a","query":"a"})",
+        R"({"id":"a","offset":0})",
+        R"({"query":"a","offset":1})",
+        R"({"offset":-1})",
+        R"({"offset":1.5})",
+        R"({"offset":18446744073709551615})",
+        R"({"query":" "})",
+        R"({"id":" "})",
+        R"({"id":"a\u0000b"})",
+        R"({"scope_key":"another-owner"})",
+        R"({"query":")" + std::string(4097, 'a') + R"("})",
+    };
+    for (const auto& input : malformed) {
+      auto result = co_await registry.dispatch(tool::kMemoryRecallName, input, ctx);
+      REQUIRE_FALSE(result.has_value());
+      CHECK(result.error().kind() == core::ErrorKind::invalid_argument);
+    }
+    REQUIRE(sink.events().size() == malformed.size());
+    for (const auto& event : sink.events()) {
+      CHECK(event.outcome == permission::AuditOutcome::deny);
+    }
+  });
+}
+
 TEST_CASE("MemoryRemember delegates parsed record fields through DispatchContext", "[unit][tool][memory_remember]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
@@ -964,11 +1036,16 @@ TEST_CASE("MemoryRemember rejects malformed input as invalid_argument", "[unit][
         "[]",
         R"({"id":"rec-1","kind":"project","title":"Build note"})",
         R"({"id":"","kind":"project","title":"Build note","body":"Remember this."})",
+        R"({"id":"rec-1","kind":"feedback","title":" \t","body":"Remember this."})",
+        R"({"id":"rec-1","kind":"feedback","title":"Note","body":" \n"})",
+        R"({"id":"rec-1","kind":"feedback","title":"Note","body":"invalid\u0000text"})",
+        R"({"id":"rec-1","kind":"feedback","title":"Note","body":"Text","tags":[" "]})",
         R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","importance":"high"})",
         R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","importance":1.25})",
         R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","tags":["repo","repo"]})",
         R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","linked_record_ids":[7]})",
         R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","shadow":"no"})",
+        R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","scope_key":"other"})",
     };
 
     for (const auto input_json : malformed) {

@@ -16,6 +16,7 @@
 
 #include <oran/async.hpp>
 #include <oran/core/enum_names.hpp>
+#include <oran/core/str.hpp>
 #include <oran/memory.hpp>
 #include <oran/storage.hpp>
 
@@ -626,5 +627,253 @@ TEST_CASE("longterm recall returns indexed records and prompt framing", "[unit][
     REQUIRE(result->hits[0].record.key.id == "recall-rec");
     REQUIRE(result->framing.section_text.contains("Scoped recall"));
     REQUIRE(result->framing.section_text.contains("tags: recall, fts5"));
+  });
+}
+
+TEST_CASE("memory index exposes scoped cues without returning bodies or updating read timestamps",
+          "[unit][memory][index][preservation]") {
+  TempDb db{"oran-memory-index"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+    auto feedback = make_record("feedback-zh",
+                                "agent:coder",
+                                memory::longterm::RecordKind::feedback,
+                                "沟通方式",
+                                "先给中文结论，再给必要的理由。\n");
+    feedback.body += std::string(1024 * 1024, 'x') + "FULL_NOTE_END";
+    auto user =
+        make_record("user", "agent:coder", memory::longterm::RecordKind::user, "Working style", "Short replies.");
+    auto project = make_record();
+    auto foreign = feedback;
+    foreign.key.scope_key = "agent:other";
+    foreign.title = "FOREIGN_NOTE";
+    auto hidden = feedback;
+    hidden.key.id = "hidden";
+    hidden.shadow = true;
+    for (const auto& record : {feedback, user, project, foreign, hidden}) {
+      auto stored = co_await backend.upsert({.record = record});
+      REQUIRE(stored.has_value());
+    }
+
+    auto request = memory::longterm::IndexRequest{.scope_key = "agent:coder", .limit = 1};
+    auto candidates = co_await backend.list(request);
+    REQUIRE(candidates.has_value());
+    REQUIRE(candidates->size() == 2);
+    CHECK(candidates->front().summary.size() < 1024);
+    CHECK_FALSE(candidates->front().summary.contains("FULL_NOTE_END"));
+
+    auto first = co_await memory::longterm::index(backend, request);
+    REQUIRE(first.has_value());
+    REQUIRE(first->entries.size() == 1);
+    CHECK(first->entries.front().key == feedback.key);
+    CHECK(first->framing.section_text.contains("先给中文结论"));
+    CHECK_FALSE(first->framing.section_text.contains("FULL_NOTE_END"));
+    CHECK_FALSE(first->framing.section_text.contains("FOREIGN_NOTE"));
+    REQUIRE(first->next_offset == 1);
+    const auto data = memory::longterm::render_index_data_json(*first);
+    CHECK(data.contains(R"("kind":"memory_index")"));
+    CHECK_FALSE(data.contains(R"("body":)"));
+    CHECK_FALSE(data.contains("FULL_NOTE_END"));
+    auto untouched = co_await backend.get(feedback.key);
+    REQUIRE(untouched.has_value());
+    CHECK(*untouched == feedback);
+
+    request.offset = *first->next_offset;
+    auto second = co_await memory::longterm::index(backend, request);
+    REQUIRE(second.has_value());
+    REQUIRE(second->entries.size() == 1);
+    CHECK(second->entries.front().key == user.key);
+    REQUIRE(second->next_offset == 2);
+    request.offset = *second->next_offset;
+    auto third = co_await memory::longterm::index(backend, request);
+    REQUIRE(third.has_value());
+    REQUIRE(third->entries.size() == 1);
+    CHECK(third->entries.front().key == project.key);
+    CHECK_FALSE(third->next_offset.has_value());
+
+    request.offset = 0;
+    request.kinds = {memory::longterm::RecordKind::project};
+    auto filtered = co_await memory::longterm::index(backend, request);
+    REQUIRE(filtered.has_value());
+    REQUIRE(filtered->entries.size() == 1);
+    CHECK(filtered->entries.front().key == project.key);
+    CHECK_FALSE(filtered->next_offset.has_value());
+  });
+}
+
+TEST_CASE("memory index budget preserves UTF-8 and complete actionable entries", "[unit][memory][index]") {
+  std::vector<memory::longterm::IndexEntry> candidates;
+  const auto large_id = std::string(9000, 'z');
+  candidates.push_back({.key = {.id = large_id, .scope_key = "scope"}, .title = "Legacy oversized identifier"});
+  for (std::size_t i = 0; i < 20; ++i) {
+    auto summary = std::string{};
+    for (std::size_t j = 0; j < 100; ++j) {
+      summary += "用户纠正。";
+    }
+    candidates.push_back({.key = {.id = "note-" + std::to_string(i), .scope_key = "scope"},
+                          .title = "什么时候需要查阅",
+                          .summary = std::move(summary)});
+  }
+  const auto request = memory::longterm::IndexRequest{.scope_key = "scope", .max_bytes = 1024};
+  const auto result = memory::longterm::make_index(candidates, request);
+  REQUIRE(result.has_value());
+  REQUIRE_FALSE(result->entries.empty());
+  CHECK(result->entries.size() < 20);
+  CHECK(result->omitted_count == 1);
+  CHECK(result->next_offset == result->entries.size() + result->omitted_count);
+  CHECK(result->framing.section_text.size() <= request.max_bytes);
+  CHECK(core::str::is_valid_utf8(result->framing.section_text));
+  for (const auto& entry : result->entries) {
+    CHECK(result->framing.section_text.contains("id: \"" + entry.key.id + "\""));
+    CHECK(core::str::is_valid_utf8(entry.summary));
+    CHECK(entry.summary.ends_with("…"));
+  }
+  CHECK_FALSE(result->framing.section_text.contains(large_id));
+  CHECK_FALSE(result->framing.section_text.contains("id: \"note-" + std::to_string(result->entries.size()) + "\""));
+  const auto repeated = memory::longterm::make_index(candidates, request);
+  REQUIRE(repeated.has_value());
+  CHECK(*repeated == *result);
+}
+
+TEST_CASE("memory exact reads resolve index IDs within scope and exclude hidden notes",
+          "[unit][memory][recall][scope]") {
+  TempDb db{"oran-memory-id"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+    auto record = make_record("中文-偏好",
+                              "agent:coder",
+                              memory::longterm::RecordKind::feedback,
+                              "沟通方式",
+                              "完整规则：用中文回答，除非用户要求别的语言。");
+    auto foreign = record;
+    foreign.key.scope_key = "agent:other";
+    foreign.body = "FOREIGN_BODY";
+    auto hidden = record;
+    hidden.key.id = "hidden";
+    hidden.shadow = true;
+    for (const auto& item : {record, foreign, hidden}) {
+      auto saved = co_await backend.upsert({.record = item});
+      REQUIRE(saved.has_value());
+    }
+
+    auto request = memory::longterm::RecallRequest{
+        .query = {.scope_key = "agent:coder", .text = {}, .kinds = {}},
+        .limit = 1,
+        .record_id = record.key.id,
+    };
+    auto read = co_await memory::longterm::recall(backend, request);
+    REQUIRE(read.has_value());
+    REQUIRE(read->hits.size() == 1);
+    CHECK(read->hits.front().record.body == record.body);
+    CHECK(read->hits.front().record.last_read_at > record.last_read_at);
+    CHECK_FALSE(read->framing.section_text.contains("FOREIGN_BODY"));
+    auto foreign_after = co_await backend.get(foreign.key);
+    REQUIRE(foreign_after.has_value());
+    CHECK(*foreign_after == foreign);
+
+    request.record_id = hidden.key.id;
+    auto hidden_read = co_await memory::longterm::recall(backend, request);
+    REQUIRE_FALSE(hidden_read.has_value());
+    CHECK(hidden_read.error().kind() == core::ErrorKind::not_found);
+    auto hidden_after = co_await backend.get(hidden.key);
+    REQUIRE(hidden_after.has_value());
+    CHECK(*hidden_after == hidden);
+
+    request.record_id = record.key.id;
+    request.query.kinds = {memory::longterm::RecordKind::project};
+    auto wrong_kind = co_await memory::longterm::recall(backend, request);
+    REQUIRE_FALSE(wrong_kind.has_value());
+    CHECK(wrong_kind.error().kind() == core::ErrorKind::not_found);
+  });
+}
+
+TEST_CASE("memory search matches useful topic words and prefers title evidence", "[unit][memory][recall][fts5]") {
+  TempDb db{"oran-memory-topic-query"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+    auto title =
+        make_record("title", "agent:coder", memory::longterm::RecordKind::project, "Snapshots", "Use atomic writes.");
+    auto body = make_record("body",
+                            "agent:coder",
+                            memory::longterm::RecordKind::project,
+                            "Miscellaneous",
+                            "Snapshots are useful.");
+    for (const auto& item : {title, body}) {
+      auto saved = co_await backend.upsert({.record = item});
+      REQUIRE(saved.has_value());
+    }
+    auto hits =
+        co_await backend.search({.scope_key = "agent:coder", .text = "Could you explain snapshots?", .kinds = {}}, 5);
+    REQUIRE(hits.has_value());
+    REQUIRE(hits->size() == 2);
+    CHECK(hits->front().record.key == title.key);
+    CHECK(hits->front().score > hits->back().score);
+    auto punctuation = co_await backend.search({.scope_key = "agent:coder", .text = "\" - : +", .kinds = {}}, 5);
+    REQUIRE(punctuation.has_value());
+    CHECK(punctuation->empty());
+  });
+}
+
+TEST_CASE("correcting a note preserves its creation and read history", "[unit][memory][preservation][fts5]") {
+  TempDb db{"oran-memory-correction"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto migrated = co_await backend.migrate();
+    REQUIRE(migrated.has_value());
+    auto record = make_record("package-manager",
+                              "agent:coder",
+                              memory::longterm::RecordKind::feedback,
+                              "Package manager",
+                              "Use npm.");
+    auto saved = co_await backend.upsert({.record = record});
+    REQUIRE(saved.has_value());
+    const auto read_at = core::Time{core::Time::time_point{10s}};
+    auto touched = co_await backend.touch({.key = record.key, .read_at = read_at});
+    REQUIRE(touched.has_value());
+    auto replacement = record;
+    replacement.body = "Use pnpm. Preserve the existing lockfile.";
+    replacement.created_at = core::Time{core::Time::time_point{20s}};
+    replacement.updated_at = replacement.created_at;
+    replacement.last_read_at = replacement.created_at;
+    auto corrected = co_await backend.upsert({.record = replacement});
+    REQUIRE(corrected.has_value());
+    CHECK(corrected->created_at == record.created_at);
+    CHECK(corrected->last_read_at == read_at);
+    CHECK(corrected->updated_at == replacement.updated_at);
+    auto old = co_await backend.search({.scope_key = "agent:coder", .text = "npm", .kinds = {}}, 5);
+    REQUIRE(old.has_value());
+    CHECK(old->empty());
+    auto current = co_await backend.search({.scope_key = "agent:coder", .text = "pnpm", .kinds = {}}, 5);
+    REQUIRE(current.has_value());
+    REQUIRE(current->size() == 1);
+    CHECK(current->front().record == *corrected);
+    auto listed = co_await memory::longterm::index(backend, {.scope_key = "agent:coder"});
+    REQUIRE(listed.has_value());
+    CHECK(listed->entries.size() == 1);
+    CHECK_FALSE(listed->next_offset.has_value());
+  });
+}
+
+TEST_CASE("memory index validates its budget and scope before storage access", "[unit][memory][index]") {
+  TempDb db{"oran-memory-index-invalid"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    memory::longterm::Fts5Backend backend{pool};
+    auto bad_scope = co_await memory::longterm::index(backend, {.scope_key = " "});
+    REQUIRE_FALSE(bad_scope.has_value());
+    CHECK(bad_scope.error().kind() == core::ErrorKind::invalid_argument);
+    auto bad_budget = co_await memory::longterm::index(backend, {.scope_key = "scope", .max_bytes = 511});
+    REQUIRE_FALSE(bad_budget.has_value());
+    CHECK(bad_budget.error().kind() == core::ErrorKind::invalid_argument);
   });
 }

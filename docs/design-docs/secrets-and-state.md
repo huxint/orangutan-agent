@@ -35,10 +35,18 @@ The config file contains:
 | `permissions`, `agents.<name>.permissions` | `AgentSession` materializes global and selected-agent rules. Host maps workspace roots to `WorkspaceOptions`. |
 | `agents.<name>.prompt_overlay` | `AgentSession` selects stable agent instructions. |
 | `hooks.timeout_ms` | Host maps the hook deadline to `RuntimeAssemblyOptions`. |
-| `memory.longterm.recall` | Host maps recall enablement, limit and kinds to `AgentSessionOptions`. |
+| `memory.longterm.recall` | `AgentSession` resolves automatic index enablement, limit and kinds; an explicit optional `longterm_recall` overrides it. |
 
 Path locks follow active work. The retired `runtime.tool_scheduler.idle_lock_ttl_ms`
 field is ignored when reading existing configuration.
+
+Memory orientation defaults to enabled with a 20-entry limit when the backend
+exists. `enabled: false` disables the automatic index. The default permission
+profile allows memory reads and asks before writes. A host that authorizes
+automatic note maintenance can grant the specific tool through
+`permissions.allow: [{"tool_pattern":"MemoryRemember"}]`; MemoryForget retains
+its independent approval behavior. [Memory](memory-system.md) owns consultation,
+index budgeting and correction semantics.
 
 ## Credentials
 

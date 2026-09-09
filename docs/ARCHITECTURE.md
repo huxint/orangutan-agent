@@ -14,7 +14,7 @@ Provider, filesystem and SQLite operations are effect boundaries coordinated by
 Asio. RAII owns resources; cancellation requests are followed by a lifetime join.
 
 Conversation preparation returns an owned value and a persistence boundary.
-The session coordinator loads history, dispatches scoped recall, runs a turn and
+The session coordinator loads history and the scoped memory index, runs a turn and
 persists its completed suffix. Memory adapters borrow explicit storage services;
 tool promotion remains session-local state. New abstractions must express a
 current domain boundary with a concrete caller.
@@ -45,7 +45,7 @@ flowchart TD
 | `oran-config` | Parse and validate explicit configuration values. |
 | `oran-permission` | Rules, decisions, bounded approval grants and audit sinks. |
 | `oran-hook` | Typed effect gates and advisory lifecycle observations. |
-| `oran-memory` | Session serialization, scoped records and lexical recall. |
+| `oran-memory` | Session serialization, scoped notes, a bounded discovery index and lexical recall. |
 | `oran-tool` | Tool definitions, prepared calls, path admission, authorization and execution. |
 | `oran-prompt` | Deterministic cached sections and tool catalogue selection. |
 | `oran-provider` | Protocol mapping, credential boundary, retries and fallback. |

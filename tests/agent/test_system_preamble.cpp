@@ -18,9 +18,10 @@ TEST_CASE("default system preamble is stable and scoped to section one", "[unit]
   REQUIRE(first.section_text.contains("Response contract:"));
   REQUIRE(first.section_text.contains("Use tools for effects"));
   REQUIRE_FALSE(first.section_text.contains("Tool:"));
-  REQUIRE_FALSE(first.section_text.contains("memory"));
+  REQUIRE(first.section_text.contains("Memory discipline:"));
+  REQUIRE(first.section_text.contains("MemoryRecall"));
+  REQUIRE(first.section_text.contains("MemoryRemember"));
   REQUIRE_FALSE(first.section_text.contains("skill"));
-  REQUIRE_FALSE(first.section_text.contains("conversation"));
   REQUIRE_FALSE(first.section_text.contains("today"));
   REQUIRE_FALSE(first.section_text.contains("request id"));
   REQUIRE_FALSE(first.section_text.contains("trace id"));

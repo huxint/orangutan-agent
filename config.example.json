@@ -104,8 +104,8 @@
   "memory": {
     "longterm": {
       "recall": {
-        "enabled": false,
-        "limit": 5,
+        "enabled": true,
+        "limit": 20,
         "kinds": [
           "user",
           "feedback",

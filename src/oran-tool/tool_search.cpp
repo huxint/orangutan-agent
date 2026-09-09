@@ -36,6 +36,7 @@ using json = nlohmann::json;
 
 constexpr std::string_view kToolSearchSchema =
     R"({"type":"object","properties":{"name":{"type":"string"},"category":{"type":"string"},"capability":{"type":"string"}},"anyOf":[{"required":["name"]},{"required":["category"]},{"required":["capability"]}],"additionalProperties":false})";
+constexpr auto kToolSearchFields = std::to_array<std::string_view>({"name", "category", "capability"});
 
 struct ParsedQuery {
   std::optional<std::string> name{};
@@ -63,7 +64,7 @@ read_string_selector(const json& input, std::string_view field, std::optional<st
 }
 
 [[nodiscard]] core::Result<ParsedQuery> parse_query(std::string_view input_json) {
-  auto parsed = detail::parse_input_object(input_json, kToolSearchName);
+  auto parsed = detail::parse_input_object(input_json, kToolSearchName, kToolSearchFields);
   if (!parsed) {
     return std::unexpected(std::move(parsed).error());
   }
@@ -186,13 +187,7 @@ read_string_selector(const json& input, std::string_view field, std::optional<st
   return text;
 }
 
-[[nodiscard]] async::Awaitable<core::Result<Output>> tool_search_handler(std::string_view input_json,
-                                                                         DispatchContext& ctx) {
-  auto query = parse_query(input_json);
-  if (!query) {
-    co_return std::unexpected(std::move(query).error());
-  }
-
+[[nodiscard]] async::Awaitable<core::Result<Output>> tool_search_handler(ParsedQuery query, DispatchContext& ctx) {
   if (ctx.registry == nullptr) {
     co_return std::unexpected(core::Error::internal("ToolSearch: registry context is not available"));
   }
@@ -201,14 +196,14 @@ read_string_selector(const json& input, std::string_view field, std::optional<st
   const auto catalog = ctx.registry->catalog();
   matches.reserve(catalog.size());
   for (const auto& def : catalog) {
-    if (matches_query(def, *query)) {
+    if (matches_query(def, query)) {
       matches.push_back(def);
     }
   }
 
   co_return Output{
       .text = format_text(matches),
-      .data_json = format_data_json(*query, matches),
+      .data_json = format_data_json(query, matches),
       .usage =
           ToolUsage{
               .match_count = static_cast<std::uint64_t>(matches.size()),
@@ -230,7 +225,15 @@ core::Result<void> register_tool_search(Registry& registry) {
       .category = "runtime",
   };
 
-  return registry.add(std::move(def), &tool_search_handler);
+  return registry.add_prepared(std::move(def), [](std::string_view input_json) -> core::Result<PreparedCall> {
+    auto query = parse_query(input_json);
+    if (!query) {
+      return std::unexpected(std::move(query).error());
+    }
+    return PreparedCall{.path = std::nullopt, .execute = [query = std::move(*query)](DispatchContext& ctx) mutable {
+                          return tool_search_handler(std::move(query), ctx);
+                        }};
+  });
 }
 
 }  // namespace orangutan::tool

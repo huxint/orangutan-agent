@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <expected>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -70,8 +71,8 @@ template <typename T>
 }
 
 [[nodiscard]] core::Result<void> validate_limit(std::size_t limit) {
-  if (limit == 0) {
-    return std::unexpected(invalid_field("limit", "long-term memory search limit must be greater than zero"));
+  if (limit == 0 || limit > 100) {
+    return std::unexpected(invalid_field("limit", "long-term memory search limit must be between 1 and 100"));
   }
   return {};
 }
@@ -126,10 +127,48 @@ core::Result<void> validate_query(const Query& query, std::size_t limit) {
   if (auto valid = validate_required(query.text, "query_text", true); !valid) {
     return valid;
   }
+  if (query.text.size() > 4096) {
+    return std::unexpected(invalid_field("query_text", "long-term memory query must not exceed 4096 bytes"));
+  }
   if (auto valid = validate_kinds(query.kinds); !valid) {
     return valid;
   }
   return validate_limit(limit);
+}
+
+core::Result<void> validate_recall_request(const RecallRequest& request) {
+  if (request.record_id.empty()) {
+    return validate_query(request.query, request.limit);
+  }
+  if (!request.query.text.empty()) {
+    return std::unexpected(invalid_field("record_id", "memory recall accepts an ID or search text, not both"));
+  }
+  if (auto valid = validate_key(RecordKey{.id = request.record_id, .scope_key = request.query.scope_key}); !valid) {
+    return valid;
+  }
+  if (auto valid = validate_kinds(request.query.kinds); !valid) {
+    return valid;
+  }
+  return validate_limit(request.limit);
+}
+
+core::Result<void> validate_index_request(const IndexRequest& request) {
+  if (auto valid = validate_required(request.scope_key, "scope_key"); !valid) {
+    return valid;
+  }
+  if (auto valid = validate_kinds(request.kinds); !valid) {
+    return valid;
+  }
+  if (request.limit == 0 || request.limit > 20) {
+    return std::unexpected(invalid_field("limit", "memory index limit must be between 1 and 20"));
+  }
+  if (request.offset > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()) - 100) {
+    return std::unexpected(invalid_field("offset", "memory index offset is too large"));
+  }
+  if (request.max_bytes < 512 || request.max_bytes > kMaxIndexBytes) {
+    return std::unexpected(invalid_field("max_bytes", "memory index budget must be between 512 and 8192 bytes"));
+  }
+  return {};
 }
 
 core::Result<void> validate_write_request(const WriteRequest& request) {

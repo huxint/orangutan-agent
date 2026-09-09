@@ -3,9 +3,11 @@
 #include <oran/tool/builtins.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -20,6 +22,7 @@
 #include <oran/tool/output.hpp>
 #include <oran/tool/registry.hpp>
 
+#include "_impl/memory_input.hpp"
 #include "_impl/parse_input.hpp"
 
 namespace orangutan::tool {
@@ -29,14 +32,16 @@ using json = nlohmann::json;
 
 constexpr std::size_t kDefaultMemoryRecallLimit = 5;
 constexpr std::size_t kMaxMemoryRecallLimit = 20;
+constexpr auto kMemoryKinds = std::array<std::string_view, 5>{"user", "feedback", "project", "reference", "team"};
+constexpr auto kMemoryRecallFields = std::to_array<std::string_view>({"query", "limit", "kinds", "id", "offset"});
 
 constexpr std::string_view kMemoryRecallSchema =
-    R"({"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":20},"kinds":{"type":"array","items":{"type":"string","enum":["user","feedback","project","reference","team"]},"uniqueItems":true}},"required":["query"],"additionalProperties":false})";
+    R"({"type":"object","properties":{"query":{"type":"string","minLength":1,"description":"Short topic words to search; mutually exclusive with id."},"id":{"type":"string","minLength":1,"description":"Read this exact note from the index."},"limit":{"type":"integer","minimum":1,"maximum":20},"offset":{"type":"integer","minimum":0,"description":"Continue browsing the index; omit id and query."},"kinds":{"type":"array","items":{"type":"string","enum":["user","feedback","project","reference","team"]},"uniqueItems":true}},"required":[],"additionalProperties":false})";
 
-[[nodiscard]] core::Result<std::size_t> parse_limit(const json& parsed) {
+[[nodiscard]] core::Result<std::size_t> parse_limit(const json& parsed, std::size_t default_limit) {
   const auto it = parsed.find("limit");
   if (it == parsed.end()) {
-    return kDefaultMemoryRecallLimit;
+    return default_limit;
   }
   if (!it->is_number_unsigned()) {
     return std::unexpected(
@@ -74,6 +79,10 @@ constexpr std::string_view kMemoryRecallSchema =
                                  .with("field", "kinds")
                                  .with("index", std::to_string(i)));
     }
+    if (!std::ranges::contains(kMemoryKinds, std::string_view{kind})) {
+      return std::unexpected(
+          core::Error::invalid_argument("MemoryRecall: unknown kind").with("field", "kinds").with("kind", kind));
+    }
     if (std::ranges::contains(kinds, kind)) {
       return std::unexpected(core::Error::invalid_argument("MemoryRecall: kind filters must be unique")
                                  .with("field", "kinds")
@@ -85,20 +94,55 @@ constexpr std::string_view kMemoryRecallSchema =
 }
 
 [[nodiscard]] core::Result<MemoryRecallRequest> parse_recall(std::string_view input_json) {
-  auto parsed = detail::parse_input_object(input_json, kMemoryRecallName);
+  auto parsed = detail::parse_input_object(input_json, kMemoryRecallName, kMemoryRecallFields);
   if (!parsed) {
     return std::unexpected(std::move(parsed).error());
   }
 
-  auto query = detail::require_string_field(*parsed, kMemoryRecallName, "query");
-  if (!query) {
-    return std::unexpected(std::move(query).error());
-  }
-  if (query->empty()) {
-    return std::unexpected(core::Error::invalid_argument("MemoryRecall: `query` must be non-empty"));
+  if ((parsed->contains("query") && parsed->contains("id")) ||
+      (parsed->contains("offset") && (parsed->contains("query") || parsed->contains("id")))) {
+    return std::unexpected(core::Error::invalid_argument("MemoryRecall: choose index browsing, query, or id"));
   }
 
-  auto limit = parse_limit(*parsed);
+  std::string query;
+  if (parsed->contains("query")) {
+    auto value = detail::require_string_field(*parsed, kMemoryRecallName, "query");
+    if (!value) {
+      return std::unexpected(std::move(value).error());
+    }
+    if (auto valid = detail::validate_memory_text(*value, "query", true); !valid) {
+      return std::unexpected(std::move(valid).error());
+    }
+    if (value->size() > 4096) {
+      return std::unexpected(core::Error::invalid_argument("MemoryRecall: query must not exceed 4096 bytes"));
+    }
+    query = std::move(*value);
+  }
+
+  std::string id;
+  if (parsed->contains("id")) {
+    auto value = detail::require_string_field(*parsed, kMemoryRecallName, "id");
+    if (!value) {
+      return std::unexpected(std::move(value).error());
+    }
+    if (auto valid = detail::validate_memory_text(*value, "id"); !valid) {
+      return std::unexpected(std::move(valid).error());
+    }
+    id = std::move(*value);
+  }
+  std::size_t offset = 0;
+  if (parsed->contains("offset")) {
+    const auto& value = (*parsed)["offset"];
+    if (!value.is_number_unsigned() ||
+        value.get<std::uint64_t>() > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) - 100) {
+      return std::unexpected(
+          core::Error::invalid_argument("MemoryRecall: offset must be a nonnegative bounded integer"));
+    }
+    offset = value.get<std::size_t>();
+  }
+
+  const auto default_limit = !id.empty() ? 1 : (query.empty() ? kMaxMemoryRecallLimit : kDefaultMemoryRecallLimit);
+  auto limit = parse_limit(*parsed, default_limit);
   if (!limit) {
     return std::unexpected(std::move(limit).error());
   }
@@ -108,24 +152,22 @@ constexpr std::string_view kMemoryRecallSchema =
   }
 
   return MemoryRecallRequest{
-      .query = std::move(*query),
+      .query = std::move(query),
       .limit = *limit,
       .kinds = std::move(*kinds),
+      .id = std::move(id),
+      .offset = offset,
   };
 }
 
-[[nodiscard]] async::Awaitable<core::Result<Output>> memory_recall_handler(std::string_view input_json,
+[[nodiscard]] async::Awaitable<core::Result<Output>> memory_recall_handler(MemoryRecallRequest request,
                                                                            DispatchContext& ctx) {
-  auto parsed = parse_recall(input_json);
-  if (!parsed) {
-    co_return std::unexpected(std::move(parsed).error());
-  }
   if (!ctx.memory_recall) {
     co_return std::unexpected(core::Error::invalid_argument("MemoryRecall: runtime service is not available")
                                   .with("reason", "memory_runtime_unavailable"));
   }
 
-  co_return co_await ctx.memory_recall(std::move(*parsed), ctx);
+  co_return co_await ctx.memory_recall(std::move(request), ctx);
 }
 
 }  // namespace
@@ -133,16 +175,26 @@ constexpr std::string_view kMemoryRecallSchema =
 core::Result<void> register_memory_recall(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kMemoryRecallName},
-      .description = "Recall matching long-term memory records by query. Optional kind filters constrain the "
-                     "search to specific record kinds; the result returns deterministic recall text plus "
-                     "structured record metadata.",
+      .description = "Consult your saved knowledge before making a decision or asking the user to repeat context. "
+                     "Call {} to browse a compact index, {\"id\":\"note-id\"} to read a relevant note in full, "
+                     "or {\"query\":\"topic words\"} to search. Index cues are incomplete; read applicable notes "
+                     "before relying on them. Follow next_offset to browse more and use returned IDs when "
+                     "updating a lesson. Optional kinds filter the current scope, which is supplied by the host.",
       .input_schema_json = std::string{kMemoryRecallSchema},
       .required_capabilities = {core::Capability::read_memory},
-      .deferred = true,
+      .deferred = false,
       .category = "memory",
   };
 
-  return registry.add(std::move(def), &memory_recall_handler);
+  return registry.add_prepared(std::move(def), [](std::string_view input_json) -> core::Result<PreparedCall> {
+    auto parsed = parse_recall(input_json);
+    if (!parsed) {
+      return std::unexpected(std::move(parsed).error());
+    }
+    return PreparedCall{.path = std::nullopt, .execute = [request = std::move(*parsed)](DispatchContext& ctx) mutable {
+                          return memory_recall_handler(std::move(request), ctx);
+                        }};
+  });
 }
 
 }  // namespace orangutan::tool

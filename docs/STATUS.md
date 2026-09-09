@@ -24,10 +24,12 @@ the requesting executor. Dispatch awaits the durable decision before tool effect
 Cancelled audit and trace writes finish before borrowed services are released and
 return an explicit cancellation result.
 
-Long-term memory tools borrow one scoped FTS5 backend. `longterm::recall` returns
-owned hits and prompt framing; the [memory contract](design-docs/memory-system.md)
-owns read timestamps, output compatibility and preservation of existing index
-tables. SQLite connections configure their own handles from explicit options.
+Long-term memory tools borrow one scoped FTS5 backend. Sessions load a bounded
+memory index by default; exact-ID reads and topic search supply full notes through
+the tool loop. Browsing leaves read timestamps unchanged, and corrections retain
+creation/read history. The [memory contract](design-docs/memory-system.md) owns
+these boundaries, output compatibility and preservation of existing tables.
+SQLite connections configure their own handles from explicit options.
 
 `AgentRun` selects a configured child, assigns a fresh session ID and approval
 identity, and uses the child's prompt overlay and promotion state. Parent and child rules
@@ -80,19 +82,32 @@ requests, declared custom targets and retained ordinary-handler state. Isolated
 faults and explicit ASan/UBSan instrumentation verify the affected behavior and
 ownership boundaries; generated evidence lives under `build/validation`.
 
+Memory regressions cover unhinted prompt inputs, scoped index discovery, exact
+reads, same-ID correction, reopened sessions, budgets and unavailable memory.
+Four deliberate faults detect disabled orientation, scope escape, unbounded
+index projection and lost creation/read history. Controlled providers supply the
+tool decisions; real-model consultation and learning quality remain a separate
+gate in the memory contract.
+
 Local verification is not reference-hardware compile/performance certification.
 The toolchain and hosted quality gaps remain in [live debt](exec-plans/tech-debt-tracker.md).
 
 ## Handoff
 
-The next core slice is preparation for the host-bound memory and child tools.
-MemoryRecall, MemoryRemember, MemoryForget and AgentRun still validate their
-concrete arguments inside handlers after approval. Move these parsers onto the
-same prepared-call boundary and delete their handler-side JSON preludes. Keep
-scope, child identity, policy intersection and services host-bound; tool JSON
-must not supply them. ToolSearch can use the same preparation contract for its
-catalogue selectors. This completes input preparation before extending the tool
-surface.
+The host-bound memory and child tools now use the same prepared-call boundary as
+filesystem tools. MemoryRecall, MemoryRemember, MemoryForget, AgentRun and
+ToolSearch parse and validate owned typed requests before path admission,
+permission evaluation and approval; handlers no longer reparse JSON. Memory
+scope, child identity, policy intersection and concrete services remain host
+bound.
+
+MemoryRecall and MemoryRemember are active in the default catalogue. The runtime
+preamble defines proactive consultation and same-turn durable correction; the
+index makes existing knowledge discoverable before a model chooses its next
+action. Session configuration controls automatic orientation, and all reads and
+writes retain their permission boundary. The next memory work is deployment-model
+behavioral evaluation and persisted working context before history truncation.
+Compaction and record provenance require the pending backup/import boundary.
 
 The library provider/tool/session loop remains the acceptance boundary:
 authorized tool execution, scoped memory recall, persisted continuation and

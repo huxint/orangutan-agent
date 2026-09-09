@@ -110,8 +110,8 @@ using core::Result;
   if (options.trace_context_json.empty()) {
     return std::unexpected(Error::invalid_argument("agent session trace context JSON must not be empty"));
   }
-  if (options.longterm_recall.enabled) {
-    if (options.longterm_recall.limit == 0 || options.longterm_recall.limit > 20) {
+  if (options.longterm_recall && options.longterm_recall->enabled) {
+    if (options.longterm_recall->limit == 0 || options.longterm_recall->limit > 20) {
       return std::unexpected(Error::invalid_argument("agent session long-term recall limit must be between 1 and 20"));
     }
     if (!options.memory_framing.empty()) {
@@ -202,12 +202,12 @@ public:
     }
 
     auto memory_framing = options_.memory_framing;
-    if (options_.longterm_recall.enabled) {
-      auto recalled = co_await recall_prompt_memory(*registry_,
-                                                    context,
-                                                    tool::MemoryRecallRequest{.query = request.prompt,
-                                                                              .limit = options_.longterm_recall.limit,
-                                                                              .kinds = options_.longterm_recall.kinds});
+    if (options_.longterm_recall->enabled) {
+      auto recalled =
+          co_await recall_prompt_memory(*registry_,
+                                        context,
+                                        tool::MemoryRecallRequest{.limit = options_.longterm_recall->limit,
+                                                                  .kinds = options_.longterm_recall->kinds});
       if (!recalled) {
         co_return std::unexpected(std::move(recalled).error());
       }
@@ -356,6 +356,15 @@ private:
 };
 
 core::Result<std::unique_ptr<AgentSession>> AgentSession::create(AgentSessionOptions options) {
+  if (!options.longterm_recall && options.config != nullptr && options.assembly != nullptr) {
+    const auto& recall = options.config->memory().longterm.recall;
+    options.longterm_recall = LongtermRecallOptions{
+        .enabled =
+            recall.enabled && options.assembly->longterm_memory_backend() != nullptr && options.memory_framing.empty(),
+        .limit = static_cast<std::size_t>(recall.limit),
+        .kinds = recall.kinds,
+    };
+  }
   if (auto valid = validate_options(options); !valid) {
     return std::unexpected(std::move(valid).error());
   }

@@ -29,14 +29,23 @@ owns construction validation and per-profile dispatch.
 `AgentSession` loads bounded history, prepares an owned conversation through
 `agent::prepare_conversation`, drives `agent::Loop`, and appends the successful
 transcript suffix atomically through `Store::append_all`. The prepared value
-records the history boundary independently of storage. Prompt recall runs once
-through `MemoryRecall` before the loop; the returned text stays stable across
-model/tool iterations.
+records the history boundary independently of storage. The session resolves
+`memory.longterm.recall` from configuration and loads the scoped index through
+MemoryRecall once before the loop by default. A supplied optional
+`longterm_recall` value overrides that policy; exact caller framing replaces
+default orientation. The returned index stays stable across model/tool
+iterations, and the next prompt observes accepted memory updates. An unavailable
+index is explicit context for the model; cancellation still ends the turn.
 
 Memory adapters borrow one backend and capture the host's scope. They
 do not capture session state or discover configuration. Filesystem and catalogue
 tools are registered together; the session adds memory tools when memory services
-exist. Every turn joins its borrowed tool context before returning or persisting.
+exist. Recall and remember are visible in the default catalogue so the model can
+inspect relevant durable notes by ID and save stable decisions or corrections
+during ordinary work. The index, content reads and writes share the dispatch
+boundary. [Memory](memory-system.md) owns projection, budgets, timestamps and
+model-use guidance. Every turn joins its borrowed tool context before returning
+or persisting.
 
 Sessions share the broker, workspace, hook and audit services. Each session owns
 its rule values and promotion state. Without an approval consumer, an `ask`

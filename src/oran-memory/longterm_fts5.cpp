@@ -67,9 +67,9 @@ ON CONFLICT(scope_key, id) DO UPDATE SET
   kind = excluded.kind,
   title = excluded.title,
   body = excluded.body,
-  created_at = excluded.created_at,
-  updated_at = excluded.updated_at,
-  last_read_at = excluded.last_read_at,
+  created_at = longterm_records.created_at,
+  updated_at = MAX(longterm_records.updated_at, excluded.updated_at),
+  last_read_at = longterm_records.last_read_at,
   importance = excluded.importance,
   tags_json = excluded.tags_json,
   linked_record_ids_json = excluded.linked_record_ids_json,
@@ -137,7 +137,7 @@ SELECT r.scope_key,
        r.tags_json,
        r.linked_record_ids_json,
        r.shadow,
-       -bm25(longterm_records_fts) AS lexical_score
+       -bm25(longterm_records_fts, 0, 0, 0, 0, 4, 1, 2) AS lexical_score
 FROM longterm_records_fts
 JOIN longterm_records AS r
   ON r.scope_key = longterm_records_fts.scope_key
@@ -147,7 +147,7 @@ WHERE longterm_records_fts MATCH ?
 )sql";
 
 constexpr std::string_view kSearchOrderSql = R"sql(
-ORDER BY bm25(longterm_records_fts) ASC, r.updated_at DESC, r.id ASC
+ORDER BY lexical_score DESC, r.updated_at DESC, r.id ASC
 LIMIT ?
 )sql";
 
@@ -471,29 +471,27 @@ delete_fts_row(storage::Connection& connection, storage::StatementCache& cache, 
 }
 
 [[nodiscard]] std::string make_fts_query(std::string_view text) {
+  const auto word_byte = [](char ch) {
+    const auto byte = static_cast<unsigned char>(ch);
+    return byte >= 0x80 || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9');
+  };
   std::string out;
   std::size_t position = 0;
-  while (position < text.size()) {
-    while (position < text.size()) {
-      const auto ch = text[position];
-      if (ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r') {
-        break;
-      }
+  std::size_t terms = 0;
+  while (position < text.size() && terms < 32) {
+    while (position < text.size() && !word_byte(text[position])) {
       ++position;
     }
     const auto start = position;
-    while (position < text.size()) {
-      const auto ch = text[position];
-      if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
-        break;
-      }
+    while (position < text.size() && word_byte(text[position])) {
       ++position;
     }
     if (position > start) {
       if (!out.empty()) {
-        out.push_back(' ');
+        out += " OR ";
       }
       out += quote_fts_token(text.substr(start, position - start));
+      ++terms;
     }
   }
   return out;
@@ -590,6 +588,10 @@ async::Awaitable<core::Result<std::vector<SearchHit>>> Fts5Backend::search(Query
   if (!limit_value) {
     co_return std::unexpected(std::move(limit_value).error());
   }
+  const auto match_query = make_fts_query(query.text);
+  if (match_query.empty()) {
+    co_return std::vector<SearchHit>{};
+  }
 
   auto reader = co_await pool_->acquire_reader();
   if (!reader) {
@@ -602,13 +604,13 @@ async::Awaitable<core::Result<std::vector<SearchHit>>> Fts5Backend::search(Query
     co_return std::unexpected(std::move(cached).error());
   }
   auto& statement = cached->statement();
-  if (auto bound = statement.bind_text(1, make_fts_query(query.text)); !bound) {
+  int bind_index = 1;
+  if (auto bound = statement.bind_text(bind_index++, match_query); !bound) {
     co_return std::unexpected(std::move(bound).error());
   }
-  if (auto bound = statement.bind_text(2, query.scope_key); !bound) {
+  if (auto bound = statement.bind_text(bind_index++, query.scope_key); !bound) {
     co_return std::unexpected(std::move(bound).error());
   }
-  int bind_index = 3;
   for (const auto kind : query.kinds) {
     if (auto bound = statement.bind_text(bind_index, core::enum_name(kind)); !bound) {
       co_return std::unexpected(std::move(bound).error());

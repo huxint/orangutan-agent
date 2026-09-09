@@ -16,40 +16,36 @@ namespace orangutan::tool {
 namespace {
 
 constexpr std::size_t MAX_AGENT_PROMPT_BYTES = 16384;
+constexpr auto kAgentRunFields = std::to_array<std::string_view>({"agent", "prompt"});
 
-async::Awaitable<core::Result<Output>>
-run_agent(std::span<const std::string> agent_names, std::string_view input, DispatchContext& context) {
-  auto parsed = detail::parse_input_object(input, AGENT_RUN_NAME);
+core::Result<AgentRunRequest> parse_agent_run(std::span<const std::string> agent_names, std::string_view input) {
+  auto parsed = detail::parse_input_object(input, AGENT_RUN_NAME, kAgentRunFields);
   if (!parsed) {
-    co_return std::unexpected(std::move(parsed).error());
-  }
-  constexpr auto fields = std::array<std::string_view, 2>{"agent", "prompt"};
-  for (const auto& [field, value] : parsed->items()) {
-    if (!std::ranges::contains(fields, field)) {
-      co_return std::unexpected(core::Error::invalid_argument("AgentRun: unknown input field").with("field", field));
-    }
+    return std::unexpected(std::move(parsed).error());
   }
   auto agent = detail::require_string_field(*parsed, AGENT_RUN_NAME, "agent");
   if (!agent) {
-    co_return std::unexpected(std::move(agent).error());
+    return std::unexpected(std::move(agent).error());
   }
   if (!std::ranges::contains(agent_names, *agent)) {
-    co_return std::unexpected(core::Error::invalid_argument("AgentRun: agent is not configured").with("agent", *agent));
+    return std::unexpected(core::Error::invalid_argument("AgentRun: agent is not configured").with("agent", *agent));
   }
   auto prompt = detail::require_string_field(*parsed, AGENT_RUN_NAME, "prompt");
   if (!prompt) {
-    co_return std::unexpected(std::move(prompt).error());
+    return std::unexpected(std::move(prompt).error());
   }
   if (prompt->empty() || prompt->size() > MAX_AGENT_PROMPT_BYTES || !core::str::is_valid_utf8(*prompt)) {
-    co_return std::unexpected(
-        core::Error::invalid_argument("AgentRun: prompt must contain 1–16384 bytes of UTF-8 text"));
+    return std::unexpected(core::Error::invalid_argument("AgentRun: prompt must contain 1–16384 bytes of UTF-8 text"));
   }
+  return AgentRunRequest{.agent = std::move(*agent), .prompt = std::move(*prompt)};
+}
+
+async::Awaitable<core::Result<Output>> run_agent(AgentRunRequest request, DispatchContext& context) {
   if (!context.agent_run) {
     co_return std::unexpected(core::Error::permission_denied("AgentRun: delegation is disabled for this session")
                                   .with("reason", "delegation_disabled"));
   }
-  co_return co_await context.agent_run(AgentRunRequest{.agent = std::move(*agent), .prompt = std::move(*prompt)},
-                                       context);
+  co_return co_await context.agent_run(std::move(request), context);
 }
 
 }  // namespace
@@ -69,7 +65,7 @@ core::Result<void> register_agent_run(Registry& registry, std::span<const std::s
       {"required", {"agent", "prompt"}},
       {"additionalProperties", false},
   };
-  return registry.add(
+  return registry.add_prepared(
       core::ToolDef{
           .name = std::string{AGENT_RUN_NAME},
           .description = "Run a configured child agent and return its completed answer. Supply a self-contained task; "
@@ -80,8 +76,15 @@ core::Result<void> register_agent_run(Registry& registry, std::span<const std::s
           .deferred = false,
           .category = "agent",
       },
-      [names = std::move(names)](std::string_view input, DispatchContext& context) {
-        return run_agent(names, input, context);
+      [names = std::move(names)](std::string_view input) -> core::Result<PreparedCall> {
+        auto request = parse_agent_run(names, input);
+        if (!request) {
+          return std::unexpected(std::move(request).error());
+        }
+        return PreparedCall{.path = std::nullopt,
+                            .execute = [request = std::move(*request)](DispatchContext& context) mutable {
+                              return run_agent(std::move(request), context);
+                            }};
       });
 }
 

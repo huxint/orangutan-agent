@@ -20,11 +20,11 @@ namespace orangutan::prompt {
 [[nodiscard]] bool is_default_active_tool(std::string_view name) noexcept;
 
 struct SectionVersions {
-  std::uint32_t system_preamble{2};
-  std::uint32_t tool_catalog{3};
-  std::uint32_t deferred_tools{3};
+  std::uint32_t system_preamble{3};
+  std::uint32_t tool_catalog{4};
+  std::uint32_t deferred_tools{4};
   std::uint32_t skills_catalog{1};
-  std::uint32_t memory_framing{1};
+  std::uint32_t memory_framing{2};
   std::uint32_t per_agent_overlay{1};
   std::uint32_t conversation_tail{1};
 

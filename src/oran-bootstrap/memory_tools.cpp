@@ -213,17 +213,60 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
     co_return std::unexpected(std::move(kinds).error());
   }
   const auto started_at = core::time::now_utc();
+  if (request.query.empty() && request.id.empty()) {
+    const auto text_cap = ctx.output_caps.max_text_bytes;
+    auto indexed = co_await asio::co_spawn(
+        ctx.executor,
+        memory::longterm::index(backend,
+                                memory::longterm::IndexRequest{
+                                    .scope_key = scope_key,
+                                    .kinds = *kinds,
+                                    .limit = request.limit,
+                                    .offset = request.offset,
+                                    .max_bytes = text_cap == 0 ? memory::longterm::kMaxIndexBytes
+                                                               : std::min(text_cap, memory::longterm::kMaxIndexBytes),
+                                }),
+        asio::use_awaitable);
+    if (!indexed) {
+      co_return std::unexpected(std::move(indexed).error());
+    }
+    if (ctx.bus != nullptr) {
+      std::vector<memory::longterm::SearchHit> cues;
+      for (const auto& entry : indexed->entries) {
+        cues.push_back(memory::longterm::SearchHit{.record = memory::longterm::Record{
+                                                       .key = entry.key,
+                                                       .kind = entry.kind,
+                                                       .title = entry.title,
+                                                       .body = entry.summary,
+                                                       .tags = {},
+                                                       .linked_record_ids = {},
+                                                   }});
+      }
+      auto payload = make_memory_read_payload(ctx, request, cues, started_at, core::time::now_utc());
+      payload.source = "MemoryRecall:index";
+      [[maybe_unused]] auto published =
+          co_await ctx.bus->publish_advisory(hook::Event::memory_read_after, std::move(payload));
+    }
+    auto data = memory::longterm::render_index_data_json(*indexed);
+    co_return tool::Output{
+        .text = std::move(indexed->framing.section_text),
+        .data_json = std::move(data),
+        .usage = tool::ToolUsage{.match_count = static_cast<std::uint64_t>(indexed->entries.size())},
+    };
+  }
   auto recalled = co_await asio::co_spawn(ctx.executor,
-                                          memory::longterm::recall(backend, memory::longterm::RecallRequest{
-                                              .query =
-                                                  memory::longterm::Query{
-                                                      .scope_key = scope_key,
-                                                      .text = request.query,
-                                                      .kinds = *kinds,
-                                                      .include_shadow = false,
-                                                  },
-                                              .limit = request.limit,
-                                          }),
+                                          memory::longterm::recall(backend,
+                                                                   memory::longterm::RecallRequest{
+                                                                       .query =
+                                                                           memory::longterm::Query{
+                                                                               .scope_key = scope_key,
+                                                                               .text = request.query,
+                                                                               .kinds = *kinds,
+                                                                               .include_shadow = false,
+                                                                           },
+                                                                       .limit = request.limit,
+                                                                       .record_id = request.id,
+                                                                   }),
                                           asio::use_awaitable);
   if (!recalled) {
     co_return std::unexpected(std::move(recalled).error());

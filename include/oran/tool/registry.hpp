@@ -41,9 +41,12 @@ using AgentRunHandler =
     std::function<async::Awaitable<core::Result<Output>>(AgentRunRequest request, DispatchContext& ctx)>;
 
 struct MemoryRecallRequest {
-  std::string query;
+  std::string query{};
   std::size_t limit{5};
-  std::vector<std::string> kinds;
+  std::vector<std::string> kinds{};
+  /// Exact read; absent query and id select the paginated index.
+  std::string id{};
+  std::size_t offset{0};
 
   friend bool operator==(const MemoryRecallRequest&, const MemoryRecallRequest&) = default;
 };

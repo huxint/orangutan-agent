@@ -27,11 +27,13 @@ namespace {
 constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
 constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 constexpr std::string_view kHashSeparator = "\x1F";
-constexpr auto kDefaultActiveTools = std::array<std::string_view, 5>{
+constexpr auto kDefaultActiveTools = std::array<std::string_view, 7>{
     "FileRead",
     "FileWrite",
     "FileEdit",
     "ToolSearch",
+    "MemoryRecall",
+    "MemoryRemember",
     "AgentRun",
 };
 

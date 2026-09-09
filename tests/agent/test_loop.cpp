@@ -663,7 +663,7 @@ TEST_CASE("Loop publishes provider request and response hooks", "[unit][agent][l
     REQUIRE(request->route_protocol == "anthropic_messages");
     REQUIRE(request->fallback_count == 0);
     REQUIRE(request->message_count == 1);
-    REQUIRE(request->tool_count == 1);
+    REQUIRE(request->tool_count == 2);
     REQUIRE(request->stream);
     REQUIRE(request->max_tokens == std::optional<std::uint32_t>{512});
     REQUIRE(request->thinking_budget == std::nullopt);
