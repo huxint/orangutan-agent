@@ -693,12 +693,6 @@ public:
           },
           options_.prompt_versions);
 
-      auto cache =
-          provider::make_prompt_cache_hints(rendered, route_.primary.cache.value_or(provider::PromptCacheOptions{}));
-      if (!cache) {
-        co_return std::unexpected(std::move(cache).error());
-      }
-
       auto request = provider::Request{
           .messages = transcript,
           .system_prompt = join_prompt_prefix(rendered),
@@ -707,7 +701,7 @@ public:
           .max_tokens = inputs.max_tokens,
           .thinking_budget = thinking_budget,
           .stream = inputs.stream,
-          .cache = *cache,
+          .cache = provider::PromptCacheHints{.prefix_hash = rendered.prefix_hash, .prefix_bytes = rendered.prefix_bytes},
           .retry = inputs.retry,
       };
 
@@ -967,7 +961,6 @@ public:
           .usage = total_usage,
           .model_used = std::move(response->model_used),
           .rendered_prompt = std::move(rendered),
-          .cache_hints = std::move(*cache),
           .iterations = iteration,
           .transcript = std::move(transcript),
       };

@@ -1,8 +1,8 @@
 # `bench-provider`
 
-Provider benchmarks pin the internal adapter-facing overhead before real
-network transports land.
+Provider benchmarks compare protocol serialization with and without explicit
+cache controls using the same request and prefix values.
 
 | Scenario | What it compares |
 | --- | --- |
-| [`scenarios/cache_mapping.cpp`](scenarios/cache_mapping.cpp) | `provider.cache_hints_enabled` validates and maps a `prompt::RenderedPrompt` prefix into adapter cache keys, while `provider.cache_hints_disabled` is the route-level off switch baseline. |
+| [`scenarios/cache-requests.cpp`](scenarios/cache-requests.cpp) | Each supported protocol encodes the same stable system text and native tool with cache controls enabled and disabled. |

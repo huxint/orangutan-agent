@@ -85,14 +85,13 @@ void append_content(std::string& out, const core::Content& content) {
 }
 
 [[nodiscard]] CacheSection
-make_section(std::string id, std::string content, std::uint32_t cache_version, bool is_breakpoint = false) {
+make_section(std::string id, std::string content, std::uint32_t cache_version) {
   const auto content_hash = hash_append(FNV_OFFSET, content);
   return CacheSection{
       .id = std::move(id),
       .content = std::move(content),
       .content_hash = content_hash,
       .cache_version = cache_version,
-      .is_breakpoint = is_breakpoint,
   };
 }
 
@@ -110,8 +109,7 @@ RenderedPrompt render(RenderInputs inputs, SectionVersions versions) {
   sections.push_back(make_section("system_preamble", std::string{inputs.system_preamble}, versions.system_preamble));
   sections.push_back(make_section("skills_catalog", std::string{inputs.skills_catalog}, versions.skills_catalog));
   sections.push_back(make_section("memory_framing", std::string{inputs.memory_framing}, versions.memory_framing));
-  sections.push_back(
-      make_section("per_agent_overlay", std::string{inputs.per_agent_overlay}, versions.per_agent_overlay, true));
+  sections.push_back(make_section("per_agent_overlay", std::string{inputs.per_agent_overlay}, versions.per_agent_overlay));
   sections.push_back(make_section("conversation_tail",
                                   render_conversation_tail(inputs.conversation_tail),
                                   versions.conversation_tail));

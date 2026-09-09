@@ -97,26 +97,13 @@ private:
       .with("max_attempts", std::to_string(max_attempts));
 }
 
-// Per-target fallback policy: a fallback target either carries its own
-// thinking/cache policy or has the primary's stripped when the wire protocol
-// cannot honor it (only `anthropic_messages` consumes token-budget thinking
-// controls today; `openai_responses` rejects them as `invalid_request`).
-// The primary attempt keeps the request verbatim — the agent loop already
-// folded the primary profile's policy (and any explicit turn override) in.
-void apply_target_policy(provider::Request& request, const provider::ModelTarget& target) noexcept {
+// The primary already includes the turn's thinking override. Fallbacks replace
+// it with their policy or clear it when their protocol cannot accept a budget.
+void apply_fallback_thinking_policy(provider::Request& request, const provider::ModelTarget& target) noexcept {
   if (target.thinking_budget.has_value()) {
     request.thinking_budget = target.thinking_budget;
   } else if (target.protocol != provider::ProtocolKind::anthropic_messages) {
     request.thinking_budget = std::nullopt;
-  }
-  if (target.cache.has_value()) {
-    if (!target.cache->enabled) {
-      request.cache = std::nullopt;
-    } else if (request.cache.has_value() && request.cache->prefix_bytes < target.cache->min_prefix_bytes) {
-      // Below the target's prefix-byte floor: conservative drop rather than
-      // sending hints computed against the primary's cache options.
-      request.cache = std::nullopt;
-    }
   }
 }
 
@@ -140,7 +127,7 @@ Runtime::send(provider::Request request, provider::Route route, provider::EventS
     for (std::uint32_t attempt = 1; attempt <= max_attempts; ++attempt) {
       auto attempt_request = request;
       if (target_index > 0) {
-        apply_target_policy(attempt_request, target);
+        apply_fallback_thinking_policy(attempt_request, target);
       }
       AttemptSink attempt_sink{sink};
       auto* effective_sink = sink == nullptr ? nullptr : &attempt_sink;

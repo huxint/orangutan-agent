@@ -59,12 +59,36 @@ sent in `Request::tools`. Descriptions and input schemas occur only in those
 native declarations. The effective prefix identity includes their bytes and
 cache version, while conversation messages remain dynamic.
 
-`make_prompt_cache_hints` validates the final stable-text breakpoint and counts
-native tool fields toward the configured byte floor. Retry/fallback execution
-applies the selected profile's eligibility policy. Current protocol encoders do
-not serialize explicit cache directives from these internal hints; protocol
-cache-control support remains in [live debt](../exec-plans/tech-debt-tracker.md).
-Local fingerprint tests do not establish provider cache hits.
+`Request::cache` carries only a caller-owned `prefix_hash` and `prefix_bytes` for
+`system_prompt` and native tools. The loop supplies these values without applying
+primary policy, and retry/fallback execution preserves them for every attempt.
+Provider has no dependency on prompt rendering or its section layout. Callers
+must keep the identity aligned with the stable fields they submit; conversation,
+including system messages supplied through `Request::messages`, is separate.
+
+`make_protocol_request` applies the selected target's `cache` policy, including
+direct sends and every retry/fallback. Absent policy defaults to enabled with a
+zero-byte floor. Missing hints, a zero-byte prefix, a disabled target, a prefix
+below its byte floor, or no stable system text/native tools omit explicit cache
+controls. Equality with the byte floor is eligible. A primary's disabled policy
+or higher floor cannot suppress controls for an eligible fallback.
+
+| Protocol | Explicit control |
+| --- | --- |
+| `anthropic_messages` | Stable system text becomes a text block ending in `cache_control: {"type":"ephemeral"}`. With no stable system text, the last native tool receives the breakpoint. System messages lifted from conversation follow that breakpoint, and conversation/tool results receive no markers. |
+| `openai_responses` | `prompt_cache_key` is `oran-` followed by the prefix hash as 16 lowercase hexadecimal digits. Conversation changes preserve this routing key; changed prefix identity changes it. |
+
+These fields follow the [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+and [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
+protocols. Disabled policy omits client cache controls; it does not disable
+OpenAI's automatic caching. No retention override is sent. Byte eligibility is
+local policy, not a provider token threshold. Controlled transport tests establish
+request encoding and route behavior, not service cache hits or retention.
+
+The section-mapping function `make_prompt_cache_hints` and
+`PromptCacheSectionKey` are removed. Embedders construct `PromptCacheHints` from
+their stable-prefix hash and byte count; they no longer supply section keys or
+breakpoint indices. The standard loop already supplies this value.
 
 Changing model, route or stable inputs changes the effective request. Dynamic
 timestamps, turn IDs, trace IDs and tool results do not enter the system preamble.

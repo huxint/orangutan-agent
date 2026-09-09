@@ -41,6 +41,8 @@ struct Request {
   std::optional<std::uint32_t> max_tokens;
   std::optional<std::uint32_t> thinking_budget;
   bool stream{true};
+  /// Unfiltered stable-prefix values, retained across retries and fallbacks.
+  /// An absent value suppresses explicit cache controls for the whole request.
   std::optional<PromptCacheHints> cache;
   RetryPolicy retry{};
 

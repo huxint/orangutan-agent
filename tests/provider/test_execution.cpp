@@ -425,9 +425,9 @@ TEST_CASE("execution runtime applies per-target thinking policy to fallback atte
   });
 }
 
-TEST_CASE("execution runtime applies per-target cache policy to fallback attempts", "[unit][provider][execution]") {
+TEST_CASE("execution runtime preserves cache hints for protocol policy", "[unit][provider][execution]") {
   test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    SECTION("disabled target cache drops hints") {
+    SECTION("disabled targets retain the prefix for protocol encoding") {
       auto primary = target("primary-profile", "primary-model");
       auto fallback = target("fallback-profile", "fallback-model");
       fallback.cache = prov::PromptCacheOptions{.enabled = false, .min_prefix_bytes = 0};
@@ -447,9 +447,9 @@ TEST_CASE("execution runtime applies per-target cache policy to fallback attempt
       REQUIRE(result.has_value());
       REQUIRE(backend.requests_seen()[0].cache.has_value());
       REQUIRE(backend.requests_seen()[1].cache.has_value());
-      REQUIRE_FALSE(backend.requests_seen()[2].cache.has_value());
+      REQUIRE(backend.requests_seen()[2].cache == backend.requests_seen()[0].cache);
     }
-    SECTION("hints below the target floor are dropped") {
+    SECTION("hints below the target floor reach the protocol encoder") {
       auto primary = target("primary-profile", "primary-model");
       auto fallback = target("fallback-profile", "fallback-model");
       fallback.cache = prov::PromptCacheOptions{.enabled = true, .min_prefix_bytes = 1000};
@@ -468,7 +468,7 @@ TEST_CASE("execution runtime applies per-target cache policy to fallback attempt
 
       REQUIRE(result.has_value());
       REQUIRE(backend.requests_seen()[0].cache.has_value());
-      REQUIRE_FALSE(backend.requests_seen()[2].cache.has_value());
+      REQUIRE(backend.requests_seen()[2].cache == backend.requests_seen()[0].cache);
     }
     co_return;
   });

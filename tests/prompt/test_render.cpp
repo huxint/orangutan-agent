@@ -49,8 +49,6 @@ TEST_CASE("Prompt fingerprints native tools without duplicating them in text", "
     return size + section.content.size();
   });
   REQUIRE(result.prefix_bytes == text_bytes + result.tool_catalog_bytes);
-  REQUIRE(result.sections[3].is_breakpoint);
-  REQUIRE(std::ranges::count(result.sections, true, &prompt::CacheSection::is_breakpoint) == 1);
 }
 
 TEST_CASE("Prompt prefix remains stable across conversation tails", "[unit][prompt]") {

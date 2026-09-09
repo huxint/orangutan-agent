@@ -477,8 +477,6 @@ TEST_CASE("Loop returns text from a single fake-provider end_turn", "[unit][agen
     REQUIRE(result->iterations == 1);
     REQUIRE(result->assistant_blocks.size() == 1);
     REQUIRE(result->rendered_prompt.sections.size() == 5);
-    REQUIRE(result->cache_hints.has_value());
-    REQUIRE(result->cache_hints->prefix_sections.size() == 4);
     REQUIRE(fake.turns_consumed() == 1);
   });
 }

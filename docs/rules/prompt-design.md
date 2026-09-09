@@ -14,7 +14,7 @@ This rule governs runtime prompts, not development-agent routing instructions.
 4. Stable per-agent instructions.
 5. Conversation messages, including the current user and tool results.
 
-Sections 1–4 form the stable text prefix, with the cache breakpoint on section 4.
+Sections 1–4 form the stable text prefix supplied to the provider as system text.
 Conversation is dynamic. Clocks, request IDs, trace IDs, counters and status
 narration stay out of stable sections. Bump section versions when rendering rules
 change; avoid per-request version churn.
@@ -37,9 +37,12 @@ without adding tool text. Conversation changes leave that identity stable.
 
 `prefix_bytes` counts stable text and native name/description/schema bytes. It
 excludes protocol framing and is neither a token count nor serialized request
-size. `make_prompt_cache_hints` uses this count for the configured eligibility
-floor. The [provider contract](../design-docs/api-portability.md) owns how those
-internal hints reach a protocol adapter.
+size. The loop copies the hash and byte count into provider-owned request values;
+section IDs and versions stay in the prompt layer. The unused
+`CacheSection::is_breakpoint` flag is removed; protocol adapters place controls
+at the end of the submitted stable system text or native tools. The
+[provider contract](../design-docs/api-portability.md) owns per-target eligibility
+and protocol controls, independent of this section layout.
 
 ## Memory Context
 

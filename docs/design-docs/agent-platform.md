@@ -24,7 +24,10 @@ turn with its tool audits without storing raw prompt bodies.
 
 `RunTurnInputs` contains borrowed prompt/context views and explicit service
 references. They remain valid until the turn and its tool work finish.
-`RunTurnResult` owns the answer, usage, typed assistant blocks and transcript.
+`RunTurnResult` owns the answer, usage, typed assistant blocks, rendered prompt
+and transcript. Cache identity is available in `rendered_prompt`; the duplicate
+`cache_hints` result is removed. The loop forwards unfiltered prefix identity to
+the provider, whose protocol boundary applies the selected route's cache policy.
 The session coordinator serializes turns using the same session identity.
 
 Persisted history loads at most 128 rows and 512 KiB of encoded content/metadata.

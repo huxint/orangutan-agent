@@ -32,6 +32,7 @@ The config file contains:
 | `runtime.prompt.active_tools` | `AgentSession` maps configured names to the loop's native tool selection. |
 | `trace.enabled` | Host maps the trace switch to `RuntimeAssemblyOptions`. |
 | `profiles`, `routes` | `HttpProviderBackend` selects model, protocol, endpoint, credentials and model policy; `route_name` defaults to `default`. |
+| `profiles.<name>.cache` | The selected protocol target applies explicit cache controls; [provider](api-portability.md) owns eligibility and service limits. |
 | `permissions`, `agents.<name>.permissions` | `AgentSession` materializes global and selected-agent rules. Host maps workspace roots to `WorkspaceOptions`. |
 | `agents.<name>.prompt_overlay` | `AgentSession` selects stable agent instructions. |
 | `hooks.timeout_ms` | Host maps the hook deadline to `RuntimeAssemblyOptions`. |

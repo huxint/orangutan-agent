@@ -6,7 +6,7 @@
 #include <print>
 
 namespace orangutan::bench {
-void register_cache_mapping(ankerl::nanobench::Bench& bench);
+void register_cache_requests(ankerl::nanobench::Bench& bench);
 }  // namespace orangutan::bench
 
 int main() {
@@ -16,7 +16,7 @@ int main() {
   bench.minEpochIterations(250'000);
   bench.warmup(20);
 
-  orangutan::bench::register_cache_mapping(bench);
+  orangutan::bench::register_cache_requests(bench);
 
   std::println();
   return 0;

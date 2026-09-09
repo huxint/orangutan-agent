@@ -18,7 +18,6 @@
 #include <oran/core/tool_def.hpp>
 #include <oran/core/turn_id.hpp>
 #include <oran/prompt/render.hpp>
-#include <oran/provider/cache.hpp>
 #include <oran/provider/system.hpp>
 #include <oran/provider/types.hpp>
 
@@ -117,7 +116,6 @@ struct RunTurnResult {
   provider::Usage usage{};
   std::optional<std::string> model_used{};
   prompt::RenderedPrompt rendered_prompt{};
-  std::optional<provider::PromptCacheHints> cache_hints{};
   std::uint32_t iterations{0};
   /// Complete transcript tail, including the terminal assistant response.
   /// The session persists the suffix after its prepared history boundary.

@@ -39,7 +39,6 @@ struct CacheSection {
   std::string content;
   std::uint64_t content_hash{0};
   std::uint32_t cache_version{1};
-  bool is_breakpoint{false};
 
   friend bool operator==(const CacheSection&, const CacheSection&) = default;
 };

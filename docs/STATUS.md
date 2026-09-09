@@ -64,7 +64,9 @@ cancellation. `PrivateDirectory` provides private state ownership for hosts.
 Provider construction maps configuration to owned profile values, then builds one
 system over an injected transport. Complete route validation precedes credential
 lookup. Endpoint credentials stay inside the system; dispatch checks the selected
-profile, model and protocol before sending. The
+profile, model and protocol before sending. Each protocol target applies its own
+cache policy to preserved prefix values, including retries and fallbacks.
+Provider no longer depends on prompt rendering. The
 [provider contract](design-docs/api-portability.md) owns this boundary, HTTP/SSE
 request lifetimes and delivery of stream callbacks before completion.
 
@@ -74,7 +76,7 @@ runtime. `EventTraits` defines blocking admission; the
 
 ## Verification
 
-Release with LTO and debug with ASan/UBSan both build and pass all 14 test targets.
+Release with LTO builds and passes all 14 test targets.
 `make ci` also passes. Controlled HTTP integration composes `HttpProviderBackend`,
 `RuntimeAssembly` and `AgentSession` to cover provider calls and persisted
 continuation. Tests also exercise scoped recall, permission intersection, bounded
@@ -95,7 +97,13 @@ empty selections, unknown names, child restrictions and denied effects. Both
 supported protocol payloads contain each selected schema once. Tool definitions
 stay fixed across iterations, host changes appear at the next prompt, and native
 schema changes invalidate cache identity without adding system text.
-All release benchmark targets also compile successfully.
+Affected release benchmark targets also compile successfully.
+
+Cache regressions inspect both protocol payloads and composed loop/transport
+requests. They cover enabled/disabled targets, byte floors, stable-prefix
+breakpoints, retries and fallbacks, including an eligible fallback after a
+disabled primary. Controlled transport results do not establish service cache
+hits.
 
 Local verification is not reference-hardware compile/performance certification.
 Hosted quality and compile-budget gaps remain in [live debt](exec-plans/tech-debt-tracker.md).
@@ -128,16 +136,18 @@ used by libraries, tests and benchmarks. Default release LTO and opt-in debug
 sanitizers reach both compilation and linking; mode changes clear inactive flags.
 [BUILD_SYSTEM](BUILD_SYSTEM.md) owns the supported commands and options.
 
-Recommended next slices, not yet implemented:
+Provider cache controls are complete. The loop supplies prefix hash/byte values,
+execution retains them across targets, and protocol encoders own eligibility and
+wire fields. The old section-copying mapper, duplicate loop cache result and
+provider-to-prompt dependency are removed. The
+[provider contract](design-docs/api-portability.md) owns protocol behavior,
+automatic-caching limits and migration from the removed mapping API.
 
-1. **Session working memory:** persist goals, constraints, decisions, completed
-   work and pending work alongside recent conversation. Address backup/import
-   obligations before persistence changes; evaluate spontaneous memory use with
-   the deployment model separately from controlled-provider tests.
-2. **Provider cache controls:** internal cache hints are validated and retained,
-   but current protocol encoders do not send explicit cache directives. Implement
-   protocol controls at the provider boundary and test enabled, disabled and
-   fallback requests without coupling prompt rendering to vendor behavior.
+The next recommended slice is **session working memory**: persist goals,
+constraints, decisions, completed work and pending work alongside recent
+conversation. Address backup/import obligations before persistence changes;
+evaluate spontaneous memory use with the deployment model separately from
+controlled-provider tests.
 
 [Live debt](exec-plans/tech-debt-tracker.md) records findings and completion
 criteria. These recommendations do not change current contracts.

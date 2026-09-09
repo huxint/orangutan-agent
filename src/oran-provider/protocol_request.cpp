@@ -3,6 +3,7 @@
 #include <oran/provider/protocol_request.hpp>
 
 #include <expected>
+#include <format>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -20,6 +21,13 @@ namespace {
 
 using json = ::nlohmann::ordered_json;
 using orangutan::core::Error;
+
+[[nodiscard]] bool use_prompt_cache(const Request& request, const ModelTarget& target) noexcept {
+  const auto options = target.cache.value_or(PromptCacheOptions{});
+  return request.cache.has_value() && options.enabled && request.cache->prefix_bytes > 0 &&
+         request.cache->prefix_bytes >= options.min_prefix_bytes &&
+         ((request.system_prompt.has_value() && !request.system_prompt->empty()) || !request.tools.empty());
+}
 
 [[nodiscard]] std::string protocol_name(ProtocolKind protocol) {
   return std::string{core::enum_name(protocol)};
@@ -153,7 +161,11 @@ append_anthropic_system_text(json& body, const core::Message& message, const Mod
     return {};
   }
   if (body.contains("system")) {
-    body["system"] = body["system"].get<std::string>() + "\n\n" + parts;
+    if (body["system"].is_array()) {
+      body["system"].push_back(json{{"type", "text"}, {"text", "\n\n" + parts}});
+    } else {
+      body["system"] = body["system"].get<std::string>() + "\n\n" + parts;
+    }
   } else {
     body["system"] = std::move(parts);
   }
@@ -213,8 +225,16 @@ append_anthropic_system_text(json& body, const core::Message& message, const Mod
       {"max_tokens", *request.max_tokens},
       {"stream", request.stream},
   };
-  if (request.system_prompt.has_value() && !request.system_prompt->empty()) {
-    body["system"] = *request.system_prompt;
+  const bool cache = use_prompt_cache(request, target);
+  const bool has_system_prefix = request.system_prompt.has_value() && !request.system_prompt->empty();
+  if (has_system_prefix) {
+    if (cache) {
+      body["system"] = json::array({json{{"type", "text"},
+                                        {"text", *request.system_prompt},
+                                        {"cache_control", json{{"type", "ephemeral"}}}}});
+    } else {
+      body["system"] = *request.system_prompt;
+    }
   }
   if (request.thinking_budget.has_value()) {
     body["thinking"] = json{{"type", "enabled"}, {"budget_tokens", *request.thinking_budget}};
@@ -244,6 +264,9 @@ append_anthropic_system_text(json& body, const core::Message& message, const Mod
     return std::unexpected(std::move(tools).error());
   }
   if (!tools->empty()) {
+    if (cache && !has_system_prefix) {
+      tools->back()["cache_control"] = json{{"type", "ephemeral"}};
+    }
     body["tools"] = std::move(*tools);
   }
 
@@ -344,6 +367,9 @@ openai_input_item(const core::Content& content, core::Role role, const ModelTarg
   }
 
   auto body = json{{"model", target.model}, {"stream", request.stream}};
+  if (use_prompt_cache(request, target)) {
+    body["prompt_cache_key"] = std::format("oran-{:016x}", request.cache->prefix_hash);
+  }
   if (request.system_prompt.has_value() && !request.system_prompt->empty()) {
     body["instructions"] = *request.system_prompt;
   }
