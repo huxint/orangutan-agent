@@ -27,9 +27,8 @@
 #       `measure-tu.sh` itself failed.
 #
 # Wiring into CI:
-#   Not wired into `scripts/ci.sh` yet; CI does not currently provision
-#   xmake. Once it does (see the tail of `scripts/ci.sh`), this script
-#   becomes the regression gate per `docs/rules/compile-budget.md`.
+#   Run explicitly on reference hardware. Hosted functional builds do not
+#   establish the compile-budget gate; see `docs/rules/compile-budget.md`.
 
 set -euo pipefail
 

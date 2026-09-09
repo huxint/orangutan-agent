@@ -18,5 +18,6 @@ constraints have been absorbed. Git owns history.
 
 `make ci` checks required documents, indexes, referenced scripts/headers, build
 inventory, package versions, test/bench parity, configuration shape and the hook
-and capability catalogues. Review also checks current behavior and link validity;
+and capability catalogues. It also checks dependency direction and public include
+hygiene. Review checks current behavior and link validity;
 structural checks cannot infer every semantic contract.

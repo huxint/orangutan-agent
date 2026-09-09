@@ -1,21 +1,13 @@
-PROJECT ?=
-SLUG    ?=
-LIB     ?=
+SLUG ?=
 
-.PHONY: init check-docs check-repo ci new-plan bench-compare help
+.PHONY: check-docs check-repo ci new-plan help
 
 help:
 	@echo "Available targets:"
-	@echo "  make init PROJECT=...          rename template placeholders to the new project"
-	@echo "  make ci                        run repo-wide checks (docs + hygiene + shell-lint)"
+	@echo "  make ci                        check docs, dependencies, headers, hygiene and shell syntax"
 	@echo "  make check-docs                verify required docs exist"
 	@echo "  make check-repo                full repo hygiene check"
 	@echo "  make new-plan SLUG=...         scaffold an execution plan"
-	@echo "  make bench-compare LIB=...     run a library's benchmarks and compare to baseline"
-
-init:
-	@if [ -z "$(PROJECT)" ]; then echo "usage: make init PROJECT=my-project"; exit 1; fi
-	./scripts/init-project.sh "$(PROJECT)"
 
 check-docs:
 	./scripts/check-docs.sh
@@ -30,7 +22,3 @@ ci:
 new-plan:
 	@if [ -z "$(SLUG)" ]; then echo "usage: make new-plan SLUG=my-plan"; exit 1; fi
 	./scripts/new-exec-plan.sh "$(SLUG)"
-
-bench-compare:
-	@if [ -z "$(LIB)" ]; then echo "usage: make bench-compare LIB=memory"; exit 1; fi
-	./scripts/bench-compare.sh "$(LIB)"

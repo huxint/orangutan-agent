@@ -61,6 +61,8 @@ builds must apply their documented options to libraries, tests and benchmarks.
 ## Progress
 
 - [x] Read the handoff, inspect script callers and identify build flag ownership.
-- [ ] Complete and commit development scaffolding cleanup.
+- [x] Complete development scaffolding cleanup. The default release library
+  build, all 14 test targets, retained checks and `make ci` pass. Removed entry
+  points have no remaining callers or current-contract advertisements.
 - [ ] Complete and verify build policy separation.
 - [ ] Update owning contracts, remove resolved debt and commit the final slice.

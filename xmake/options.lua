@@ -1,14 +1,6 @@
 -- xmake/options.lua — build-time options.
 --
--- See docs/BUILD_SYSTEM.md for the documented set. Early slices ship only the
--- options actually consumed by the toolchain or by xmake/targets.lua. New
--- options land alongside the rule or library that depends on them so docs and
--- code stay aligned (docs/rules/docs-in-sync.md).
-
-option("modules")
-    set_default(false)
-    set_description("Enable C++26 modules (off in slice 0; opt-in for experiments).")
-option_end()
+-- Options land with their consuming build policy; see docs/BUILD_SYSTEM.md.
 
 option("lto")
     set_default(true)

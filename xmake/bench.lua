@@ -1,7 +1,6 @@
 -- xmake/bench.lua — nanobench buckets.
 --
--- One target per bench/<lib>/ directory. The "A-vs-B" pattern is required by
--- docs/rules/testing-and-bench.md.
+-- One target per bench/<lib>/ directory; see docs/rules/testing-and-bench.md.
 
 local root = os.projectdir()
 

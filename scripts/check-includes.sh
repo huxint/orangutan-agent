@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Stub for the include-hygiene check. Once implemented, walks
-# include/oran/<lib>/*.hpp and rejects any #include outside the PCH whitelist.
+# Reject heavy dependencies and unsupported concurrency headers in public APIs.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ ! -d "${repo_root}/include/oran" ]]; then
-  echo "(stub) include/oran/ not present yet; check is a no-op until C++ skeleton lands"
-  exit 0
+  echo "include/oran/ is missing" >&2
+  exit 1
 fi
 
 forbidden=(

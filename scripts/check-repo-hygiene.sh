@@ -13,10 +13,6 @@ required_files=(
   ".markdownlint.json"
 )
 
-# Once .github/ workflows + PR template land, append:
-#   .github/PULL_REQUEST_TEMPLATE.md
-#   .github/workflows/ci.yml
-
 failed=0
 
 for path in "${required_files[@]}"; do

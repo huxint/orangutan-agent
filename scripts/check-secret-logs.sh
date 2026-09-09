@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Stub for the secret-log check. Once implemented, greps for logger calls with
-# known secret-field names in their arguments.
+# Check logger calls for known secret-field names using source heuristics.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

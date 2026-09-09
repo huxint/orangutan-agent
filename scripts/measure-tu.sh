@@ -4,7 +4,7 @@
 # Per-translation-unit compile-time measurement. Iterates `src/oran-*/*.cpp`
 # entries in `compile_commands.json`, re-runs each recorded compile command
 # in isolation, and reports wall-clock seconds. Output feeds
-# `scripts/check-compile-budget.sh` and the per-PR self-check documented in
+# `scripts/check-compile-budget.sh` for the compile-cost investigations in
 # `docs/rules/compile-budget.md`.
 #
 # Usage:

@@ -120,19 +120,20 @@ Memory orientation, exact reads and same-turn durable correction remain part of
 ordinary work. All three bound memory tools are directly visible by default;
 visibility still grants no write authority.
 
+Development commands expose implemented repository checks and ordinary xmake
+targets. Public include hygiene runs in `make ci`; review-only rules state their
+enforcement limits. [BUILD_SYSTEM](BUILD_SYSTEM.md) owns the supported commands.
+
 Recommended next slices, not yet implemented:
 
-1. **Development scaffolding cleanup:** remove unused success stubs, empty build
-   wiring and unconsumed options, along with their advertised entry points and
-   stale documentation. Retain the checks that actually run.
-2. **Session working memory:** persist goals, constraints, decisions, completed
+1. **Session working memory:** persist goals, constraints, decisions, completed
    work and pending work alongside recent conversation. Address backup/import
    obligations before persistence changes; evaluate spontaneous memory use with
    the deployment model separately from controlled-provider tests.
-3. **Build configuration:** make LTO/sanitizer options reliably affect compilation
+2. **Build configuration:** make LTO/sanitizer options reliably affect compilation
    and linking, and consolidate flag setup to eliminate manual overrides. Use
    ordinary build/test targets for verification.
-4. **Provider cache controls:** internal cache hints are validated and retained,
+3. **Provider cache controls:** internal cache hints are validated and retained,
    but current protocol encoders do not send explicit cache directives. Implement
    protocol controls at the provider boundary and test enabled, disabled and
    fallback requests without coupling prompt rendering to vendor behavior.

@@ -7,11 +7,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 "${repo_root}/scripts/check-repo-hygiene.sh"
 "${repo_root}/scripts/check-docs-sync.sh"
 "${repo_root}/scripts/check-deps.sh"
+"${repo_root}/scripts/check-includes.sh"
 "${repo_root}/scripts/check-prompt-preamble.sh"
-
-if [[ -f "${repo_root}/scripts/check-action-pinning.sh" ]]; then
-  "${repo_root}/scripts/check-action-pinning.sh"
-fi
+"${repo_root}/scripts/check-action-pinning.sh"
 
 # Validate shell scripts parse cleanly.
 while IFS= read -r file; do
@@ -22,11 +20,5 @@ done < <(find "${repo_root}/scripts" -type f -name '*.sh' | sort)
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck "${repo_root}/scripts/"*.sh || true
 fi
-
-# Once xmake is provisioned, this script will also run:
-#   xmake f -m release
-#   xmake -j$(nproc)
-#   xmake test
-#   scripts/check-compile-budget.sh
 
 echo "base CI checks passed"

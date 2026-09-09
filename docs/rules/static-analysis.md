@@ -5,11 +5,6 @@ rule defines **when** the analyzer runs, **what** it flags as a hard failure, an
 **how** to suppress a false positive without weakening the safety net for the rest of
 the codebase.
 
-> Background: in legacy `orangutan/` the analyzer was never wired into CI, so the
-> codebase accumulated `null-dereference`, `use-after-free`, and `tainted-allocation`
-> shaped bugs that surfaced only in production. v2 ships analyzer wiring on day one,
-> opt-in by build mode, opt-in to **harden** specific TUs.
-
 ## Modes
 
 | Mode               | xmake invocation                            | When           | Warnings → errors? |
@@ -23,10 +18,9 @@ escalation. `--hardened=y` (already documented in
 [`../BUILD_SYSTEM.md`](../BUILD_SYSTEM.md)) layers on `_FORTIFY_SOURCE=3`,
 `-fstack-protector-strong`, `-fcf-protection`, `-fstack-clash-protection`.
 
-Slice 0 shipped the option; later slices decide which TUs must run it based on the
-rules below. Analyzer CI is most valuable on descriptor-owning or byte-parsing code,
-so the first mandatory coverage is expected with `oran-io`, `oran-storage`, or
-provider/channel parsing code rather than the timer/channel primitives in `oran-async`.
+Hosted analyzer coverage remains open in
+[live debt](../exec-plans/tech-debt-tracker.md). Prioritize descriptor ownership
+and byte parsing in IO, storage, configuration and provider code.
 
 ## Required Warnings (Hard Failures)
 
@@ -68,12 +62,10 @@ the addition would be retroactively painful).
 
 - Any TU that handles raw memory (smart pointers don't need it; `make_unique` paths
   are already safe), file descriptors, sockets, or libc handles.
-- Any TU that does parsing on untrusted bytes (`oran-config`, JSON loading paths in
-  `oran-provider`, `oran-channel-*` inbound).
-- Any TU that does subprocess plumbing (`oran-io`'s spawn paths).
+- Any TU that parses untrusted bytes (configuration and provider payloads).
+- Any future TU that implements subprocess plumbing.
 
-The TU's library README enumerates which TUs are analyzer-clean and which are
-analyzer-exempt and why.
+The hosted job must identify covered and exempt TUs, with reasons for exemptions.
 
 ## Performance Implications
 
@@ -91,8 +83,8 @@ disable the analyzer.
 ## Interaction With clang-tidy
 
 - clang-tidy is required by [`critical-rules.md#C9`](critical-rules.md), but the
-  hosted CI job is not provisioned yet. The activation gap is tracked under the
-  2026-07-11 deep-review row in the tech-debt tracker; local/editor findings do
+  hosted CI job is not provisioned yet. The activation gap is tracked in
+  [live debt](../exec-plans/tech-debt-tracker.md); local/editor findings do
   not substitute for the missing gate.
 - The analyzer covers a different shape of bug (path-sensitive dataflow). Both are
   required; one does not substitute for the other.
@@ -101,10 +93,9 @@ disable the analyzer.
 
 ## Enforcement
 
-- `xmake f --analyze=y` exits non-zero if any required warning fires.
-- `scripts/check-analyzer-coverage.sh` is currently a success stub. Its real TU
-  manifest/check plus nightly analyzer job are tracked under the 2026-07-11
-  deep-review row.
+- A build with active analyzer flags fails if any required warning fires.
+  [BUILD_SYSTEM](../BUILD_SYSTEM.md) records current flag activation limits.
+- The TU coverage inventory and hosted analyzer job remain tracked debt.
 
 ## See Also
 

@@ -13,7 +13,7 @@ and an enforcement hook.
 checking, and they grow into a private dialect. We have `std::expected`, concepts,
 and templates for the same job.
 
-**Enforcement:** `scripts/check-macros.sh` greps for forbidden patterns.
+**Enforcement:** code review; no automated macro check is installed.
 
 ## C2. No `std::thread`, no custom thread pool
 
@@ -24,8 +24,8 @@ work that needs the CPU pool uses `co_await async::post(runtime.cpu_executor(), 
 depend on a unified executor. Bypassing it creates an island that none of those
 stories serve.
 
-**Enforcement:** `scripts/check-banned-includes.sh` rejects new `#include <thread>` in
-non-test, non-bench code.
+**Enforcement:** code review covers source includes. `scripts/check-includes.sh`
+rejects `<thread>` in public headers as part of `make ci`.
 
 ## C3. No exceptions across library boundaries
 
@@ -36,8 +36,7 @@ must throw (e.g., `main`-level bootstrap) catch at the boundary and translate to
 **Why:** mixed exception/expected styles produce fragile error handling, partial
 unwinding under coroutines, and hard-to-trace failures across library seams.
 
-**Enforcement:** `scripts/check-throws.sh` walks `include/oran/**.hpp` and rejects
-`throw` statements there. Plus a clang-tidy check (`cppcoreguidelines-no-throw`).
+**Enforcement:** code review of public APIs; no automated throw check is installed.
 
 ## C4. New SQLite code uses the expected API only
 
@@ -111,10 +110,10 @@ in RAII wrappers.
 ## C9. clang-tidy / clangd warnings are errors when checked
 
 The project requires clang-tidy findings to be treated as errors. Hosted CI does
-not run that gate yet; the missing job/config is tracked under the 2026-07-11
-deep-review row. When clang-tidy is run locally or in the future hosted job, any
-warning fails the check. Disabling a check at-site requires a comment with a
-justification.
+not run that gate yet; the missing job/config is tracked in
+[live debt](../exec-plans/tech-debt-tracker.md). When clang-tidy is run locally or
+in the future hosted job, any warning fails the check. Disabling a check at-site
+requires a comment with a justification.
 
 **Why:** treating warnings as advisory is how legacy projects accumulate them by the
 hundreds.
@@ -131,7 +130,8 @@ publishes a hook event. Bypassing this is a rule violation, not a shortcut.
 **Why:** the permission story is what makes the runtime safe to use as a coding
 assistant. Bypasses defeat it silently.
 
-**Enforcement:** code review checklist + `scripts/check-bypass-permission.sh` (TBD).
+**Enforcement:** code review and behavioral regressions for authorization and
+denied effects.
 
 ## C11. Every async function is cancel-aware
 
@@ -155,7 +155,9 @@ temporarily; an open issue is required to fill it).
 **Why:** parity makes "is this covered?" mechanical. The bench bucket prevents the
 "we'll add benches later" pattern that legacy never executed on.
 
-**Enforcement:** `scripts/check-lib-parity.sh`.
+**Enforcement:** `scripts/check-docs-sync.sh` checks source buckets in `make ci`;
+`scripts/check-lib-parity.sh` checks the target inventory. Review verifies that
+the buckets contain meaningful coverage.
 
 ## C13. Durable rationale belongs with the contract
 
@@ -187,8 +189,8 @@ rationale, license, compile-cost estimate, and the libraries that depend on it.
 **Why:** dependency creep is the second-biggest contributor to compile-time bloat
 (after include hygiene), and a security surface in its own right.
 
-**Enforcement:** `scripts/check-pkgs-documented.sh` parses `xmake/packages.lua` and
-fails if any package isn't in `libraries.md`.
+**Enforcement:** `scripts/check-docs-sync.sh` checks package names and pinned
+versions against `libraries.md` as part of `make ci`.
 
 ## C17. Language standard is C++26; modern facilities preferred
 
@@ -257,9 +259,8 @@ Concretely:
 left it stuck with hand-rolled equivalents of `std::expected` and friends. We use
 what the toolchain ships.
 
-**Enforcement:** `scripts/check-banned-includes.sh` adds `<iostream>` to its reject
-list for `src/oran-*/`. `xmake.lua` pins `c++26` and warnings include
-`-Wno-c++23-extensions` removed so an accidental downgrade is loud.
+**Enforcement:** `xmake.lua` pins `c++26` and enables reflection. Source review
+enforces the facility choices and the `<iostream>` restriction.
 
 ## C18. Static analysis is on the menu, not the autopilot
 
@@ -267,8 +268,8 @@ GCC 16.1's `-fanalyzer` is wired into the build via `xmake f --analyze=y`. The
 analyzer is **opt-in** because it triples compile time on heavy TUs (see
 [`compile-budget.md`](compile-budget.md)). The intended nightly gate is mandatory
 for covered memory/descriptor TUs, but hosted analyzer coverage is not active yet;
-the gap is tracked under the 2026-07-11 deep-review row. Suppression policy and
-the required warning set live in [`static-analysis.md`](static-analysis.md).
+the gap is tracked in [live debt](../exec-plans/tech-debt-tracker.md). Suppression
+policy and the required warning set live in [`static-analysis.md`](static-analysis.md).
 
 **Why:** legacy `orangutan/` accumulated null-deref / use-after-free shapes the
 analyzer would have caught; the build wiring exists so the missing hosted gate

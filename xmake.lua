@@ -1,8 +1,4 @@
--- xmake.lua — Orangutan v2 build root
---
--- Source of truth for the build is docs/BUILD_SYSTEM.md. Dependencies land
--- with the library that first consumes them; slice 1 adds asio for oran-async
--- while keeping the rest of the planned package set deferred.
+-- Orangutan build root. docs/BUILD_SYSTEM.md owns the build contract.
 
 set_project("orangutan-v2")
 set_version("2.0.0")
@@ -10,7 +6,7 @@ set_languages("c++26")
 set_warnings("all", "extra")
 
 -- C++26 reflection (P2996) is required by the in-repo `oran-core/enum_names.hpp`
--- helper that backs the repo's `to_string_view` / `parse_<kind>` pattern.
+-- helper for enum wire names.
 -- GCC 16.1 gates reflection behind an opt-in flag.
 add_cxxflags("-freflection", { force = true })
 
@@ -26,4 +22,3 @@ includes("xmake/packages.lua")
 includes("xmake/targets.lua")
 includes("xmake/tests.lua")
 includes("xmake/bench.lua")
-includes("xmake/checks.lua")

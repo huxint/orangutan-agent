@@ -1,6 +1,0 @@
--- xmake/checks.lua — placeholder for future build-integrated checks.
---
--- The check-* shell scripts under scripts/ are the active user-facing entry
--- points today (including compile-budget and dependency checks). This file
--- exists so the include in xmake.lua does not fail; xmake-native rule tasks may
--- replace selected shell entry points later.

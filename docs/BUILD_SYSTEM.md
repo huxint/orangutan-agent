@@ -24,6 +24,11 @@ separate targets: `test-<lib>` and `bench-<lib>`.
 invoke `build/linux/x86_64/release/test-<lib> "case name"` after building it.
 Use the debug path when configured in debug mode.
 
+`make help` lists repository maintenance commands. `make ci` checks repository
+contracts and hygiene independently of C++ builds. Benchmarks use the ordinary
+`bench-<lib>` build/run targets; compare their results under the same workload
+and environment as described in [testing-and-bench](rules/testing-and-bench.md).
+
 ## Build Ownership
 
 | File | Owns |
@@ -48,8 +53,7 @@ and linker flags `-fsanitize=address,undefined`. `--sanitizers=y` alone does not
 establish coverage. LeakSanitizer needs an environment that permits its runtime
 checks.
 
-`modules` is experimental; no module migration has been accepted. No GUI or
-messaging SDK is required.
+The build uses headers and static libraries. No GUI or messaging SDK is required.
 
 System libcurl development headers and pkg-config must be installed before
 configuration. Xmake supplies Asio, Catch2, libsodium, nanobench, nlohmann_json,

@@ -76,4 +76,4 @@ if [[ "${missing}" -ne 0 ]]; then
   exit 1
 fi
 
-echo "docs scaffold check passed"
+echo "required-docs check passed"

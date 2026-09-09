@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Stub for the library-parity check. Each oran-<lib> in xmake/targets.lua must
-# have a tests/<lib>/ and bench/<lib>/ directory.
+# Each library in xmake/targets.lua needs tests/<lib>/ and bench/<lib>/ buckets.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ ! -f "${repo_root}/xmake/targets.lua" ]]; then
-  echo "(stub) xmake/targets.lua not present yet; check is a no-op until C++ skeleton lands"
-  exit 0
+  echo "xmake/targets.lua is missing" >&2
+  exit 1
 fi
 
 failed=0
