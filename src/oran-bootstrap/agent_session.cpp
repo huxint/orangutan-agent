@@ -148,7 +148,7 @@ public:
        permission::RuleSet rules,
        tool::OutputCapOptions output_caps,
        agent::ToolSchedulerOptions scheduler_options)
-      : options_{std::move(options)}, execution_runtime_{*options_.provider}, loop_{execution_runtime_, options_.route},
+      : options_{std::move(options)}, loop_{*options_.provider, options_.route},
         owned_registry_{std::move(owned_registry)}, rules_{std::move(rules)}, output_caps_{output_caps},
         active_tools_{options_.config->runtime().prompt.active_tools},
         session_id_text_{core::format_turn_id_hex(options_.session_id)} {
@@ -295,7 +295,6 @@ public:
 
 private:
   AgentSessionOptions options_;
-  provider::execution::Runtime execution_runtime_;
   agent::Loop loop_;
   std::optional<tool::Registry> owned_registry_;
   std::optional<agent::ToolScheduler> owned_scheduler_;

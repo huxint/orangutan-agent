@@ -12,7 +12,7 @@ Both use the same seven definitions, 4 KiB preamble and 8 KiB memory text.
 These measure prefix preparation only; provider request copies, conversation,
 tool execution and network latency are outside the fixture.
 
-Prompt tests cover text joining, compatible cache identities and native-definition
+Prompt tests cover text joining, content-derived cache identities and native-definition
 invalidation. Agent tests cover prefix reuse and refresh across turns while
 typed conversation advances. Tool selection has its own
 benchmarks in [bench-tool](../tool/README.md).

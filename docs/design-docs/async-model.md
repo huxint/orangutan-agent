@@ -1,8 +1,9 @@
 # Async Ownership
 
-Asio awaitables are the runtime's async vocabulary. An operation returns
-`Awaitable<Result<T>>`. `async::Runtime` owns an IO executor and a bounded worker
-pool. Library callers receive executor handles instead of constructing runtimes.
+Asio awaitables are the runtime's async vocabulary. Operations carry `Result<T>`
+directly or with terminal metadata, following the
+[error contract](../rules/error-handling.md). `async::Runtime` owns an IO executor
+and a bounded worker pool. Libraries receive executor handles from their host.
 
 ## Execution
 

@@ -105,7 +105,7 @@ public:
 /// the supplied lookup or named environment variables. The returned system owns
 /// its credentials; transport must outlive the system and every awaited send.
 ///
-/// Each send accepts one selected profile/model/protocol. `execution::Runtime`
+/// Each send accepts one selected profile/model/protocol. `execution::run`
 /// owns retry/fallback selection. Streaming requires both `Request::stream` and
 /// transport support. Credential values never enter error diagnostics.
 [[nodiscard]] core::Result<std::unique_ptr<System>> make_protocol_system(ProtocolTransport& transport,

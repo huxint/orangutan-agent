@@ -30,6 +30,7 @@
 #include <oran/hook/bus.hpp>
 #include <oran/hook/event.hpp>
 #include <oran/hook/payload.hpp>
+#include <oran/provider/execution.hpp>
 #include <oran/storage/trace_repository.hpp>
 #include <oran/tool/catalog.hpp>
 #include <oran/tool/registry.hpp>
@@ -215,47 +216,14 @@ void add_usage(provider::Usage& total, const provider::Usage& next) {
   };
 }
 
-[[nodiscard]] const provider::ModelTarget& served_target_for(const provider::Route& route,
-                                                             std::string_view served_profile) noexcept {
-  const auto it = std::ranges::find(route.fallbacks, served_profile, &provider::ModelTarget::profile);
-  return it == route.fallbacks.end() ? route.primary : *it;
-}
-
-[[nodiscard]] std::optional<std::string_view> error_context_value(const core::Error& error,
-                                                                  std::string_view key) noexcept {
-  const auto it = std::ranges::find_if(error.context(), [&](const auto& entry) { return entry.first == key; });
-  if (it == error.context().end()) {
-    return std::nullopt;
-  }
-  return it->second;
-}
-
-[[nodiscard]] double token_cost(std::uint64_t tokens, double per_million_usd) noexcept {
-  return (static_cast<double>(tokens) * per_million_usd) / 1'000'000.0;
-}
-
-void apply_profile_cost_if_missing(provider::Usage& usage, const provider::ModelTarget& target) {
-  if (usage.cost_estimate.has_value() || target.pricing.empty()) {
-    return;
-  }
-
-  const auto input_price = target.pricing.input_per_million_usd.value_or(0.0);
-  const auto output_price = target.pricing.output_per_million_usd.value_or(input_price);
-  const auto cache_creation_price = target.pricing.cache_creation_per_million_usd.value_or(input_price);
-  const auto cache_read_price = target.pricing.cache_read_per_million_usd.value_or(input_price);
-  usage.cost_estimate = token_cost(usage.input_tokens, input_price) + token_cost(usage.output_tokens, output_price) +
-                        token_cost(usage.cache_creation_tokens, cache_creation_price) +
-                        token_cost(usage.cache_read_tokens, cache_read_price);
-}
-
-[[nodiscard]] hook::ProviderResponsePayload make_provider_response_payload(const RunTurnInputs& inputs,
-                                                                           const provider::Response& response,
-                                                                           const provider::Route& route,
-                                                                           std::uint32_t iteration,
-                                                                           core::Time started_at,
-                                                                           core::Time finished_at) {
-  const auto served_profile = response.route_profile_used.value_or(route.primary.profile);
-  const auto& served_target = served_target_for(route, served_profile);
+[[nodiscard]] hook::ProviderResponsePayload
+make_provider_response_payload(const RunTurnInputs& inputs,
+                               const provider::Response& response,
+                               const provider::Route& route,
+                               const provider::execution::Attribution& target,
+                               std::uint32_t iteration,
+                               core::Time started_at,
+                               core::Time finished_at) {
   return hook::ProviderResponsePayload{
       .who = hook_identity(inputs),
       .origin = std::string{inputs.origin},
@@ -264,9 +232,9 @@ void apply_profile_cost_if_missing(provider::Usage& usage, const provider::Model
       .route_profile = route.primary.profile,
       .route_model = route.primary.model,
       .route_protocol = std::string{core::enum_name(route.primary.protocol)},
-      .served_profile = std::string{served_profile},
-      .served_model = response.model_used.value_or(served_target.model),
-      .served_protocol = std::string{core::enum_name(served_target.protocol)},
+      .served_profile = target.profile,
+      .served_model = target.model,
+      .served_protocol = std::string{core::enum_name(target.protocol)},
       .stop_reason = std::string{core::enum_name(response.stop_reason)},
       .usage = hook_usage(response.usage),
       .started_at = started_at,
@@ -275,12 +243,13 @@ void apply_profile_cost_if_missing(provider::Usage& usage, const provider::Model
   };
 }
 
-[[nodiscard]] hook::ProviderErrorPayload make_provider_error_payload(const RunTurnInputs& inputs,
-                                                                     const core::Error& error,
-                                                                     const provider::ModelTarget& failing_target,
-                                                                     std::uint32_t iteration,
-                                                                     core::Time started_at,
-                                                                     core::Time finished_at) {
+[[nodiscard]] hook::ProviderErrorPayload
+make_provider_error_payload(const RunTurnInputs& inputs,
+                            const core::Error& error,
+                            const provider::execution::Attribution& failing_target,
+                            std::uint32_t iteration,
+                            core::Time started_at,
+                            core::Time finished_at) {
   return hook::ProviderErrorPayload{
       .who = hook_identity(inputs),
       .origin = std::string{inputs.origin},
@@ -300,16 +269,14 @@ void apply_profile_cost_if_missing(provider::Usage& usage, const provider::Model
 
 [[nodiscard]] std::optional<hook::ProviderFallbackPayload>
 make_provider_fallback_payload(const RunTurnInputs& inputs,
-                               const provider::Response& response,
                                const provider::Route& route,
+                               const provider::execution::Attribution& target,
                                std::uint32_t iteration,
                                core::Time started_at,
                                core::Time finished_at) {
-  auto served_profile = response.route_profile_used.value_or(route.primary.profile);
-  if (served_profile == route.primary.profile) {
+  if (!target.fallback) {
     return std::nullopt;
   }
-  const auto& served_target = served_target_for(route, served_profile);
   return hook::ProviderFallbackPayload{
       .who = hook_identity(inputs),
       .origin = std::string{inputs.origin},
@@ -318,9 +285,9 @@ make_provider_fallback_payload(const RunTurnInputs& inputs,
       .primary_profile = route.primary.profile,
       .primary_model = route.primary.model,
       .primary_protocol = std::string{core::enum_name(route.primary.protocol)},
-      .served_profile = std::move(served_profile),
-      .served_model = response.model_used.value_or(served_target.model),
-      .served_protocol = std::string{core::enum_name(served_target.protocol)},
+      .served_profile = target.profile,
+      .served_model = target.model,
+      .served_protocol = std::string{core::enum_name(target.protocol)},
       .started_at = started_at,
       .finished_at = finished_at,
       .duration = duration_between(started_at, finished_at),
@@ -343,6 +310,7 @@ make_provider_fallback_payload(const RunTurnInputs& inputs,
 [[nodiscard]] async::Awaitable<void> publish_provider_response(const RunTurnInputs& inputs,
                                                                const provider::Response& response,
                                                                const provider::Route& route,
+                                                               const provider::execution::Attribution& target,
                                                                std::uint32_t iteration,
                                                                core::Time started_at,
                                                                core::Time finished_at) {
@@ -351,8 +319,8 @@ make_provider_fallback_payload(const RunTurnInputs& inputs,
   }
   [[maybe_unused]] auto response_outcome = co_await inputs.bus->publish_advisory(
       hook::Event::provider_response,
-      make_provider_response_payload(inputs, response, route, iteration, started_at, finished_at));
-  if (auto fallback = make_provider_fallback_payload(inputs, response, route, iteration, started_at, finished_at)) {
+      make_provider_response_payload(inputs, response, route, target, iteration, started_at, finished_at));
+  if (auto fallback = make_provider_fallback_payload(inputs, route, target, iteration, started_at, finished_at)) {
     [[maybe_unused]] auto fallback_outcome =
         co_await inputs.bus->publish_advisory(hook::Event::provider_fallback, std::move(*fallback));
   }
@@ -360,7 +328,7 @@ make_provider_fallback_payload(const RunTurnInputs& inputs,
 
 [[nodiscard]] async::Awaitable<void> publish_provider_error(const RunTurnInputs& inputs,
                                                             const core::Error& error,
-                                                            const provider::ModelTarget& failing_target,
+                                                            const provider::execution::Attribution& failing_target,
                                                             std::uint32_t iteration,
                                                             core::Time started_at,
                                                             core::Time finished_at) {
@@ -648,19 +616,16 @@ public:
     if (!native_tools) {
       co_return std::unexpected(native_tools.error());
     }
-    auto rendered = prompt::render(
-        prompt::RenderInputs{
-            .system_preamble = system_preamble_for(inputs, default_preamble_),
-            .tools = *native_tools,
-            .skills_catalog = inputs.skills_catalog,
-            .memory_framing = inputs.memory_framing,
-            .per_agent_overlay = inputs.per_agent_overlay,
-        },
-        options_.prompt_versions);
+    auto rendered = prompt::render({
+        .system_preamble = system_preamble_for(inputs, default_preamble_),
+        .tools = *native_tools,
+        .skills_catalog = inputs.skills_catalog,
+        .memory_framing = inputs.memory_framing,
+        .per_agent_overlay = inputs.per_agent_overlay,
+    });
     const auto thinking_budget =
         inputs.thinking_budget.has_value() ? inputs.thinking_budget : route_.primary.thinking_budget;
-    std::string last_route_model = route_.primary.model;
-    std::string last_route_profile = route_.primary.profile;
+    provider::execution::Attribution last_target{route_.primary.profile, route_.primary.model, route_.primary.protocol};
     // Per-turn fallback scheduler, lazily built only when the caller did not
     // supply one and the loop has a tool batch to run. Lives across iterations
     // so a multi-iteration turn shares one path-lock table.
@@ -675,7 +640,11 @@ public:
           .max_tokens = inputs.max_tokens,
           .thinking_budget = thinking_budget,
           .stream = inputs.stream,
-          .cache = provider::PromptCacheHints{.prefix_hash = rendered.prefix_hash, .prefix_bytes = rendered.prefix_bytes},
+          .cache =
+              provider::PromptCacheHints{
+                  .prefix_hash = rendered.prefix_hash,
+                  .prefix_bytes = rendered.prefix_bytes,
+              },
           .retry = inputs.retry,
       };
 
@@ -683,7 +652,9 @@ public:
       co_await publish_provider_request(inputs, request, route_, iteration, provider_started_at);
       ProviderPhaseSink provider_phase_sink{sink};
       auto* provider_sink = sink == nullptr ? nullptr : &provider_phase_sink;
-      auto response = co_await provider_.send(std::move(request), route_, provider_sink);
+      auto outcome = co_await provider::execution::run(provider_, std::move(request), route_, provider_sink);
+      last_target = std::move(outcome.target);
+      auto& response = outcome.response;
       const auto provider_finished_at = core::time::now_utc();
       if (!response) {
         const auto cancellation_phase = provider_phase_sink.cancellation_phase();
@@ -691,16 +662,9 @@ public:
         if (error.kind() == core::ErrorKind::cancelled) {
           co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
         }
-        // The execution layer attributes terminal errors to the actually
-        // failing target via the `provider_profile` context key; resolve it so
-        // hook payloads and trace rows (and hence usage rollups) name the
-        // served route instead of always the primary. Fall back to the primary
-        // when the key is absent (FakeProvider / direct-backend errors).
-        const auto failing_profile = error_context_value(error, "provider_profile").value_or(route_.primary.profile);
-        const auto& failing_target = served_target_for(route_, failing_profile);
         co_await publish_provider_error(inputs,
                                         error,
-                                        failing_target,
+                                        last_target,
                                         iteration,
                                         provider_started_at,
                                         provider_finished_at);
@@ -711,8 +675,8 @@ public:
                                                   total_usage,
                                                   iteration,
                                                   started_at_ns,
-                                                  failing_target.model,
-                                                  failing_target.profile,
+                                                  last_target.model,
+                                                  last_target.profile,
                                                   core::StopReason::cancelled,
                                                   std::string{cancellation_phase});
           if (!traced) {
@@ -725,8 +689,8 @@ public:
                                                         total_usage,
                                                         iteration,
                                                         started_at_ns,
-                                                        failing_target.model,
-                                                        failing_target.profile);
+                                                        last_target.model,
+                                                        last_target.profile);
           if (!traced) {
             error = attach_trace_write_error(std::move(error), std::move(traced).error());
           }
@@ -734,32 +698,27 @@ public:
         co_return std::unexpected(std::move(error));
       }
 
-      const auto served_profile_for_cost = response->route_profile_used.value_or(route_.primary.profile);
-      apply_profile_cost_if_missing(response->usage, served_target_for(route_, served_profile_for_cost));
       co_await publish_provider_response(inputs,
                                          *response,
                                          route_,
+                                         last_target,
                                          iteration,
                                          provider_started_at,
                                          provider_finished_at);
       add_usage(total_usage, response->usage);
-      last_route_model = response->model_used.value_or(route_.primary.model);
-      last_route_profile = response->route_profile_used.value_or(route_.primary.profile);
 
       const auto tool_uses = tool_uses_in(response->blocks);
       if (response->stop_reason == core::StopReason::tool_use || !tool_uses.empty()) {
         if (inputs.tools == nullptr || inputs.dispatch_context == nullptr) {
           auto error = unsupported_response("tool_use response");
-          const auto route_model = response->model_used.value_or(route_.primary.model);
-          const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
           auto traced = co_await write_error_trace_turn(inputs,
                                                         route_,
                                                         rendered,
                                                         total_usage,
                                                         iteration,
                                                         started_at_ns,
-                                                        route_model,
-                                                        route_profile);
+                                                        last_target.model,
+                                                        last_target.profile);
           if (!traced) {
             error = attach_trace_write_error(std::move(error), std::move(traced).error());
           }
@@ -767,16 +726,14 @@ public:
         }
         if (tool_uses.empty()) {
           auto error = unsupported_response("tool_use stop reason without tool blocks");
-          const auto route_model = response->model_used.value_or(route_.primary.model);
-          const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
           auto traced = co_await write_error_trace_turn(inputs,
                                                         route_,
                                                         rendered,
                                                         total_usage,
                                                         iteration,
                                                         started_at_ns,
-                                                        route_model,
-                                                        route_profile);
+                                                        last_target.model,
+                                                        last_target.profile);
           if (!traced) {
             error = attach_trace_write_error(std::move(error), std::move(traced).error());
           }
@@ -845,32 +802,28 @@ public:
           auto error = std::move(*tool_phase_error);
           if (error.kind() == core::ErrorKind::cancelled && trace_writer_configured(inputs)) {
             co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-            const auto route_model = response->model_used.value_or(route_.primary.model);
-            const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
             auto traced = co_await write_trace_turn(inputs,
                                                     route_,
                                                     rendered,
                                                     total_usage,
                                                     iteration,
                                                     started_at_ns,
-                                                    route_model,
-                                                    route_profile,
+                                                    last_target.model,
+                                                    last_target.profile,
                                                     core::StopReason::cancelled,
                                                     std::string{"tools"});
             if (!traced) {
               error = attach_trace_write_error(std::move(error), std::move(traced).error());
             }
           } else if (error.kind() != core::ErrorKind::cancelled) {
-            const auto route_model = response->model_used.value_or(route_.primary.model);
-            const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
             auto traced = co_await write_error_trace_turn(inputs,
                                                           route_,
                                                           rendered,
                                                           total_usage,
                                                           iteration,
                                                           started_at_ns,
-                                                          route_model,
-                                                          route_profile);
+                                                          last_target.model,
+                                                          last_target.profile);
             if (!traced) {
               error = attach_trace_write_error(std::move(error), std::move(traced).error());
             }
@@ -891,16 +844,14 @@ public:
           response->stop_reason != core::StopReason::max_tokens &&
           response->stop_reason != core::StopReason::cancelled) {
         auto error = unsupported_response("non-terminal stop reason");
-        const auto route_model = response->model_used.value_or(route_.primary.model);
-        const auto route_profile = response->route_profile_used.value_or(route_.primary.profile);
         auto traced = co_await write_error_trace_turn(inputs,
                                                       route_,
                                                       rendered,
                                                       total_usage,
                                                       iteration,
                                                       started_at_ns,
-                                                      route_model,
-                                                      route_profile);
+                                                      last_target.model,
+                                                      last_target.profile);
         if (!traced) {
           error = attach_trace_write_error(std::move(error), std::move(traced).error());
         }
@@ -913,16 +864,14 @@ public:
           .blocks = response->blocks,
           .created_at = std::nullopt,
       });
-      const auto model_used = response->model_used.value_or(route_.primary.model);
-      const auto served_profile = response->route_profile_used.value_or(route_.primary.profile);
       if (auto traced = co_await write_trace_turn(inputs,
                                                   route_,
                                                   rendered,
                                                   total_usage,
                                                   iteration,
                                                   started_at_ns,
-                                                  model_used,
-                                                  served_profile,
+                                                  last_target.model,
+                                                  last_target.profile,
                                                   response->stop_reason);
           !traced) {
         co_return std::unexpected(std::move(traced).error());
@@ -932,7 +881,7 @@ public:
           .assistant_blocks = std::move(response->blocks),
           .stop_reason = response->stop_reason,
           .usage = total_usage,
-          .model_used = std::move(response->model_used),
+          .model_used = std::move(last_target.model),
           .rendered_prompt = std::move(rendered),
           .iterations = iteration,
           .transcript = std::move(transcript),
@@ -946,8 +895,8 @@ public:
                                                     total_usage,
                                                     options_.max_iterations,
                                                     started_at_ns,
-                                                    last_route_model,
-                                                    last_route_profile);
+                                                    last_target.model,
+                                                    last_target.profile);
       if (!traced) {
         auto error = iteration_cap_error(options_.max_iterations);
         error = attach_trace_write_error(std::move(error), std::move(traced).error());

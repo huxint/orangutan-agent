@@ -118,7 +118,7 @@ public:
   }
 };
 
-/// Entry point for one provider call. `make_protocol_system` composes protocol
+/// Entry point for one provider attempt. `make_protocol_system` composes protocol
 /// mapping with an injected transport; `FakeProvider` supplies controlled turns.
 ///
 /// The method is `const` by design: providers may be shared across concurrent
@@ -142,7 +142,7 @@ public:
   /// returns the same `Response`. The sink is borrowed for the duration of
   /// the call only.
   [[nodiscard]] virtual async::Awaitable<core::Result<Response>>
-  send(Request request, Route route, EventSink* sink = nullptr) const = 0;
+  send(Request request, ModelTarget target, EventSink* sink = nullptr) const = 0;
 };
 
 }  // namespace orangutan::provider

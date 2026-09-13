@@ -132,7 +132,6 @@ provider::Response text_response(std::string text) {
                                .cache_read_tokens = 0,
                                .cost_estimate = std::nullopt},
       .model_used = std::string{"fake-1"},
-      .route_profile_used = std::nullopt,
   };
 }
 
@@ -142,7 +141,6 @@ provider::Response tool_response(std::string name, std::string id, std::string i
       .stop_reason = core::StopReason::tool_use,
       .usage = {},
       .model_used = std::string{"fake-1"},
-      .route_profile_used = std::nullopt,
   };
 }
 
@@ -255,8 +253,7 @@ public:
       : responses_{std::make_move_iterator(responses.begin()), std::make_move_iterator(responses.end())} {}
 
   [[nodiscard]] async::Awaitable<core::Result<provider::Response>>
-  send(provider::Request request, provider::Route route, provider::EventSink* sink = nullptr) const override {
-    static_cast<void>(route);
+  send(provider::Request request, provider::ModelTarget, provider::EventSink* sink = nullptr) const override {
     {
       const std::lock_guard lock{mutex_};
       requests_.push_back(std::move(request));
@@ -702,7 +699,6 @@ TEST_CASE("AgentSession renders memory framing once per prompt before loop itera
                                      .cache_read_tokens = 0,
                                      .cost_estimate = std::nullopt},
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         },
         text_response("done"),
     }};
@@ -786,7 +782,6 @@ TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         },
         text_response("done"),
     }};
@@ -858,7 +853,6 @@ TEST_CASE("AgentSession dispatches MemoryRecall through long-term runtime",
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         },
         text_response("done"),
     }};
@@ -929,7 +923,6 @@ TEST_CASE("AgentSession dispatches MemoryRemember through long-term backend",
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         },
         text_response("done"),
     }};
@@ -1018,7 +1011,6 @@ TEST_CASE("AgentSession lets MemoryWrite.before veto MemoryRemember",
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         },
         text_response("done"),
     }};
@@ -1079,7 +1071,6 @@ TEST_CASE("AgentSession dispatches MemoryForget through long-term backend",
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         },
         text_response("done"),
     }};
@@ -1158,7 +1149,6 @@ TEST_CASE("AgentSession renders default system preamble once per prompt before l
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         },
         text_response("done"),
     }};
@@ -1210,7 +1200,6 @@ TEST_CASE("AgentSession renders selected agent prompt overlay in the stable pref
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         },
         text_response("done"),
     }};
@@ -1285,7 +1274,6 @@ TEST_CASE("AgentSession shares path exclusion through an injected scheduler",
             }},
             .stop_reason = core::StopReason::tool_use,
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         };
         RecordingProvider first_provider{{call, text_response("first done")}};
         RecordingProvider second_provider{{call, text_response("second done")}};
@@ -1390,7 +1378,6 @@ TEST_CASE("AgentSession multi-tool batches complete on a multi-worker runtime",
                                          .cache_read_tokens = 0,
                                          .cost_estimate = std::nullopt},
                 .model_used = std::string{"fake-1"},
-                .route_profile_used = std::nullopt,
             },
         .deltas = {},
         .error = std::nullopt,
@@ -1674,7 +1661,6 @@ TEST_CASE("AgentSession resumes completed history after a failed transcript comm
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         },
         text_response("reject-turn"),
         text_response("continued answer"),

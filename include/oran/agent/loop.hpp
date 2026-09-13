@@ -40,7 +40,6 @@ class ToolScheduler;
 
 struct LoopOptions {
   std::uint32_t max_iterations{16};
-  prompt::SectionVersions prompt_versions{};
 
   friend bool operator==(const LoopOptions&, const LoopOptions&) = default;
 };
@@ -62,7 +61,7 @@ struct TraceContext {
 struct RunTurnInputs {
   /// Stable section (1). An empty value selects `agent::default_system_preamble()`.
   /// Supplying text is an explicit override for tests or embedders that already
-  /// own a repository-versioned preamble. Stable text is copied once per turn,
+  /// own a preamble. Stable text is copied once per turn,
   /// before the first provider call; the next turn observes host edits.
   std::string_view system_preamble{};
   /// Available definitions. The selected native catalogue is sorted once per
@@ -115,7 +114,7 @@ struct RunTurnResult {
   std::vector<core::Content> assistant_blocks;
   core::StopReason stop_reason{core::StopReason::end_turn};
   provider::Usage usage{};
-  std::optional<std::string> model_used{};
+  std::string model_used{};
   /// Owned system text and cache identity shared by this turn's iterations.
   prompt::RenderedPrompt rendered_prompt{};
   std::uint32_t iterations{0};

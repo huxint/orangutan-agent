@@ -89,7 +89,7 @@ public:
   explicit ScriptedProvider(std::vector<provider::Response> responses) : responses_{std::move(responses)} {}
 
   async::Awaitable<core::Result<provider::Response>>
-  send(provider::Request request, provider::Route, provider::EventSink* = nullptr) const override {
+  send(provider::Request request, provider::ModelTarget, provider::EventSink* = nullptr) const override {
     requests.push_back(std::move(request));
     if (requests.size() > responses_.size()) {
       co_return std::unexpected(core::Error::internal("child test provider script exhausted"));

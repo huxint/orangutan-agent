@@ -233,9 +233,8 @@ TEST_CASE("protocol construction owns environment credentials for every profile"
     request.messages.push_back(
         core::Message{.role = core::Role::user, .blocks = {core::TextContent{.text = "hello"}}, .created_at = {}});
     request.max_tokens = 64;
-    auto primary = co_await system->send(request, provider::Route{.primary = route.primary, .fallbacks = {}});
-    auto fallback =
-        co_await system->send(request, provider::Route{.primary = route.fallbacks.front(), .fallbacks = {}});
+    auto primary = co_await system->send(request, route.primary);
+    auto fallback = co_await system->send(request, route.fallbacks.front());
 
     REQUIRE(primary.has_value());
     REQUIRE(fallback.has_value());

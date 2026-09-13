@@ -137,10 +137,12 @@ core::ToolDef effect_tool() {
 }
 
 provider::ScriptedTurn text_turn() {
-  return provider::ScriptedTurn{.response = provider::Response{.blocks = {core::TextContent{.text = "done"}},
-                                                               .stop_reason = core::StopReason::end_turn,
-                                                               .model_used = std::nullopt,
-                                                               .route_profile_used = std::nullopt},
+  return provider::ScriptedTurn{.response =
+                                    provider::Response{
+                                        .blocks = {core::TextContent{.text = "done"}},
+                                        .stop_reason = core::StopReason::end_turn,
+                                        .model_used = std::nullopt,
+                                    },
                                 .deltas = {},
                                 .error = std::nullopt};
 }

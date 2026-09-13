@@ -1,99 +1,97 @@
 # Provider Boundary
 
-`provider::System::send` consumes typed messages, tool definitions, model policy
-and a route, and returns a typed response. The agent loop does not branch on a
-vendor name. HTTP transport is injected through the protocol adapter boundary.
+`provider::System::send` performs one attempt over a typed request and a selected
+`ModelTarget`, returning `core::Result<Response>`. HTTP transport is injected.
+`provider::execution::run` owns route traversal, retries, attribution and pricing;
+the agent loop calls that boundary over its borrowed backend.
 
 ## Construction
 
 Bootstrap's `resolve_route_profiles` converts configured names, aliases and model
 policy into owned endpoint values. The provider library accepts
-`RouteProfileResolution` and `SecretLookup` from `protocol_transport.hpp`; it does
-not import configuration. [Runtime composition](bootstrap-runtime.md) owns the
-configuration adapter API and its migration. `make_protocol_system` validates
-the complete route before reading any credential: endpoint fields are nonempty,
-URLs use HTTP/S, protocols
-are implemented and profile names are unique. An invalid fallback therefore
-fails before primary credential lookup. Secret lookup failures expose only
-profile, role and credential-reference context.
+`RouteProfileResolution` and `SecretLookup` from `protocol_transport.hpp`.
+[Runtime composition](bootstrap-runtime.md) owns configuration conversion.
 
-The returned `System` owns immutable model/endpoint credentials for every profile
-and borrows one `ProtocolTransport`. Each send selects a profile and checks its
-model and protocol before transport work. The caller supplies a single selected
-target; `execution::Runtime` owns retry and fallback selection. Concurrent sends
-keep their request and stream-decoder state separate. The transport, system and
-event sink remain alive until their awaited sends, callbacks and cancellation
-cleanup complete.
+`make_protocol_system` validates the complete route before reading credentials:
+endpoint fields are nonempty, URLs use HTTP/S, protocols are implemented and
+profile names are unique. An invalid fallback fails before primary credential
+lookup. Lookup failures expose only profile, role and credential-reference
+context.
 
-## Protocols
+The returned system owns immutable endpoint credentials and borrows one
+`ProtocolTransport`. Each send validates the selected profile, model and protocol
+before transport work. Concurrent requests own their decoder state. The
+transport, system and event sink remain alive until awaited sends, callbacks and
+cancellation cleanup complete.
 
-Implemented protocols are `anthropic_messages` and `openai_responses`. A profile
-selects protocol, model, endpoint and credential reference. `HttpProviderBackend`
-owns the HTTP transport and constructed provider system; callers may inject a
-controlled provider for tests.
+## Execution Outcomes
 
-Adapters translate roles, content, tool calls/results, stop reasons and usage.
-They validate malformed responses and expose provider errors explicitly. Retry
-and fallback belong to `provider::execution::Runtime`, not individual protocol
-mappers. Attempt metadata records the model/route actually used.
+`execution::run(backend, request, route, sink)` returns an owned `Outcome`:
+`target` identifies profile, model, protocol and whether a fallback was selected;
+`response` is the single `core::Result<Response>` failure channel. Attribution
+exists on both success and failure, including invalid attempt budgets and
+cancellation. It comes from execution's selected target, never from an optional
+response profile or an error-string lookup.
 
-## Streaming And Bounds
+A successful endpoint's nonempty reported model becomes the attributed model;
+an omitted model uses the configured name. Failure identifies the attempted
+target. Error context remains diagnostic and cannot redirect hook or trace
+attribution. The loop consumes this value directly, accumulates usage and
+publishes response/error/fallback observations.
 
-HTTP/SSE transport enforces request deadlines and response byte caps. SSE decoders
-maintain protocol state, assemble text/tool input incrementally and reject
-incomplete or inconsistent terminal events. Cancellation propagates through the
-blocking transport bridge to curl. Stream callbacks are observations of the
-current turn; a partial stream is not a completed persisted answer.
+Each route target receives `Request::retry.max_attempts` attempts; zero is invalid.
+Retryable failures exhaust the current target before advancing through fallbacks.
+Non-retryable errors and cancellation return immediately. A delivered stream
+callback prevents replay. Backoff respects the greater of `retry_after` and the
+configured initial delay. Fallbacks apply their own thinking and cache policy.
+Unexpected backend exceptions become internal errors without exposing exception
+text; Asio operation-aborted exceptions become cancellation.
 
-`http::Client` owns HTTP/SSE request execution. Each request holds unique curl
-easy/multi handles and a header list on the blocking executor. The registration
-guard detaches the easy handle before either handle is released. Bounded multi
-polling observes cancellation. The pending operation retains its implementation,
-request values, cancellation flag and executor work until completion; SSE events
-run serially on the caller's executor and finish before the send returns.
+Successful usage keeps any endpoint-supplied `cost_estimate`, including zero.
+Otherwise execution estimates cost from the selected profile's token prices.
+Missing output/cache prices use input pricing; an absent input price contributes
+zero. If every price is absent, cost remains unknown. The loop does not resolve
+profiles or recalculate prices.
 
-Fallback applies the selected profile's thinking and cache policy. A provider
-error must retain its category and attempt attribution. Credential lookup errors
-contain non-secret context only.
+## Protocols And Streaming
+
+Implemented protocols are `anthropic_messages` and `openai_responses`.
+`HttpProviderBackend` owns the transport, system and resolved route.
+Adapters translate roles, content, tool calls/results, stop reasons and usage,
+and classify malformed responses and provider errors.
+
+HTTP/SSE transport enforces deadlines and byte caps. Decoders assemble text/tool
+input incrementally and reject inconsistent or incomplete terminal events.
+A partial stream is an observation, not a completed persisted answer.
+
+`http::Client` owns unique curl easy/multi handles and a header list on the worker
+executor. A guard detaches the easy handle before release. Bounded multi polling
+observes cancellation. Pending work retains request values, cancellation state
+and executor work until completion. SSE callbacks run serially on the caller's
+executor and finish before send returns.
 
 ## Prompt Caching
 
-`oran-prompt` renders stable text and fingerprints the same native declarations
-sent in `Request::tools`. Descriptions and input schemas occur only in those
-native declarations. The effective prefix identity includes their bytes and
-cache version, while conversation messages remain dynamic.
+The loop forwards current `prefix_hash` and `prefix_bytes` values for its owned
+system text and native declarations. Retries and fallbacks retain these inputs.
+Provider execution has no prompt-rendering or section-layout dependency.
+Callers keep identity aligned with submitted stable fields; conversation,
+including system messages in `Request::messages`, is separate.
 
-`Request::cache` carries only a caller-owned `prefix_hash` and `prefix_bytes` for
-`system_prompt` and native tools. The loop supplies these values without applying
-primary policy, and retry/fallback execution preserves them for every attempt.
-Provider has no dependency on prompt rendering or its section layout. Callers
-must keep the identity aligned with the stable fields they submit; conversation,
-including system messages supplied through `Request::messages`, is separate.
-
-`make_protocol_request` applies the selected target's `cache` policy, including
-direct sends and every retry/fallback. Absent policy defaults to enabled with a
-zero-byte floor. Missing hints, a zero-byte prefix, a disabled target, a prefix
-below its byte floor, or no stable system text/native tools omit explicit cache
-controls. Equality with the byte floor is eligible. A primary's disabled policy
-or higher floor cannot suppress controls for an eligible fallback.
+`make_protocol_request` applies the selected target's cache policy to every
+attempt. Absent policy enables caching with a zero-byte floor. Missing hints, a
+zero-byte prefix, disabled policy, a prefix below its byte floor, or no stable
+system text/native tools omit explicit controls. Equality with the floor is
+eligible. One target's policy cannot suppress controls for another target.
 
 | Protocol | Explicit control |
 | --- | --- |
-| `anthropic_messages` | Stable system text becomes a text block ending in `cache_control: {"type":"ephemeral"}`. With no stable system text, the last native tool receives the breakpoint. System messages lifted from conversation follow that breakpoint, and conversation/tool results receive no markers. |
-| `openai_responses` | `prompt_cache_key` is `oran-` followed by the prefix hash as 16 lowercase hexadecimal digits. Conversation changes preserve this routing key; changed prefix identity changes it. |
+| `anthropic_messages` | Stable system text ends in a `cache_control: {"type":"ephemeral"}` block. With no stable system text, the last native tool receives the breakpoint. System messages lifted from conversation follow it; conversation and tool results receive no markers. |
+| `openai_responses` | `prompt_cache_key` is `oran-` followed by the current prefix hash as 16 lowercase hexadecimal digits. |
 
-These fields follow the [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
-and [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
-protocols. Disabled policy omits client cache controls; it does not disable
-OpenAI's automatic caching. No retention override is sent. Byte eligibility is
-local policy, not a provider token threshold. Controlled transport tests establish
-request encoding and route behavior, not service cache hits or retention.
-
-The section-mapping function `make_prompt_cache_hints` and
-`PromptCacheSectionKey` are removed. Embedders construct `PromptCacheHints` from
-their stable-prefix hash and byte count; they no longer supply section keys or
-breakpoint indices. The standard loop already supplies this value.
-
-Changing model, route or stable inputs changes the effective request. Dynamic
-timestamps, turn IDs, trace IDs and tool results do not enter the system preamble.
-[prompt-design](../rules/prompt-design.md) owns section placement and fingerprints.
+These controls follow [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+and [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
+Disabling explicit controls does not disable OpenAI's automatic caching. Byte
+eligibility is local policy, not a provider token threshold. Controlled tests
+establish request encoding and route behavior, not service cache hits.
+[Prompt design](../rules/prompt-design.md) owns current text and fingerprint rules.

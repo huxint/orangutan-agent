@@ -31,6 +31,13 @@ The loop forwards unfiltered prefix identity to the provider, whose protocol
 boundary applies the selected route's cache policy.
 The session coordinator serializes turns using the same session identity.
 
+The loop calls `provider::execution::run` over its borrowed backend and route.
+Execution returns owned attribution alongside a result: profile, reported or
+configured model, protocol and fallback selection. Response/error/fallback hooks
+and terminal traces consume that attribution directly. The loop accumulates
+execution-priced usage; it does not search route lists, parse error context or
+estimate prices. `RunTurnResult::model_used` is the attributed model string.
+
 Persisted history loads at most 128 rows and 512 KiB of encoded content/metadata.
 An incomplete leading exchange is removed before model submission. Stored rows
 remain intact.
@@ -44,8 +51,8 @@ the next turn observes host edits. Tool outputs change the conversation, never
 selection or stable text. An absent list exposes all available tools, an empty
 list exposes none, and unknown names fail explicitly.
 The [tool contract](tool-runtime.md) owns selection and dispatch authority.
-[Prompt design](../rules/prompt-design.md) owns the reduced rendering values,
-joining rules and migration from diagnostic sections.
+[Prompt design](../rules/prompt-design.md) owns rendering values, joining rules
+and content-derived identity.
 
 New trace rows store the native definition fingerprint in `active_catalog_hash`
 and zero in the retired `deferred_catalog_hash` column. Existing trace rows and

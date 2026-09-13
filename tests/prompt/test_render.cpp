@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <cstddef>
-#include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
@@ -36,30 +35,22 @@ TEST_CASE("Prompt fingerprints native tools without duplicating them in text", "
       .required_capabilities = {core::Capability::egress_http},
   }};
   const auto result = prompt::render(inputs_for(tools));
-  CHECK(result.prefix_hash == 0x11a1863782ed9ffbULL);
-  CHECK(result.tool_catalog_hash == 0x03dc7be6634dceeaULL);
-  CHECK(result.prefix_bytes == 135);
+  CHECK(result.prefix_bytes == 138);
 
   REQUIRE(result.system_prompt == "system\nskills\nmemory\noverlay");
 }
 
-TEST_CASE("Empty and sparse prefixes retain their cache identity", "[unit][prompt][compatibility]") {
+TEST_CASE("Prompt byte counts include only submitted text and declarations", "[unit][prompt]") {
   auto inputs = prompt::RenderInputs{};
-  std::uint64_t expected_hash = 0x029b7e1881849a23ULL;
-  std::size_t expected_bytes = 0;
   std::string_view expected_text;
   SECTION("empty") {}
   SECTION("sparse") {
     inputs.skills_catalog = "skills";
     inputs.per_agent_overlay = "overlay";
-    expected_hash = 0x3b32637226088bf8ULL;
-    expected_bytes = 13;
     expected_text = "skills\noverlay";
   }
   const auto result = prompt::render(inputs);
-  CHECK(result.prefix_hash == expected_hash);
-  CHECK(result.tool_catalog_hash == 0xa8c7f832281a39c5ULL);
-  CHECK(result.prefix_bytes == expected_bytes);
+  CHECK(result.prefix_bytes == expected_text.size());
   CHECK(result.system_prompt == expected_text);
 }
 
@@ -70,15 +61,13 @@ TEST_CASE("Prompt joins nonempty sections without normalizing their bytes", "[un
       .per_agent_overlay = " ",
   });
   REQUIRE(result.system_prompt == " prompt\n\n笔记\n\n ");
-  REQUIRE(result.prefix_bytes == 16);
+  REQUIRE(result.prefix_bytes == 18);
 }
 
-TEST_CASE("Text section boundaries remain part of cache identity", "[unit][prompt]") {
+TEST_CASE("Equivalent system text has the same cache identity", "[unit][prompt]") {
   const auto first = prompt::render({.system_preamble = "a", .skills_catalog = "b"});
   const auto second = prompt::render({.system_preamble = "a\nb"});
-  REQUIRE(first.system_prompt == second.system_prompt);
-  REQUIRE(first.tool_catalog_hash == second.tool_catalog_hash);
-  REQUIRE(first.prefix_hash != second.prefix_hash);
+  REQUIRE(first == second);
 }
 
 TEST_CASE("Native tool changes invalidate the prefix without changing text", "[unit][prompt]") {
@@ -125,30 +114,26 @@ TEST_CASE("Dispatch capabilities do not enter model-visible cache identity", "[u
   REQUIRE(prompt::render(inputs_for(tools)) == first);
 }
 
-TEST_CASE("Prompt versions invalidate cache identity without changing content", "[unit][prompt]") {
+TEST_CASE("Changed system text invalidates cache identity", "[unit][prompt]") {
   const std::vector<core::ToolDef> tools{core::ToolDef::with_no_input("CustomLookup", "Find context")};
-  auto versions = prompt::SectionVersions{};
-  const auto first = prompt::render(inputs_for(tools), versions);
+  auto inputs = inputs_for(tools);
+  const auto first = prompt::render(inputs);
 
-  SECTION("native tools") {
-    ++versions.tool_catalog;
-  }
   SECTION("system preamble") {
-    ++versions.system_preamble;
+    inputs.system_preamble = "changed system";
   }
   SECTION("skills catalogue") {
-    ++versions.skills_catalog;
+    inputs.skills_catalog = "changed skills";
   }
   SECTION("memory framing") {
-    ++versions.memory_framing;
+    inputs.memory_framing = "changed memory";
   }
   SECTION("agent overlay") {
-    ++versions.per_agent_overlay;
+    inputs.per_agent_overlay = "changed overlay";
   }
 
-  const auto second = prompt::render(inputs_for(tools), versions);
-  REQUIRE(first.system_prompt == second.system_prompt);
+  const auto second = prompt::render(inputs);
+  REQUIRE(first.system_prompt != second.system_prompt);
   REQUIRE(first.tool_catalog_hash == second.tool_catalog_hash);
-  REQUIRE(first.prefix_bytes == second.prefix_bytes);
   REQUIRE(first.prefix_hash != second.prefix_hash);
 }

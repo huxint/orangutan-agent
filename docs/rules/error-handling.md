@@ -25,13 +25,12 @@ core::Result<Combined> combine_inputs(Input input) {
 }
 ```
 
-The unused `core::all_ok` helper is removed. It combined already evaluated
-results; function arguments cannot short-circuit the operations producing them.
-Use explicit checks when migrating callers. Pure synchronous transformations
-may use standard `transform`, `and_then` and `or_else` operations:
+Function arguments are evaluated before their results can be combined; use
+explicit checks to short-circuit dependent operations. Pure synchronous
+transformations may use standard `transform`, `and_then` and `or_else` operations:
 
 ```cpp
-auto response = co_await provider.send(request, route);
+auto response = co_await backend.send(request, target);
 auto usage = std::move(response).transform(
     [](provider::Response value) { return value.usage; });
 ```
@@ -47,6 +46,9 @@ the surrounding coroutine, with explicit result checks.
   reclassify it as a network or storage failure.
 - Public failure values use `Result<T>`; do not expose `std::exception_ptr` as a
   second error channel. Internal completion handlers may translate exceptions.
+- A terminal outcome may carry its `Result<T>` alongside metadata needed on
+  success and failure, such as provider attribution. Keep diagnostic error text
+  separate from the values that drive execution and reporting.
 - Use `return` in ordinary functions and `co_return` in coroutines. Move owned
   errors when propagating them.
 - Handle or propagate failed results; do not discard failures silently.
@@ -67,11 +69,11 @@ Keep categories machine-readable and attach diagnostic fields separately from
 the message:
 
 ```cpp
-auto response = co_await provider.send(request, route);
+auto response = co_await backend.send(request, target);
 if (!response) {
   co_return std::unexpected(std::move(response).error()
                                .with("agent", agent_key)
-                               .with("model", route.primary.model));
+                               .with("model", target.model));
 }
 ```
 

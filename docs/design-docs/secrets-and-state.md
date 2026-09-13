@@ -47,11 +47,8 @@ and provider execution consume those values without retaining configuration view
 names. Defaults expose every registered tool, including host extensions. An
 explicit array selects only those names; `[]` exposes none. Unknown names fail
 before provider execution. Disabled delegation is removed from both the available
-catalogue and explicit selection. [Tools](tool-runtime.md) owns this boundary and
-the migration from the removed discovery API.
-
-Path locks follow active work. The retired `runtime.tool_scheduler.idle_lock_ttl_ms`
-field is ignored when reading existing configuration.
+catalogue and explicit selection. [Tools](tool-runtime.md) owns this boundary.
+Path locks follow active work and have no idle expiration setting.
 
 Memory orientation defaults to enabled with a 20-entry limit when the backend
 exists. `enabled: false` disables the automatic index. The default permission

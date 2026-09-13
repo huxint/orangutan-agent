@@ -41,25 +41,17 @@ credential lookup or transport work. Provider construction then validates the
 complete route before reading credentials.
 
 These adapters are available through `<oran/bootstrap.hpp>` or their narrow
-headers. The old configuration adapters in runtime libraries are removed:
-
-| Previous API | Current API |
-| --- | --- |
-| `permission::materialize(mode, global, agent)` | `bootstrap::materialize_permissions(mode, global.rules, agent.rules)` in `<oran/bootstrap/permissions.hpp>`; agent rules may be omitted. |
-| `provider::resolve_route_profiles(config, route)` | `bootstrap::resolve_route_profiles(config, route)` in `<oran/bootstrap/provider-profiles.hpp>`. |
-| `config::SecretLookup` | `provider::SecretLookup` in `<oran/provider/protocol_transport.hpp>`. |
-
-Endpoint construction values also live in `protocol_transport.hpp`; the old
-provider route-resolver and config secrets headers have no forwarding shims.
-Configuration syntax, permission decisions and credential error redaction keep
-their existing contracts.
+headers. Provider owns endpoint construction values and `SecretLookup` in
+`protocol_transport.hpp`. Config retains parsed values only.
 
 ## Session Boundary
 
 `AgentSession` loads bounded history, prepares an owned conversation through
 `agent::prepare_conversation`, drives `agent::Loop`, and appends the successful
 transcript suffix atomically through `Store::append_all`. The prepared value
-records the history boundary independently of storage. The session resolves
+records the history boundary independently of storage. The session borrows the
+provider backend directly; the loop invokes provider execution for retries,
+attribution and pricing. The session resolves
 `memory.longterm.recall` from configuration and loads the scoped index through
 MemoryRecall once before the loop by default. A supplied optional
 `longterm_recall` value overrides that policy; exact caller framing replaces

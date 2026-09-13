@@ -304,7 +304,7 @@ TEST_CASE("protocol system sends Anthropic Messages bodies", "[unit][provider][p
   REQUIRE(system.has_value());
 
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto response = co_await (*system)->send(request(), route, nullptr);
+    auto response = co_await (*system)->send(request(), route.primary, nullptr);
 
     REQUIRE(response.has_value());
     REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "anthropic ok");
@@ -331,7 +331,7 @@ TEST_CASE("protocol system sends OpenAI Responses bodies", "[unit][provider][pro
   REQUIRE(system.has_value());
 
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto response = co_await (*system)->send(request(), route, nullptr);
+    auto response = co_await (*system)->send(request(), route.primary, nullptr);
 
     REQUIRE(response.has_value());
     REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "openai ok");
@@ -357,9 +357,8 @@ TEST_CASE("protocol system selects endpoint credentials for each route profile",
   REQUIRE(system.has_value());
 
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto primary = co_await (*system)->send(request(), provider::Route{.primary = route.primary, .fallbacks = {}});
-    auto fallback =
-        co_await (*system)->send(request(), provider::Route{.primary = route.fallbacks.front(), .fallbacks = {}});
+    auto primary = co_await (*system)->send(request(), route.primary);
+    auto fallback = co_await (*system)->send(request(), route.fallbacks.front());
 
     REQUIRE(primary.has_value());
     REQUIRE(fallback.has_value());
@@ -385,7 +384,7 @@ TEST_CASE("protocol transport maps HTTP status errors without response bodies", 
     REQUIRE(system.has_value());
 
     test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-      auto response = co_await (*system)->send(request(), route, nullptr);
+      auto response = co_await (*system)->send(request(), route.primary, nullptr);
 
       REQUIRE_FALSE(response.has_value());
       REQUIRE(response.error().kind() == core::ErrorKind::auth);
@@ -402,7 +401,7 @@ TEST_CASE("protocol transport maps HTTP status errors without response bodies", 
     REQUIRE(system.has_value());
 
     test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-      auto response = co_await (*system)->send(request(), route, nullptr);
+      auto response = co_await (*system)->send(request(), route.primary, nullptr);
 
       REQUIRE_FALSE(response.has_value());
       REQUIRE(response.error().kind() == core::ErrorKind::rate_limit);
@@ -419,7 +418,7 @@ TEST_CASE("protocol transport maps HTTP status errors without response bodies", 
     REQUIRE(system.has_value());
 
     test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-      auto response = co_await (*system)->send(request(), route, nullptr);
+      auto response = co_await (*system)->send(request(), route.primary, nullptr);
 
       REQUIRE_FALSE(response.has_value());
       REQUIRE(response.error().kind() == core::ErrorKind::upstream);
@@ -428,7 +427,7 @@ TEST_CASE("protocol transport maps HTTP status errors without response bodies", 
   }
 }
 
-TEST_CASE("protocol system rejects route identity changes before transport", "[unit][provider][protocol]") {
+TEST_CASE("protocol system rejects target identity changes before transport", "[unit][provider][protocol]") {
   RecordingTransport transport{{anthropic_response()}};
   auto profiles = route_profiles(provider::ProtocolKind::anthropic_messages);
   auto route = profiles.route();
@@ -449,16 +448,11 @@ TEST_CASE("protocol system rejects route identity changes before transport", "[u
     field = "route_protocol";
     expected = "openai_responses";
   }
-  SECTION("multiple targets") {
-    route.fallbacks.push_back(route.primary);
-    field = "fallbacks";
-    expected = "1";
-  }
   auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
 
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto response = co_await (*system)->send(request(), route, nullptr);
+    auto response = co_await (*system)->send(request(), route.primary, nullptr);
 
     REQUIRE_FALSE(response.has_value());
     REQUIRE(response.error().kind() == core::ErrorKind::config);
@@ -477,7 +471,6 @@ TEST_CASE("protocol system retries primary before selecting fallback credentials
   const auto route = profiles.route();
   auto system = provider::make_protocol_system(transport, std::move(profiles), test_secret);
   REQUIRE(system.has_value());
-  provider::execution::Runtime execution{**system};
 
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
     auto req = request();
@@ -485,12 +478,14 @@ TEST_CASE("protocol system retries primary before selecting fallback credentials
     req.retry.initial_backoff = std::chrono::milliseconds{0};
     req.thinking_budget = 1024;
     req.max_tokens = 4096;
-    auto response = co_await execution.send(std::move(req), route);
+    auto outcome = co_await provider::execution::run(**system, std::move(req), route);
+    auto& response = outcome.response;
 
     REQUIRE(response.has_value());
     REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "openai ok");
     REQUIRE(response->model_used == "gpt-main");
-    REQUIRE(response->route_profile_used == "openai-main");
+    REQUIRE(outcome.target.profile == "openai-main");
+    REQUIRE(outcome.target.fallback);
   });
 
   REQUIRE(transport.requests.size() == 3);
@@ -515,7 +510,7 @@ TEST_CASE("protocol transport system streams Anthropic deltas through the decode
 
   CapturingSink sink;
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto response = co_await (*system)->send(request(), route, &sink);
+    auto response = co_await (*system)->send(request(), route.primary, &sink);
 
     REQUIRE(response.has_value());
     REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "anthropic ok");
@@ -541,7 +536,7 @@ TEST_CASE("protocol transport system assembles a streamed tool_use turn", "[unit
 
   CapturingSink sink;
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto response = co_await (*system)->send(request(), route, &sink);
+    auto response = co_await (*system)->send(request(), route.primary, &sink);
 
     REQUIRE(response.has_value());
     REQUIRE(response->stop_reason == core::StopReason::tool_use);
@@ -569,7 +564,7 @@ TEST_CASE("protocol transport system keeps the body path when the transport cann
 
   CapturingSink sink;
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto response = co_await (*system)->send(request(), route, &sink);
+    auto response = co_await (*system)->send(request(), route.primary, &sink);
 
     REQUIRE(response.has_value());
     REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "anthropic ok");
@@ -592,7 +587,7 @@ TEST_CASE("protocol transport system streams OpenAI Responses deltas when stream
 
   CapturingSink sink;
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto response = co_await (*system)->send(request(), route, &sink);
+    auto response = co_await (*system)->send(request(), route.primary, &sink);
 
     REQUIRE(response.has_value());
     REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "openai ok");
@@ -616,7 +611,7 @@ TEST_CASE("protocol transport system maps a streaming HTTP error", "[unit][provi
 
   CapturingSink sink;
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto response = co_await (*system)->send(request(), route, &sink);
+    auto response = co_await (*system)->send(request(), route.primary, &sink);
 
     REQUIRE_FALSE(response.has_value());
     REQUIRE(response.error().kind() == core::ErrorKind::upstream);
@@ -640,7 +635,7 @@ TEST_CASE("protocol transport system surfaces a streamed error event", "[unit][p
 
   CapturingSink sink;
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto response = co_await (*system)->send(request(), route, &sink);
+    auto response = co_await (*system)->send(request(), route.primary, &sink);
 
     REQUIRE_FALSE(response.has_value());
     REQUIRE(response.error().kind() == core::ErrorKind::upstream);
@@ -669,7 +664,7 @@ TEST_CASE("protocol system joins cancelled transport while another profile compl
     std::exception_ptr fallback_failure;
     asio::co_spawn(
         io,
-        (*system)->send(request(), provider::Route{.primary = route.primary, .fallbacks = {}}, &primary_sink),
+        (*system)->send(request(), route.primary, &primary_sink),
         asio::bind_cancellation_slot(cancellation.slot(),
                                      [&](std::exception_ptr failure, core::Result<provider::Response> result) {
                                        primary_failure = failure;
@@ -677,9 +672,7 @@ TEST_CASE("protocol system joins cancelled transport while another profile compl
                                        REQUIRE(completed.try_send(0).has_value());
                                      }));
     asio::co_spawn(io,
-                   (*system)->send(request(),
-                                   provider::Route{.primary = route.fallbacks.front(), .fallbacks = {}},
-                                   &fallback_sink),
+                   (*system)->send(request(), route.fallbacks.front(), &fallback_sink),
                    [&](std::exception_ptr failure, core::Result<provider::Response> result) {
                      fallback_failure = failure;
                      fallback = std::move(result);

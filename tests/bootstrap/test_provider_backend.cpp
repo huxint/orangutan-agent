@@ -414,10 +414,7 @@ TEST_CASE("HttpProviderBackend constructs an HTTP-backed provider system", "[uni
     // now advertises streaming support.
     auto req = request();
     req.stream = false;
-    auto response =
-        co_await backend->system().send(std::move(req),
-                                        provider::Route{.primary = backend->route().primary, .fallbacks = {}},
-                                        nullptr);
+    auto response = co_await backend->system().send(std::move(req), backend->route().primary, nullptr);
 
     REQUIRE(response.has_value());
     REQUIRE(std::get<core::TextContent>(response->blocks.front()).text == "backend ok");
@@ -452,10 +449,9 @@ TEST_CASE("HttpProviderBackend streams an Anthropic SSE turn through the EventSi
 
   CapturingSink sink;
   test::run_async([&](asio::io_context&) -> async::Awaitable<void> {
-    auto response =
-        co_await backend->system().send(request(),  // request().stream == true
-                                        provider::Route{.primary = backend->route().primary, .fallbacks = {}},
-                                        &sink);
+    auto response = co_await backend->system().send(request(),  // request().stream == true
+                                                    backend->route().primary,
+                                                    &sink);
 
     REQUIRE(response.has_value());
     REQUIRE(response->blocks.size() == 1);

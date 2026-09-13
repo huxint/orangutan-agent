@@ -1,17 +1,3 @@
-// include/oran/provider/fake.hpp — scripted provider for tests + spec 0017 loop.
-//
-// `FakeProvider` is the first concrete `provider::System` and ships ahead of
-// any real vendor adapter so the agent loop, the audit envelope, and the
-// observability rows are all pinned against deterministic shapes (spec 0017).
-// Tests author a `std::vector<ScriptedTurn>` describing the assistant's reply
-// to each iteration; the loop drives the fake one turn at a time.
-//
-// Scope. The fake covers the v1 surface only: replay a complete `Response`,
-// replay a sequence of `StreamDelta`s that assemble into one, inject an
-// `Error`, or simulate a vendor latency that the parent cancellation can
-// interrupt. Adversarial provider fixtures (malformed JSON, truncated
-// streams) are spec 0017 v2 work.
-
 #pragma once
 
 #include <chrono>
@@ -107,7 +93,7 @@ public:
   FakeProvider& operator=(FakeProvider&&) = delete;
 
   [[nodiscard]] async::Awaitable<core::Result<Response>>
-  send(Request request, Route route, EventSink* sink = nullptr) const override;
+  send(Request request, ModelTarget target, EventSink* sink = nullptr) const override;
 
   /// Number of `send` calls that consumed a scripted turn (including failed
   /// turns and exhausted-plan failures).

@@ -165,34 +165,30 @@ public:
       : transport_{&transport}, endpoints_{std::move(endpoints)} {}
 
   [[nodiscard]] async::Awaitable<core::Result<Response>>
-  send(Request request, Route route, EventSink* sink = nullptr) const override {
-    if (!route.fallbacks.empty()) {
-      co_return std::unexpected(config_error("provider system expects a single selected route target", route.primary)
-                                    .with("fallbacks", std::to_string(route.fallbacks.size())));
-    }
+  send(Request request, ModelTarget target, EventSink* sink = nullptr) const override {
     const auto match =
-        std::ranges::find(endpoints_, route.primary.profile, [](const Endpoint& endpoint) -> const std::string& {
+        std::ranges::find(endpoints_, target.profile, [](const Endpoint& endpoint) -> const std::string& {
           return endpoint.target.profile;
         });
     if (match == endpoints_.end()) {
-      co_return std::unexpected(config_error("provider endpoint not available for route profile", route.primary));
+      co_return std::unexpected(config_error("provider endpoint not available for route profile", target));
     }
     const auto& endpoint = *match;
-    if (route.primary.model != endpoint.target.model) {
-      co_return std::unexpected(config_error("provider endpoint route model mismatch", endpoint.target)
-                                    .with("route_model", route.primary.model));
+    if (target.model != endpoint.target.model) {
+      co_return std::unexpected(
+          config_error("provider endpoint route model mismatch", endpoint.target).with("route_model", target.model));
     }
-    if (route.primary.protocol != endpoint.target.protocol) {
+    if (target.protocol != endpoint.target.protocol) {
       co_return std::unexpected(config_error("provider endpoint route protocol mismatch", endpoint.target)
-                                    .with("route_protocol", std::string{core::enum_name(route.primary.protocol)}));
+                                    .with("route_protocol", std::string{core::enum_name(target.protocol)}));
     }
 
     if (request.stream && transport_->supports_streaming()) {
-      co_return co_await send_stream(std::move(request), std::move(route.primary), endpoint, sink);
+      co_return co_await send_stream(std::move(request), std::move(target), endpoint, sink);
     }
 
     request.stream = false;
-    auto protocol = make_protocol_request(request, route.primary);
+    auto protocol = make_protocol_request(request, target);
     if (!protocol) {
       co_return std::unexpected(std::move(protocol).error());
     }
@@ -206,21 +202,19 @@ public:
     if (!http_response) {
       co_return std::unexpected(std::move(http_response)
                                     .error()
-                                    .with("provider_profile", route.primary.profile)
-                                    .with("provider_model", route.primary.model)
-                                    .with("protocol", std::string{core::enum_name(route.primary.protocol)}));
+                                    .with("provider_profile", target.profile)
+                                    .with("provider_model", target.model)
+                                    .with("protocol", std::string{core::enum_name(target.protocol)}));
     }
 
     if (http_response->status_code < 200 || http_response->status_code >= 300) {
-      co_return std::unexpected(http_status_error(*http_response, route.primary));
+      co_return std::unexpected(http_status_error(*http_response, target));
     }
 
-    auto decoded = decode_protocol_response(http_response->body_json, route.primary);
+    auto decoded = decode_protocol_response(http_response->body_json, target);
     if (!decoded) {
-      co_return std::unexpected(std::move(decoded)
-                                    .error()
-                                    .with("provider_profile", route.primary.profile)
-                                    .with("provider_model", route.primary.model));
+      co_return std::unexpected(
+          std::move(decoded).error().with("provider_profile", target.profile).with("provider_model", target.model));
     }
     if (sink != nullptr) {
       sink->on_done(decoded->stop_reason);

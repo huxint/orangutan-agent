@@ -61,17 +61,13 @@ struct CapturingSink final : prov::EventSink {
   }
 };
 
-prov::Route default_route() {
-  return prov::Route{
-      .primary =
-          prov::ModelTarget{
-              .profile = "fake",
-              .model = "fake-1",
-              .protocol = prov::ProtocolKind::anthropic_messages,
-              .thinking_budget = std::nullopt,
-              .cache = std::nullopt,
-          },
-      .fallbacks = {},
+prov::ModelTarget default_target() {
+  return prov::ModelTarget{
+      .profile = "fake",
+      .model = "fake-1",
+      .protocol = prov::ProtocolKind::anthropic_messages,
+      .thinking_budget = std::nullopt,
+      .cache = std::nullopt,
   };
 }
 
@@ -100,7 +96,7 @@ TEST_CASE("FakeProvider replays a complete scripted Response", "[unit][provider]
     prov::FakeProvider fake{std::move(plan)};
     CapturingSink sink;
 
-    auto result = co_await fake.send(empty_request(), default_route(), &sink);
+    auto result = co_await fake.send(empty_request(), default_target(), &sink);
     REQUIRE(result.has_value());
     REQUIRE(result->blocks.size() == 1);
     REQUIRE(std::holds_alternative<core::TextContent>(result->blocks[0]));
@@ -144,7 +140,7 @@ TEST_CASE("FakeProvider assembles a Response from streamed deltas", "[unit][prov
     prov::FakeProvider fake{std::move(plan)};
     CapturingSink sink;
 
-    auto result = co_await fake.send(empty_request(), default_route(), &sink);
+    auto result = co_await fake.send(empty_request(), default_target(), &sink);
     REQUIRE(result.has_value());
     REQUIRE(result->stop_reason == core::StopReason::tool_use);
     REQUIRE(result->usage.input_tokens == 1);
@@ -179,7 +175,7 @@ TEST_CASE("FakeProvider injects a scripted error", "[unit][provider][fake]") {
                                       .latency = {}});
 
     prov::FakeProvider fake{std::move(plan)};
-    auto result = co_await fake.send(empty_request(), default_route(), nullptr);
+    auto result = co_await fake.send(empty_request(), default_target(), nullptr);
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::network);
     REQUIRE(result.error().retryable());
@@ -192,7 +188,7 @@ TEST_CASE("FakeProvider rejects a scripted turn with no body", "[unit][provider]
     plan.push_back(prov::ScriptedTurn{});
 
     prov::FakeProvider fake{std::move(plan)};
-    auto result = co_await fake.send(empty_request(), default_route(), nullptr);
+    auto result = co_await fake.send(empty_request(), default_target(), nullptr);
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::internal);
   });
@@ -212,10 +208,10 @@ TEST_CASE("FakeProvider exhausts the plan and reports an internal error", "[unit
     prov::FakeProvider fake{std::move(plan)};
     REQUIRE(fake.plan_size() == 1);
 
-    auto first = co_await fake.send(empty_request(), default_route(), nullptr);
+    auto first = co_await fake.send(empty_request(), default_target(), nullptr);
     REQUIRE(first.has_value());
 
-    auto second = co_await fake.send(empty_request(), default_route(), nullptr);
+    auto second = co_await fake.send(empty_request(), default_target(), nullptr);
     REQUIRE_FALSE(second.has_value());
     REQUIRE(second.error().kind() == core::ErrorKind::internal);
 
@@ -254,12 +250,12 @@ TEST_CASE("FakeProvider drives multiple turns in plan order", "[unit][provider][
 
     prov::FakeProvider fake{std::move(plan)};
 
-    auto first = co_await fake.send(empty_request(), default_route(), nullptr);
+    auto first = co_await fake.send(empty_request(), default_target(), nullptr);
     REQUIRE(first.has_value());
     REQUIRE(std::get<core::TextContent>(first->blocks.front()).text == "first");
     REQUIRE(first->stop_reason == core::StopReason::tool_use);
 
-    auto second = co_await fake.send(empty_request(), default_route(), nullptr);
+    auto second = co_await fake.send(empty_request(), default_target(), nullptr);
     REQUIRE(second.has_value());
     REQUIRE(std::get<core::TextContent>(second->blocks.front()).text == "second");
     REQUIRE(second->stop_reason == core::StopReason::end_turn);
@@ -292,7 +288,7 @@ TEST_CASE("FakeProvider respects parent cancellation during scripted latency", "
   asio::co_spawn(
       io,
       [&]() -> async::Awaitable<core::Result<prov::Response>> {
-        co_return co_await fake.send(empty_request(), default_route(), nullptr);
+        co_return co_await fake.send(empty_request(), default_target(), nullptr);
       },
       asio::bind_cancellation_slot(signal.slot(), [&](std::exception_ptr ep, core::Result<prov::Response> r) {
         failure = ep;
@@ -326,7 +322,7 @@ TEST_CASE("FakeProvider tolerates a null sink during streaming", "[unit][provide
                                       .latency = {}});
 
     prov::FakeProvider fake{std::move(plan)};
-    auto result = co_await fake.send(empty_request(), default_route(), nullptr);
+    auto result = co_await fake.send(empty_request(), default_target(), nullptr);
     REQUIRE(result.has_value());
     REQUIRE(result->blocks.size() == 1);
     REQUIRE(std::get<core::TextContent>(result->blocks.front()).text == "ok");

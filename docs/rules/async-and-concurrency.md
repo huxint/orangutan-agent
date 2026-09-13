@@ -1,7 +1,8 @@
 # Async Rules
 
-Use Asio awaitables and `async::Runtime`. Effectful public operations return
-`Awaitable<Result<T>>`; translate exceptions at library boundaries.
+Use Asio awaitables and `async::Runtime`. Effectful public operations carry
+`Result<T>` directly or with terminal metadata under the
+[error contract](error-handling.md); translate exceptions at library boundaries.
 
 - Give each mutable coordinator a strand. Independent values can be processed
   on worker executors without sharing mutable session state.

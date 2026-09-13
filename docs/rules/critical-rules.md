@@ -29,39 +29,38 @@ rejects `<thread>` in public headers as part of `make ci`.
 
 ## C3. No exceptions across library boundaries
 
-Public APIs return `core::Result<T> = std::expected<T, core::Error>`. Functions that
-must throw (e.g., `main`-level bootstrap) catch at the boundary and translate to
-`Result`.
+Fallible APIs use `core::Result<T> = std::expected<T, core::Error>`. A terminal
+domain value may pair this result with metadata shared by success and failure;
+`Result` remains the single failure channel. Functions that must throw catch at
+the boundary and translate to `Result`.
 
 **Why:** mixed exception/expected styles produce fragile error handling, partial
 unwinding under coroutines, and hard-to-trace failures across library seams.
 
 **Enforcement:** code review of public APIs; no automated throw check is installed.
 
-## C4. New SQLite code uses the expected API only
+## C4. SQLite code uses the expected API only
 
-`oran-storage` exposes `Result<T>`-returning operations. The legacy throwing wrappers
-(`must_ok`) **do not exist** in v2.
+`oran-storage` exposes `Result<T>`-returning operations. Callers inspect or
+propagate failures before starting dependent work.
 
-**Why:** mixed error models in `orangutan/` left ~120 callsites we couldn't migrate
-cleanly. We will not repeat it.
+**Why:** one error channel keeps coroutine cleanup and transaction boundaries
+explicit.
 
-**Enforcement:** the API surface does not include throwing wrappers, so there is
-nothing to misuse.
+**Enforcement:** storage APIs return results; code review checks propagation.
 
-## C5. Do not log or echo decrypted secrets
+## C5. Do not expose credential values
 
-The current config slice stores provider secret references as names such as
-`api_key_env`; it does not expose decrypted secret values. When the secret slice lands,
-secrets pass through `oran-config::SecretField` (read accessors). Their values are
-**never** passed to `oran-log` directly; the redaction filter would also catch known
-keys, but the source rule is: don't do it.
+Configuration stores provider credential references such as `api_key_env`.
+Provider construction resolves values through the named environment variable or
+an injected `SecretLookup`. Keep values out of errors, hooks, traces and logs;
+diagnostics identify only the profile and credential reference.
 
-**Why:** legacy `orangutan/` shipped with no automatic redaction in the logger. We
-added it to the v2 logger, but the cultural rule remains.
+**Why:** diagnostics can outlive the request and be visible beyond the credential's
+intended boundary.
 
-**Enforcement:** `scripts/check-secret-logs.sh` greps for known secret-field names
-adjacent to `log::*` calls.
+**Enforcement:** `scripts/check-secret-logs.sh` checks known secret names in logger
+calls; review and credential-failure tests cover errors and diagnostics.
 
 ## C6. Public headers contain no heavy includes
 

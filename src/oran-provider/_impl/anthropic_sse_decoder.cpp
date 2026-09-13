@@ -287,7 +287,6 @@ core::Result<Response> AnthropicSseDecoder::result() const {
       .stop_reason = stop_reason_,
       .usage = usage_,
       .model_used = model_,
-      .route_profile_used = std::nullopt,
   };
 }
 

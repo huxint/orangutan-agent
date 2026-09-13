@@ -61,9 +61,10 @@ class FakeProvider::Impl {
 public:
   explicit Impl(std::vector<ScriptedTurn> plan) : plan_{std::move(plan)} {}
 
-  [[nodiscard]] async::Awaitable<core::Result<Response>> send(Request request, Route route, EventSink* sink) const {
+  [[nodiscard]] async::Awaitable<core::Result<Response>>
+  send(Request request, ModelTarget target, EventSink* sink) const {
     static_cast<void>(request);
-    static_cast<void>(route);
+    static_cast<void>(target);
 
     const std::size_t cursor = reserve_slot();
 
@@ -182,8 +183,9 @@ FakeProvider::FakeProvider(std::vector<ScriptedTurn> plan) : impl_{std::make_uni
 
 FakeProvider::~FakeProvider() = default;
 
-async::Awaitable<core::Result<Response>> FakeProvider::send(Request request, Route route, EventSink* sink) const {
-  return impl_->send(std::move(request), std::move(route), sink);
+async::Awaitable<core::Result<Response>>
+FakeProvider::send(Request request, ModelTarget target, EventSink* sink) const {
+  return impl_->send(std::move(request), std::move(target), sink);
 }
 
 std::size_t FakeProvider::turns_consumed() const noexcept {

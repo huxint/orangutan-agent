@@ -321,9 +321,9 @@ public:
   explicit RecordingProvider(provider::Response response) : response_{std::move(response)} {}
 
   [[nodiscard]] async::Awaitable<core::Result<provider::Response>>
-  send(provider::Request request, provider::Route route, provider::EventSink* sink = nullptr) const override {
+  send(provider::Request request, provider::ModelTarget target, provider::EventSink* sink = nullptr) const override {
     request_ = std::move(request);
-    route_ = std::move(route);
+    target_ = std::move(target);
     ++calls_;
     if (sink != nullptr) {
       sink->on_done(response_.stop_reason);
@@ -335,8 +335,8 @@ public:
     return request_;
   }
 
-  [[nodiscard]] const std::optional<provider::Route>& route() const noexcept {
-    return route_;
+  [[nodiscard]] const std::optional<provider::ModelTarget>& target() const noexcept {
+    return target_;
   }
 
   [[nodiscard]] std::size_t calls() const noexcept {
@@ -346,7 +346,7 @@ public:
 private:
   provider::Response response_;
   mutable std::optional<provider::Request> request_;
-  mutable std::optional<provider::Route> route_;
+  mutable std::optional<provider::ModelTarget> target_;
   mutable std::size_t calls_{0};
 };
 
@@ -355,9 +355,9 @@ public:
   explicit RecordingSequenceProvider(std::vector<provider::Response> responses) : responses_{std::move(responses)} {}
 
   [[nodiscard]] async::Awaitable<core::Result<provider::Response>>
-  send(provider::Request request, provider::Route route, provider::EventSink* sink = nullptr) const override {
+  send(provider::Request request, provider::ModelTarget target, provider::EventSink* sink = nullptr) const override {
     requests_.push_back(std::move(request));
-    routes_.push_back(std::move(route));
+    static_cast<void>(target);
     const auto index = cursor_++;
     if (index >= responses_.size()) {
       co_return std::unexpected(core::Error::internal("provider plan exhausted"));
@@ -375,7 +375,6 @@ public:
 private:
   std::vector<provider::Response> responses_;
   mutable std::vector<provider::Request> requests_;
-  mutable std::vector<provider::Route> routes_;
   mutable std::size_t cursor_{0};
 };
 
@@ -390,9 +389,9 @@ public:
   explicit ProviderPhaseCancellationProvider(ProviderCancellationPoint point) : point_{point} {}
 
   [[nodiscard]] async::Awaitable<core::Result<provider::Response>>
-  send(provider::Request request, provider::Route route, provider::EventSink* sink = nullptr) const override {
+  send(provider::Request request, provider::ModelTarget target, provider::EventSink* sink = nullptr) const override {
     static_cast<void>(request);
-    static_cast<void>(route);
+    static_cast<void>(target);
 
     ++calls_;
     switch (point_) {
@@ -422,7 +421,6 @@ public:
         .stop_reason = core::StopReason::end_turn,
         .usage = {},
         .model_used = std::string{"phase-model"},
-        .route_profile_used = std::nullopt,
     };
   }
 
@@ -456,7 +454,6 @@ TEST_CASE("Loop returns text from a single fake-provider end_turn", "[unit][agen
                                          .cache_read_tokens = 0,
                                          .cost_estimate = std::nullopt},
                 .model_used = std::string{"fake-1"},
-                .route_profile_used = std::nullopt,
             },
         .deltas = {},
         .error = std::nullopt,
@@ -491,7 +488,6 @@ TEST_CASE("Loop maps prompt, messages, active tools, and cache hints into the pr
         .stop_reason = core::StopReason::end_turn,
         .usage = {},
         .model_used = std::nullopt,
-        .route_profile_used = std::nullopt,
     }};
     agent::Loop loop{provider, default_route(provider::PromptCacheOptions{.enabled = true, .min_prefix_bytes = 1})};
 
@@ -523,8 +519,8 @@ TEST_CASE("Loop maps prompt, messages, active tools, and cache hints into the pr
     REQUIRE(request.tools[1].name == "MemoryRecall");
     REQUIRE(request.cache.has_value());
     REQUIRE(request.cache->prefix_bytes == result->rendered_prompt.prefix_bytes);
-    REQUIRE(provider.route().has_value());
-    REQUIRE(provider.route()->primary.model == "fake-1");
+    REQUIRE(provider.target().has_value());
+    REQUIRE(provider.target()->model == "fake-1");
   });
 }
 
@@ -535,7 +531,6 @@ TEST_CASE("Loop sends each native schema once in both supported protocols", "[un
         .stop_reason = core::StopReason::end_turn,
         .usage = {},
         .model_used = std::nullopt,
-        .route_profile_used = std::nullopt,
     }};
     agent::Loop loop{recording, default_route()};
     const std::vector<core::ToolDef> catalog{core::ToolDef{
@@ -579,7 +574,6 @@ TEST_CASE("Loop validates explicit tool selection before provider execution", "[
         .stop_reason = core::StopReason::end_turn,
         .usage = {},
         .model_used = std::nullopt,
-        .route_profile_used = std::nullopt,
     }};
     agent::Loop loop{recording, default_route()};
     const auto catalog = loop_catalog();
@@ -610,14 +604,12 @@ TEST_CASE("Loop uses the stable default system preamble when no override is supp
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
         provider::Response{
             .blocks = {core::TextContent{.text = "defaulted"}},
             .stop_reason = core::StopReason::end_turn,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
     }};
     auto loop =
@@ -663,7 +655,6 @@ TEST_CASE("Loop uses the stable default system preamble when no override is supp
         .stop_reason = core::StopReason::end_turn,
         .usage = {},
         .model_used = std::nullopt,
-        .route_profile_used = std::nullopt,
     }};
     auto second_loop = agent::Loop{second_provider,
                                    default_route(provider::PromptCacheOptions{.enabled = true, .min_prefix_bytes = 1})};
@@ -686,7 +677,6 @@ TEST_CASE("Loop snapshots stable text for a turn and observes host edits on the 
         .stop_reason = core::StopReason::end_turn,
         .usage = {},
         .model_used = std::nullopt,
-        .route_profile_used = std::nullopt,
     };
     RecordingSequenceProvider provider{{
         provider::Response{
@@ -694,7 +684,6 @@ TEST_CASE("Loop snapshots stable text for a turn and observes host edits on the 
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
         done,
         done,
@@ -764,7 +753,6 @@ TEST_CASE("Loop publishes provider request and response hooks", "[unit][agent][l
                                  .cache_read_tokens = 2,
                                  .cost_estimate = 0.004},
         .model_used = std::string{"served-model"},
-        .route_profile_used = std::string{"fake"},
     }};
     agent::Loop loop{provider, default_route()};
     hook::Bus bus;
@@ -874,28 +862,28 @@ TEST_CASE("Loop publishes provider error hooks", "[unit][agent][loop][hooks]") {
 
 TEST_CASE("Loop attributes terminal fallback errors to the failing fallback target", "[unit][agent][loop][hooks]") {
   test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    // Execution-layer runtime scripted with a primary retryable failure that
-    // exhausts its attempt budget, then a terminal fallback failure. The
-    // failing target's context must reach the provider_error hook payload.
     class ScriptedBackend final : public provider::System {
     public:
       [[nodiscard]] async::Awaitable<core::Result<provider::Response>>
-      send(provider::Request request, provider::Route route, provider::EventSink* sink = nullptr) const override {
+      send(provider::Request request,
+           provider::ModelTarget target,
+           provider::EventSink* sink = nullptr) const override {
         static_cast<void>(request);
         static_cast<void>(sink);
-        static_cast<void>(route);
+        static_cast<void>(target);
         if (cursor_++ == 0) {
           co_return std::unexpected(core::Error::network("primary transient failure"));
         }
-        co_return std::unexpected(core::Error{core::ErrorKind::auth, "fallback key rejected"});
+        co_return std::unexpected(core::Error{core::ErrorKind::auth, "fallback key rejected"}
+                                      .with("provider_profile", "primary")
+                                      .with("provider_model", "spoofed-model"));
       }
 
     private:
       mutable std::size_t cursor_{0};
     };
     ScriptedBackend backend;
-    provider::execution::Runtime runtime{backend};
-    agent::Loop loop{runtime, fallback_route()};
+    agent::Loop loop{backend, fallback_route()};
     hook::Bus bus;
     std::vector<ProviderHookCapture> captures;
     auto sink = provider_capture_sink(captures);
@@ -932,22 +920,25 @@ TEST_CASE("Loop attributes terminal fallback errors to the fallback trace row", 
     class ScriptedBackend final : public provider::System {
     public:
       [[nodiscard]] async::Awaitable<core::Result<provider::Response>>
-      send(provider::Request request, provider::Route route, provider::EventSink* sink = nullptr) const override {
+      send(provider::Request request,
+           provider::ModelTarget target,
+           provider::EventSink* sink = nullptr) const override {
         static_cast<void>(request);
         static_cast<void>(sink);
-        static_cast<void>(route);
+        static_cast<void>(target);
         if (cursor_++ == 0) {
           co_return std::unexpected(core::Error::network("primary transient failure"));
         }
-        co_return std::unexpected(core::Error{core::ErrorKind::auth, "fallback key rejected"});
+        co_return std::unexpected(core::Error{core::ErrorKind::auth, "fallback key rejected"}
+                                      .with("provider_profile", "primary")
+                                      .with("provider_model", "spoofed-model"));
       }
 
     private:
       mutable std::size_t cursor_{0};
     };
     ScriptedBackend backend;
-    provider::execution::Runtime runtime{backend};
-    agent::Loop loop{runtime, fallback_route()};
+    agent::Loop loop{backend, fallback_route()};
 
     const auto catalog = loop_catalog();
     const std::vector<core::Message> tail{core::Message::user_text("fail")};
@@ -973,7 +964,7 @@ TEST_CASE("Loop attributes terminal fallback errors to the fallback trace row", 
   });
 }
 
-TEST_CASE("Loop computes missing provider usage cost from route pricing", "[unit][agent][loop][trace]") {
+TEST_CASE("Loop persists execution cost through response hooks and trace", "[unit][agent][loop][trace]") {
   TempDb db{"oran-agent-loop-priced-trace"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
     auto pool = open_trace_pool(io, db);
@@ -993,7 +984,6 @@ TEST_CASE("Loop computes missing provider usage cost from route pricing", "[unit
                                          .cache_read_tokens = 100'000,
                                          .cost_estimate = std::nullopt},
                 .model_used = std::nullopt,
-                .route_profile_used = std::nullopt,
             },
         .deltas = {},
         .error = std::nullopt,
@@ -1050,7 +1040,6 @@ TEST_CASE("Loop preserves provider-supplied usage cost over route pricing", "[un
                                          .cache_read_tokens = 1'000'000,
                                          .cost_estimate = 0.25},
                 .model_used = std::nullopt,
-                .route_profile_used = std::nullopt,
             },
         .deltas = {},
         .error = std::nullopt,
@@ -1071,12 +1060,18 @@ TEST_CASE("Loop preserves provider-supplied usage cost over route pricing", "[un
 TEST_CASE("Loop publishes provider fallback hooks when execution serves a fallback profile",
           "[unit][agent][loop][hooks]") {
   test::run_async([](asio::io_context&) -> async::Awaitable<void> {
-    RecordingProvider provider{provider::Response{
-        .blocks = {core::TextContent{.text = "fallback"}},
-        .stop_reason = core::StopReason::end_turn,
-        .usage = {},
-        .model_used = std::string{"fallback-1"},
-        .route_profile_used = std::string{"fallback"},
+    provider::FakeProvider provider{{
+        {.response = std::nullopt, .deltas = {}, .error = core::Error::network("primary unavailable"), .latency = {}},
+        {.response =
+             provider::Response{
+                 .blocks = {core::TextContent{.text = "fallback"}},
+                 .stop_reason = core::StopReason::end_turn,
+                 .usage = {},
+                 .model_used = std::string{"fallback-1"},
+             },
+         .deltas = {},
+         .error = std::nullopt,
+         .latency = {}},
     }};
     agent::Loop loop{provider, fallback_route()};
     hook::Bus bus;
@@ -1236,7 +1231,6 @@ TEST_CASE("Loop annotates cancellation during provider await", "[unit][agent][lo
               .stop_reason = core::StopReason::end_turn,
               .usage = {},
               .model_used = std::nullopt,
-              .route_profile_used = std::nullopt,
           },
       .deltas = {},
       .error = std::nullopt,
@@ -1351,7 +1345,7 @@ TEST_CASE("Loop classifies provider streaming cancellation phases", "[unit][agen
   });
 }
 
-TEST_CASE("Loop rejects tool-use responses until the dispatch iteration slice lands", "[unit][agent][loop]") {
+TEST_CASE("Loop rejects tool-use responses without dispatch services", "[unit][agent][loop]") {
   test::run_async([](asio::io_context&) -> async::Awaitable<void> {
     std::vector<provider::ScriptedTurn> plan;
     plan.push_back(provider::ScriptedTurn{
@@ -1361,7 +1355,6 @@ TEST_CASE("Loop rejects tool-use responses until the dispatch iteration slice la
                 .stop_reason = core::StopReason::tool_use,
                 .usage = {},
                 .model_used = std::nullopt,
-                .route_profile_used = std::nullopt,
             },
         .deltas = {},
         .error = std::nullopt,
@@ -1400,7 +1393,6 @@ TEST_CASE("Loop persists loop-boundary error trace rows", "[unit][agent][loop][t
                                          .cache_read_tokens = 4,
                                          .cost_estimate = 0.003},
                 .model_used = std::string{"fake-boundary-model"},
-                .route_profile_used = std::nullopt,
             },
         .deltas = {},
         .error = std::nullopt,
@@ -1455,7 +1447,6 @@ TEST_CASE("Loop dispatches one tool_use and re-enters the provider with a tool r
                                      .cache_read_tokens = 0,
                                      .cost_estimate = std::nullopt},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
         provider::Response{
             .blocks = {core::TextContent{.text = "final"}},
@@ -1466,7 +1457,6 @@ TEST_CASE("Loop dispatches one tool_use and re-enters the provider with a tool r
                                      .cache_read_tokens = 0,
                                      .cost_estimate = std::nullopt},
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route()};
@@ -1528,14 +1518,12 @@ TEST_CASE("Loop preserves structured tool output for provider protocol mapping",
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
         provider::Response{
             .blocks = {core::TextContent{.text = "final"}},
             .stop_reason = core::StopReason::end_turn,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route()};
@@ -1575,14 +1563,12 @@ TEST_CASE("Loop refreshes dispatch time for blocking permission approvals", "[un
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
         provider::Response{
             .blocks = {core::TextContent{.text = "approved final"}},
             .stop_reason = core::StopReason::end_turn,
             .usage = {},
             .model_used = std::string{"fake-1"},
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route()};
@@ -1666,14 +1652,12 @@ TEST_CASE("Loop routes tool dispatch through a caller-supplied scheduler", "[uni
                 .stop_reason = core::StopReason::tool_use,
                 .usage = {},
                 .model_used = std::nullopt,
-                .route_profile_used = std::nullopt,
             },
             provider::Response{
                 .blocks = {core::TextContent{.text = "unreached"}},
                 .stop_reason = core::StopReason::end_turn,
                 .usage = {},
                 .model_used = std::string{"fake-1"},
-                .route_profile_used = std::nullopt,
             },
         }};
         agent::Loop loop{provider, default_route()};
@@ -1723,10 +1707,11 @@ TEST_CASE("Loop rejects a missing trace executor before calling the provider",
   test::run_async([](asio::io_context&) -> async::Awaitable<void> {
     storage::Pool pool;
     storage::TraceRepository trace{pool};
-    RecordingProvider provider{provider::Response{.blocks = {core::TextContent{.text = "done"}},
-                                                  .stop_reason = core::StopReason::end_turn,
-                                                  .model_used = std::nullopt,
-                                                  .route_profile_used = std::nullopt}};
+    RecordingProvider provider{provider::Response{
+        .blocks = {core::TextContent{.text = "done"}},
+        .stop_reason = core::StopReason::end_turn,
+        .model_used = std::nullopt,
+    }};
     agent::Loop loop{provider, default_route()};
     const auto catalog = loop_catalog();
     const std::vector<core::Message> tail{core::Message::user_text("hello")};
@@ -1767,7 +1752,6 @@ TEST_CASE("Loop persists one terminal trace row for a text turn", "[unit][agent]
                                          .cache_read_tokens = 7,
                                          .cost_estimate = 0.012},
                 .model_used = std::string{"fake-trace-model"},
-                .route_profile_used = std::nullopt,
             },
         .deltas = {},
         .error = std::nullopt,
@@ -1842,7 +1826,6 @@ TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows"
                                      .cache_read_tokens = 7,
                                      .cost_estimate = 0.010},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
         provider::Response{
             .blocks = {core::TextContent{.text = "final"}},
@@ -1853,7 +1836,6 @@ TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows"
                                      .cache_read_tokens = 1,
                                      .cost_estimate = 0.002},
             .model_used = std::string{"fake-trace-model"},
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route()};
@@ -1939,7 +1921,6 @@ TEST_CASE("Loop generates trace turn ids and correlates storage audit rows", "[u
                                      .cache_read_tokens = 0,
                                      .cost_estimate = std::nullopt},
             .model_used = std::string{"fake-tool-model"},
-            .route_profile_used = std::nullopt,
         },
         provider::Response{
             .blocks = {core::TextContent{.text = "final"}},
@@ -1950,7 +1931,6 @@ TEST_CASE("Loop generates trace turn ids and correlates storage audit rows", "[u
                                      .cache_read_tokens = 0,
                                      .cost_estimate = std::nullopt},
             .model_used = std::string{"fake-final-model"},
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route()};
@@ -2014,14 +1994,12 @@ TEST_CASE("Loop disables trace rows and audit parent ids when trace is off", "[u
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
         provider::Response{
             .blocks = {core::TextContent{.text = "final"}},
             .stop_reason = core::StopReason::end_turn,
             .usage = {},
             .model_used = std::string{"fake-trace-model"},
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route()};
@@ -2082,7 +2060,6 @@ TEST_CASE("Loop persists provider cancellation trace rows", "[unit][agent][loop]
                 .stop_reason = core::StopReason::end_turn,
                 .usage = {},
                 .model_used = std::string{"never-used"},
-                .route_profile_used = std::nullopt,
             },
         .deltas = {},
         .error = std::nullopt,
@@ -2161,7 +2138,6 @@ TEST_CASE("Loop persists tool cancellation trace rows", "[unit][agent][loop][tra
                                      .cache_read_tokens = 3,
                                      .cost_estimate = 0.004},
             .model_used = std::string{"fake-tool-model"},
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route()};
@@ -2247,14 +2223,12 @@ TEST_CASE("Loop preserves multiple tool_results in tool_use order", "[unit][agen
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
         provider::Response{
             .blocks = {core::TextContent{.text = "ordered"}},
             .stop_reason = core::StopReason::end_turn,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route()};
@@ -2303,14 +2277,12 @@ TEST_CASE("Loop returns model-visible tool errors as tool_result blocks", "[unit
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
         provider::Response{
             .blocks = {core::TextContent{.text = "repaired"}},
             .stop_reason = core::StopReason::end_turn,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route()};
@@ -2344,7 +2316,6 @@ TEST_CASE("Loop propagates infrastructure errors from tool dispatch", "[unit][ag
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route()};
@@ -2377,7 +2348,6 @@ TEST_CASE("Loop annotates cancellation during tool dispatch", "[unit][agent][loo
           .stop_reason = core::StopReason::tool_use,
           .usage = {},
           .model_used = std::nullopt,
-          .route_profile_used = std::nullopt,
       },
   }};
   agent::Loop loop{provider, default_route()};
@@ -2434,14 +2404,12 @@ TEST_CASE("Loop stops repeated tool_use turns at the iteration cap", "[unit][age
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
         provider::Response{
             .blocks = {core::ToolUseContent{.id = "t2", .name = "FileRead", .input_json = "{}"}},
             .stop_reason = core::StopReason::tool_use,
             .usage = {},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route(), agent::LoopOptions{.max_iterations = 2}};
@@ -2485,7 +2453,6 @@ TEST_CASE("Loop persists iteration-cap trace rows", "[unit][agent][loop][trace]"
                                      .cache_read_tokens = 0,
                                      .cost_estimate = std::nullopt},
             .model_used = std::nullopt,
-            .route_profile_used = std::nullopt,
         },
         provider::Response{
             .blocks = {core::ToolUseContent{.id = "t2", .name = "FileRead", .input_json = "{}"}},
@@ -2496,7 +2463,6 @@ TEST_CASE("Loop persists iteration-cap trace rows", "[unit][agent][loop][trace]"
                                      .cache_read_tokens = 0,
                                      .cost_estimate = std::nullopt},
             .model_used = std::string{"iteration-final"},
-            .route_profile_used = std::nullopt,
         },
     }};
     agent::Loop loop{provider, default_route(), agent::LoopOptions{.max_iterations = 2}};

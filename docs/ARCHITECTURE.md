@@ -50,7 +50,7 @@ flowchart TD
 | `oran-memory` | Session serialization, scoped notes, a bounded discovery index and lexical recall. |
 | `oran-tool` | Tool selection, prepared calls, path admission, authorization and execution. |
 | `oran-prompt` | Pure text rendering and cache fingerprints over explicit core values. |
-| `oran-provider` | Protocol mapping, credential boundary, retries and fallback. |
+| `oran-provider` | Protocol mapping, credentials, retries, fallback, attribution and pricing. |
 | `oran-agent` | Provider/tool turn execution and bounded scheduling. |
 | `oran-bootstrap` | Construct resources and drive one session from the application. |
 

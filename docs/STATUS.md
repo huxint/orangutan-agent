@@ -1,181 +1,73 @@
 # Current State
 
-Orangutan runs a C++26 provider/tool/session loop with explicit configuration,
-scoped memory and persisted continuation through library composition. The runtime
-core and filesystem-tool reduction are complete. [Architecture](ARCHITECTURE.md)
-and the owning design contracts describe the implementation.
+Orangutan runs a C++26 provider/tool/session loop through library composition.
+The implemented core includes scoped memory, persisted continuation, explicit
+authorization and bounded child collaboration.
+[Architecture](ARCHITECTURE.md) owns the library graph.
 
-## Delivered Contracts
+## Runtime Boundary
 
-Completed transcript suffixes serialize before acquiring the storage writer and
-commit in one transaction through `Store::append_all` and
-`SessionRepository::append_messages`. A later insert or serialization failure
-leaves the preceding conversation intact. Existing schemas, message encoding and
-stored user data are preserved. Authorized memory-tool effects commit separately.
+Bootstrap converts explicit configuration into owned permission rules and provider
+profiles, then assembles workspace, audit, hooks and optional memory services.
+Config is consumed at composition; prompt rendering depends only on core values.
 
-Session memory owns conversation serialization; storage owns atomic writes and
-record readback for sessions, audits and traces. Existing session metadata, skill
-rows and audit views survive database reopening and subsequent appends. The
-[storage contract](design-docs/storage-runtime.md) owns these compatibility bounds.
+Each turn owns one selected native tool catalogue and one joined system prefix.
+Conversation remains typed. Cache identity follows submitted text and native
+declarations, without manually maintained section versions or old-key guarantees.
 
-Audit decisions, metadata enrichment and terminal traces run on explicit worker
-executors and return to the coordinating strand. Pool lease completions preserve
-the requesting executor. Dispatch awaits the durable decision before tool effects.
-Cancelled audit and trace writes finish before borrowed services are released and
-return an explicit cancellation result.
+Provider sends target one configured endpoint. Execution owns retry/fallback
+selection, terminal attribution and cost estimation. The loop consumes those
+outcomes for hooks and traces and accumulates usage. Backend error strings do not
+choose the attributed profile.
 
-Long-term memory tools borrow one scoped FTS5 backend. Sessions load a bounded
-memory index by default; exact-ID reads and topic search supply full notes through
-the tool loop. Browsing leaves read timestamps unchanged, and corrections retain
-creation/read history. The [memory contract](design-docs/memory-system.md) owns
-these boundaries, output compatibility and preservation of existing tables.
-SQLite connections configure their own handles from explicit options.
+FileRead, FileWrite and FileEdit use prepared, validated calls and pinned
+filesystem authority. Memory tools and AgentRun use the same dispatch gates.
+Unknown tool selections fail before provider work; visibility grants no authority.
+Path locks follow live holders and waiters, and cancellation joins borrowed work.
 
-`AgentRun` selects a configured child, assigns a fresh session ID and approval
-identity, and uses the child's prompt overlay and selected tool context. Parent
-and child rules intersect at dispatch, including rewritten input and approval
-limits. The child inherits workspace, memory scope, provider route, scheduler and
-strand. Admission defaults to four children per prompt and one generation.
-Cancellation joins the child's cleanup without waiting for an unrelated session. The
-[agent contract](design-docs/agent-platform.md) owns these bounds.
+Sessions load bounded history and a scoped memory index. Exact reads, lexical
+search and same-turn note corrections run through memory tools. Successful
+transcript suffixes serialize before acquiring the writer and commit atomically.
+Browsing does not update read timestamps; corrections preserve record history.
 
-FileRead, FileWrite and FileEdit are the built-in filesystem tools. Memory tools
-and AgentRun provide the other runtime extensions. Default selection exposes all
-registered definitions, including host extensions. The loop owns one sorted
-native catalogue and stable prefix per turn; descriptions and schemas are sent
-once through the provider tool fields. Prompt rendering depends only on core
-tool values and stable text, with conversation kept in typed messages. Stored
-capability names remain readable for compatibility.
+Configured children receive fresh session/approval identities, selected prompt
+and tool context, and the intersection of parent/child permissions. They share
+workspace, memory scope, provider route, scheduler and strand. Admission defaults
+to four children per prompt and one generation; parent cancellation joins them
+without waiting for unrelated sessions.
 
-Filesystem tools prepare owned, validated calls from final hook input before
-path admission and approval. Path intent and execution use that same request;
-registry dispatch no longer selects filesystem behavior by tool name. Invalid
-arguments audit a denial without consuming approval. The scheduler retains shared
-lock resources without interpreting arguments. Path entries follow live holders
-and waiters; the final participant releases the entry synchronously. Shared
-session exclusion and context-specific cleanup joins use the same scheduler. The
-[tool contract](design-docs/tool-runtime.md) owns ordering and lifetime.
+Filesystem, HTTP and SQLite work runs on explicit executors. Durable audit
+decisions precede tool effects; terminal traces and cancellation cleanup finish
+before services are released. Existing user records remain intact.
 
-File IO shares one descriptor-based read implementation and the pinned file
-mutation boundary. Each read owns its resources and observes current file bytes;
-the [IO contract](design-docs/io-runtime.md) owns ranges, fingerprints and
-cancellation. `PrivateDirectory` provides private state ownership for hosts.
+## Contract Owners
 
-Provider construction maps configuration to owned profile values, then builds one
-system over an injected transport. Complete route validation precedes credential
-lookup. Endpoint credentials stay inside the system; dispatch checks the selected
-profile, model and protocol before sending. Each protocol target applies its own
-cache policy to preserved prefix values, including retries and fallbacks.
-Provider no longer depends on prompt rendering. The
-[provider contract](design-docs/api-portability.md) owns this boundary, HTTP/SSE
-request lifetimes and delivery of stream callbacks before completion.
+- [Composition](design-docs/bootstrap-runtime.md): resources and host bindings.
+- [Agent](design-docs/agent-platform.md): turns, context and child execution.
+- [Provider](design-docs/api-portability.md): attempts, outcomes, streaming and cache policy.
+- [Prompt](rules/prompt-design.md): stable text and current fingerprint rules.
+- [Tools](design-docs/tool-runtime.md) and [permissions/hooks](design-docs/permissions-and-hooks.md): admission and effects.
+- [Memory](design-docs/memory-system.md), [storage](design-docs/storage-runtime.md) and [IO](design-docs/io-runtime.md): durable data and resource ownership.
 
-Bootstrap owns configuration-to-rule and profile conversion. Config depends only
-on core values; permission, provider and agent libraries have no configuration
-dependency. Permission conversion borrows only rule lists and returns an owned
-policy. The [composition contract](design-docs/bootstrap-runtime.md) owns adapter
-APIs and migration from their former runtime-library locations.
+Development permits breaking APIs, configuration and derived caches. Replace
+obsolete surfaces and their tests/docs directly, as defined by
+[collaboration](REPO_COLLAB_GUIDE.md); do not maintain parallel historical versions.
 
-Hooks expose the provider, tool, memory and approval events emitted by the
-runtime. `EventTraits` defines blocking admission; the
-[hook contract](design-docs/permissions-and-hooks.md) owns decisions and payloads.
+## Verification And Next Work
 
-## Verification
+The release gate covers all 14 test targets and `make ci`. Controlled HTTP
+integration composes transport, assembly and session continuation. Regressions
+cover denied effects, atomic persistence, scoped recall, fallback attribution,
+cost, stable prompt snapshots and joined cancellation. These checks establish
+runtime behavior, not spontaneous memory use or service-side cache hits.
 
-Release with LTO builds and passes all 14 test targets.
-`make ci` also passes. Controlled HTTP integration composes `HttpProviderBackend`,
-`RuntimeAssembly` and `AgentSession` to cover provider calls and persisted
-continuation. Tests also exercise scoped recall, permission intersection, bounded
-child sessions and cancellation joins.
-
-Public-boundary regressions cover atomic storage preservation, provider routing,
-final-input path admission, pinned authority, approval expiry and audit ordering.
-Prepared-call regressions cover invalid arguments before approval, rewritten
-requests, declared custom targets and retained ordinary-handler state.
-
-Memory regressions cover unhinted prompt inputs, scoped index discovery, exact
-reads, same-ID correction, reopened sessions, budgets and unavailable memory.
-Controlled providers supply the tool decisions; real-model consultation and
-learning quality remain a separate gate in the memory contract.
-
-Tool-context regressions cover custom registry defaults, explicit subsets and
-empty selections, unknown names, child restrictions and denied effects. Both
-supported protocol payloads contain each selected schema once. Tool definitions
-and system text stay fixed across iterations, host changes appear at the next
-prompt, and native schema changes invalidate cache identity without adding
-system text.
-Affected release benchmark targets also compile successfully.
-
-Cache regressions inspect both protocol payloads and composed loop/transport
-requests. They cover enabled/disabled targets, byte floors, stable-prefix
-breakpoints, retries and fallbacks, including an eligible fallback after a
-disabled primary. Controlled transport results do not establish service cache
-hits.
-
-Local verification is not reference-hardware compile/performance certification.
-Hosted quality and compile-budget gaps remain in [live debt](exec-plans/tech-debt-tracker.md).
-
-## Handoff
-
-Tool selection and prompt preparation are pure value boundaries. The loop owns
-one selected native catalogue and one rendered system prefix per turn. Prompt
-owns joined text and fingerprints; conversation advances through typed messages.
-Bootstrap maps host configuration and child restrictions into those interfaces.
-
-`runtime.prompt.active_tools` keeps its configuration shape: defaults now expose
-all registered tools, explicit lists select only named tools, and `[]` selects
-none. Unknown names fail before provider execution. Hosts using the removed
-discovery or promotion APIs must migrate to native declarations; the
-[tool contract](design-docs/tool-runtime.md) owns compatibility details. Existing
-message encoding, database versions, permission enforcement and child joins are
-preserved. [Prompt design](rules/prompt-design.md) owns prefix values, cache
-identity and migration from the removed diagnostic sections.
-
-Memory orientation, exact reads and same-turn durable correction remain part of
-ordinary work. All three bound memory tools are directly visible by default;
-visibility still grants no write authority.
-
-Development commands expose implemented repository checks and ordinary xmake
-targets. Public include hygiene runs in `make ci`; review-only rules state their
-enforcement limits. Compiler discovery is separate from the shared project policy
-used by libraries, tests and benchmarks. Default release LTO and opt-in debug
-sanitizers reach both compilation and linking; mode changes clear inactive flags.
-[BUILD_SYSTEM](BUILD_SYSTEM.md) owns the supported commands and options.
-
-Provider cache controls are complete. The loop supplies prefix hash/byte values,
-execution retains them across targets, and protocol encoders own eligibility and
-wire fields. The old section-copying mapper, duplicate loop cache result and
-provider-to-prompt dependency are removed. The
-[provider contract](design-docs/api-portability.md) owns protocol behavior,
-automatic-caching limits and migration from the removed mapping API.
-
-Configuration adapter reduction is complete. Provider route resolution and
-permission materialization live in bootstrap; provider owns endpoint values and
-credential lookup types. Config's unused storage dependency and the runtime
-libraries' config dependencies are removed. The dependency gate prevents those
-edges from returning. Configuration-adapter tests and benchmarks follow their
-bootstrap owner; permission evaluation and protocol transport remain covered in
-their own libraries. Configuration syntax and stored data are preserved.
-
-The next recommended slice is **session working memory**: persist goals,
-constraints, decisions, completed work and pending work alongside recent
-conversation. Address backup/import obligations before persistence changes;
-evaluate spontaneous memory use with the deployment model separately from
-controlled-provider tests.
-
-[Live debt](exec-plans/tech-debt-tracker.md) records findings and completion
-criteria. These recommendations do not change current contracts.
-
-The library provider/tool/session loop remains the acceptance boundary:
-authorized tool execution, scoped memory recall, persisted continuation and
-bounded child collaboration.
-
-[Live debt](exec-plans/tech-debt-tracker.md) records integration gates and extension
-prerequisites. Hosted C++ job evidence, analyzer coverage and reference-hardware
-compile-budget gates remain open. Real-model execution requires explicitly
+[Live debt](exec-plans/tech-debt-tracker.md) tracks session working memory,
+backup/import tooling, shell execution, real-model memory evaluation, hosted
+quality jobs and reference-hardware compile budgets. Persisted working context
+needs backup/import boundaries first. Real-model evaluation uses explicitly
 supplied credentials.
 
-Use the normal release gate from the repository root:
+Run the normal release gate from the repository root:
 
 ```sh
 xmake f -y -m release
@@ -184,16 +76,5 @@ xmake test -j4
 make ci
 ```
 
-Relevant regressions are in `tests/io/test_file.cpp`,
-`tests/io/test_directory_authority.cpp`, `tests/tool/test-path-locks.cpp`,
-`tests/tool/test-admission.cpp`, `tests/agent/test_scheduler.cpp`,
-`tests/bootstrap/test-child-agents.cpp`,
-`tests/tool/test-agent-run.cpp`, the permission intersection cases, and the
-storage/memory tests tagged `[atomic]`. Child lifetime checks include a concurrent
-independent session and a tool that delays cancellation cleanup.
-Repository reopen checks are tagged `[preservation]` in the storage tests.
-Scoped recall and hook gates are covered by `tests/memory/test_longterm.cpp` and
-`tests/hook/test_publish_blocking.cpp`; HTTP/SSE coverage lives in `tests/http`.
-
-[BUILD_SYSTEM](BUILD_SYSTEM.md) owns the supported toolchain and current activation
-limits; [testing-and-bench](rules/testing-and-bench.md) owns verification workflow.
+[Build system](BUILD_SYSTEM.md) owns supported options and toolchains;
+[testing](rules/testing-and-bench.md) owns affected targets and sanitizer checks.

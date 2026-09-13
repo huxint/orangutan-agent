@@ -12,7 +12,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
-#include <oran/provider/execution.hpp>
 #include <oran/provider/protocol_transport.hpp>
 
 #include "../test-helpers/run_async.hpp"
@@ -119,8 +118,7 @@ TEST_CASE("Loop preserves prefix cache controls across retries and route policie
     auto system = provider::make_protocol_system(
         transport, std::move(profiles), [](std::string_view) -> core::Result<std::string> { return "test-key"; });
     REQUIRE(system.has_value());
-    provider::execution::Runtime execution{**system};
-    agent::Loop loop{execution, std::move(route)};
+    agent::Loop loop{**system, std::move(route)};
     const std::vector<core::Message> messages{core::Message::user_text("dynamic conversation")};
     const std::vector<core::ToolDef> tools{
         {.name = "Lookup",
