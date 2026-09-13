@@ -1,9 +1,7 @@
-// tests/core/test_error.cpp — Error / Result / all_ok coverage.
+// tests/core/test_error.cpp — Error / Result coverage.
 
 #include <chrono>
 #include <format>
-#include <string>
-#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -79,31 +77,6 @@ TEST_CASE("Result<int> happy and error paths", "[unit][core][result]") {
   Result<int> sad = std::unexpected(Error::not_found("missing"));
   REQUIRE_FALSE(sad.has_value());
   REQUIRE(sad.error().kind() == ErrorKind::not_found);
-}
-
-TEST_CASE("all_ok returns a tuple when every input is ok", "[unit][core][result]") {
-  Result<int> a = 1;
-  Result<std::string> b = std::string{"two"};
-  Result<double> c = 3.0;
-
-  auto r = all_ok(std::move(a), std::move(b), std::move(c));
-  REQUIRE(r.has_value());
-
-  auto [x, y, z] = *std::move(r);
-  REQUIRE(x == 1);
-  REQUIRE(y == "two");
-  REQUIRE(z == 3.0);
-}
-
-TEST_CASE("all_ok short-circuits on the first error", "[unit][core][result]") {
-  Result<int> a = 1;
-  Result<int> b = std::unexpected(Error::network("boom"));
-  Result<int> c = std::unexpected(Error::internal("should not be inspected"));
-
-  auto r = all_ok(std::move(a), std::move(b), std::move(c));
-  REQUIRE_FALSE(r.has_value());
-  REQUIRE(r.error().kind() == ErrorKind::network);
-  REQUIRE(r.error().message() == "boom");
 }
 
 TEST_CASE("enum_name covers all ErrorKind enumerators", "[unit][core][error]") {

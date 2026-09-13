@@ -1,259 +1,95 @@
 # Error Handling
 
-The project's single error model is **`std::expected<T, core::Error>`**, aliased as
-`core::Result<T>`. This file documents the rule and the patterns that follow from it.
+Fallible library boundaries return `core::Result<T>`, an alias for
+`std::expected<T, core::Error>`. The declarations in
+[`error.hpp`](../../include/oran/core/error.hpp) own error categories, builders,
+context and retry metadata; [`result.hpp`](../../include/oran/core/result.hpp)
+owns the alias.
 
-## The Type
+## Sequential Work
 
-```cpp
-// include/oran/core/error.hpp
-namespace orangutan::core {
-
-enum class ErrorKind {
-  ok,
-  cancelled,
-  invalid_argument,
-  not_found,
-  permission_denied,
-  capability_not_granted,
-  config,
-  auth,
-  io,
-  network,
-  rate_limit,
-  upstream,
-  parsing,
-  timeout,
-  conflict,
-  not_modified,
-  storage,
-  hook_timeout,
-  hook_failed,
-  mailbox_overflowed,
-  internal,
-};
-
-class Error {
- public:
-  Error(ErrorKind, std::string message);
-
-  ErrorKind                kind()    const noexcept;
-  std::string_view         message() const noexcept;
-  std::span<const std::pair<std::string, std::string>> context() const noexcept;
-
-  // Builders for common categories.
-  static Error cancelled();
-  static Error invalid_argument(std::string);
-  static Error io(std::string);
-  static Error network(std::string);
-  static Error timeout(std::chrono::milliseconds);
-  // ... etc.
-
-  // Fluent attachment of structured context.
-  Error& with(std::string key, std::string value);
-  Error& with_retry_after(std::chrono::milliseconds);
-
-  // Predicates.
-  bool retryable() const noexcept;
-  bool transient() const noexcept;
-};
-
-template <typename T>
-using Result = std::expected<T, Error>;
-
-}  // namespace orangutan::core
-```
-
-## Usage
+Check a result before starting the next dependent operation. This preserves
+execution order and avoids effects after failure:
 
 ```cpp
-core::Result<provider::Response>
-some_caller(...) {
-  auto r = co_await provider.send(req);
-  if (!r) return std::unexpected(r.error());
-
-  // success path
-  return *r;
-}
-```
-
-When you have multiple sub-results to combine, use the legacy `utils::all_ok` pattern:
-
-```cpp
-core::Result<std::tuple<A, B, C>>
-parse_three(...) {
-  return core::all_ok(
-      parse_a(...),
-      parse_b(...),
-      parse_c(...));
-  // short-circuits on first error, returns the tuple on full success
-}
-```
-
-`all_ok` will be reimplemented in `oran-core` from the legacy `utils::all_ok`.
-
-## Rules
-
-### E1. Public APIs return `Result<T>`, not throw
-
-Library boundaries return `Result<T>`. Internal helpers may throw if local catch is
-trivial; cross-library calls always go through `Result<T>`.
-
-### E2. No exceptions across library boundaries
-
-```cpp
-// BAD: library exposes a throwing function
-namespace oran::foo {
-  Bar parse(std::string_view);  // throws ParseError
-}
-
-// GOOD: returns Result
-namespace oran::foo {
-  core::Result<Bar> parse(std::string_view);
-}
-```
-
-### E3. `asio` exceptions are caught at the awaitable boundary
-
-asio can throw `system_error` from the executor. Wrap with `try/catch` at the
-public function boundary and translate:
-
-```cpp
-async::Awaitable<core::Result<Response>>
-HttpClient::request(Request req) {
-  try {
-    co_return co_await do_request(std::move(req));
-  } catch (const std::system_error& e) {
-    co_return std::unexpected(core::Error::network(e.what()));
+core::Result<Combined> combine_inputs(Input input) {
+  auto first = parse_first(input);
+  if (!first) {
+    return std::unexpected(std::move(first).error());
   }
+  auto second = parse_second(input, *first);
+  if (!second) {
+    return std::unexpected(std::move(second).error());
+  }
+  return Combined{std::move(*first), std::move(*second)};
 }
 ```
 
-### E4. No `std::exception_ptr` in interfaces
-
-If you find yourself reaching for `exception_ptr`, you're trying to smuggle an
-exception through a value-based interface — refactor to `Result<T>`.
-
-### E5. Errors carry context
+The unused `core::all_ok` helper is removed. It combined already evaluated
+results; function arguments cannot short-circuit the operations producing them.
+Use explicit checks when migrating callers. Pure synchronous transformations
+may use standard `transform`, `and_then` and `or_else` operations:
 
 ```cpp
-core::Result<Response> r = co_await provider.send(req);
-if (!r) {
-  return std::unexpected(
-      r.error()
-          .with("agent", identity.agent_key)
-          .with("model",  route.primary.model)
-          .with("attempt", std::to_string(attempt)));
+auto response = co_await provider.send(request, route);
+auto usage = std::move(response).transform(
+    [](provider::Response value) { return value.usage; });
+```
+
+These callbacks are synchronous. Await retries and other asynchronous work in
+the surrounding coroutine, with explicit result checks.
+
+## Boundary Rules
+
+- No exceptions cross library boundaries. Catch exceptions from third-party or
+  Asio operations at the owning boundary and translate them into the appropriate
+  error category. Preserve cancellation as `ErrorKind::cancelled`; do not
+  reclassify it as a network or storage failure.
+- Public failure values use `Result<T>`; do not expose `std::exception_ptr` as a
+  second error channel. Internal completion handlers may translate exceptions.
+- Use `return` in ordinary functions and `co_return` in coroutines. Move owned
+  errors when propagating them.
+- Handle or propagate failed results; do not discard failures silently.
+- Use `Result<std::optional<T>>` when absence is a normal outcome. An operation
+  requiring a record may return `Error::not_found`; storage failure remains an
+  error in either contract.
+- Express recoverable invariant violations as `Error::internal`. Assertions may
+  check programmer assumptions, but release behavior must not depend on them.
+- Write explicit checks rather than control-flow macros, as required by C1.
+
+Cancellation requests must be followed by the required resource join before
+returning. [Async rules](async-and-concurrency.md) own coroutine lifetime and
+cancellation details.
+
+## Error Context And Retry
+
+Keep categories machine-readable and attach diagnostic fields separately from
+the message:
+
+```cpp
+auto response = co_await provider.send(request, route);
+if (!response) {
+  co_return std::unexpected(std::move(response).error()
+                               .with("agent", agent_key)
+                               .with("model", route.primary.model));
 }
 ```
 
-Context is what makes error logs useful. The legacy code's "the model failed" without
-identity / route was a recurring debugging pain.
+`Error::retryable()` classifies network, rate-limit, timeout and upstream errors.
+It is a category predicate, not permission to retry an arbitrary effect. Respect
+the operation's retry budget, `retry_after()` and visibility of partial output.
+The [provider contract](../design-docs/api-portability.md) owns provider retries
+and fallback. Never infer a category by parsing an error message.
 
-### E6. Retryability is a predicate on the error, not a string match
+Callers decide whether to report a returned error. `std::format` supports `Error`
+and includes its category, message, context and retry delay. The runtime has no
+logging facade; hosts own presentation. Do not include secrets in errors or
+diagnostic output.
 
-```cpp
-if (err.retryable()) {
-  co_await async::sleep_for(executor, backoff);
-  // retry
-} else {
-  co_return std::unexpected(err);
-}
-```
+## Verification
 
-`retryable()` is set on construction; do not parse the message.
-
-### E7. Don't conflate "not found" with "error"
-
-If your function is "look this up, may not exist", return `Result<std::optional<T>>`:
-
-```cpp
-core::Result<std::optional<memory::Record>>
-MemoryRuntime::find(std::string_view id) const;
-```
-
-Sentinel-less. `Result<std::optional<T>>` makes "absent" a normal outcome and reserves
-`Error` for real failures (storage broken, permission denied, …).
-
-### E8. Logging on the error path
-
-```cpp
-auto r = co_await some_call();
-if (!r) {
-  log::warn("some_call failed", field("err", r.error()));
-  co_return std::unexpected(r.error());
-}
-```
-
-`oran::log::field("err", error)` formats kind + message + context. Don't reach for
-`spdlog::error` directly; the shim handles structured fields.
-
-### E9. Don't construct cross-cutting macros
-
-`UNWRAP(...)`, `TRY(...)`, etc. are forbidden (critical rule C1). The explicit
-`if (!r) return std::unexpected(...)` is fine; we don't optimize for keystroke count.
-
-If a single function has > 5 such checks, that's a code-smell hint to split it.
-
-### E10. `assert` vs. error
-
-- `assert` for invariants — things the *programmer* must keep true.
-- `Error` for things the *world* might do wrong (network down, file missing,
-  user input bad).
-- `OR_VERIFY(cond)` is a small helper in `oran-core` that returns
-  `Error::internal("invariant violated: ...")` instead of aborting; use it where a
-  process abort is too aggressive (e.g., the agent loop).
-
-## Common Patterns
-
-### Map A Result
-
-```cpp
-auto r = co_await provider.send(req);
-auto mapped = r.transform([](Response x) { return x.usage.total_tokens; });
-// mapped : Result<std::uint64_t>
-```
-
-### Recover With A Fallback
-
-```cpp
-auto first = co_await primary.send(req);
-auto resolved = first.or_else([&](core::Error e) -> core::Result<Response> {
-  if (!e.retryable()) return std::unexpected(e);
-  return std::move(co_await secondary.send(req));  // awaited above
-});
-```
-
-### Convert Optional To Result
-
-```cpp
-core::Result<Record> get_or_fail(std::optional<Record> o) {
-  return o ? core::Result<Record>{*std::move(o)}
-           : std::unexpected(core::Error{ErrorKind::not_found, "missing"});
-}
-```
-
-## Tests
-
-- Every public API has at least one "fails as expected" test, exercising one
-  representative error category.
-- `tests/<lib>/errors.cpp` is the conventional location.
-- Catch2's `REQUIRE(!r);` plus `REQUIRE(r.error().kind() == ErrorKind::...)` is the
-  default shape.
-
-## Anti-Patterns
-
-- Throwing from a function that returns `Result<T>`. Pick one.
-- Returning `Result<void>` *and* logging-on-error inside the function. The caller
-  decides whether to log.
-- Stuffing rich context into the message string (`"timeout after 3000ms talking to
-  anthropic on attempt 2"`). Use structured context fields.
-- Swallowing errors silently (`(void)r;`). Either handle or propagate.
-
-## See Also
-
-- [`critical-rules.md#C3`](critical-rules.md) — the no-throw rule.
-- [`async-and-concurrency.md`](async-and-concurrency.md) — error semantics across
-  coroutines.
-- [`../design-docs/api-portability.md`](../design-docs/api-portability.md) — provider
-  error categories.
+Cover each fallible public API with a representative error case. Keep regressions
+with their library's existing tests, including cancellation, denied effects and
+storage integrity where relevant. Assign awaited results to locals before Catch2
+assertions. [Testing and benchmarks](testing-and-bench.md) owns the verification
+workflow; [critical rules](critical-rules.md) owns mandatory constraints.

@@ -314,12 +314,9 @@ The pairs above are the most common offenders. The general principle:
 
 ## Logging
 
-- Use the `oran::log::*` shim, never `spdlog::*` directly.
-- Levels: `trace, debug, info, warn, error`.
-- Structured fields preferred over composed strings: `log::info("tool dispatched",
-  field("tool", name), field("ms", duration_ms))`.
-- Never log raw secret values; the shim redacts but the rule prevents accidental
-  leakage.
+Hosts own diagnostic presentation. Follow [error handling](error-handling.md)
+for structured error context and reporting; runtime libraries have no logging
+facade. Never include secret values in diagnostics.
 
 ## Comments
 
