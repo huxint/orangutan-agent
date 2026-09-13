@@ -16,9 +16,10 @@ Asio. RAII owns resources; cancellation requests are followed by a lifetime join
 Conversation preparation returns an owned value and a persistence boundary.
 The session coordinator loads history and the scoped memory index, runs a turn and
 persists its completed suffix. Memory adapters borrow explicit storage services.
-Tool selection produces one owned catalogue per turn; pure prompt rendering
-fingerprints those native declarations without duplicating them in text. New
-abstractions must express a current domain boundary with a concrete caller.
+Tool selection and pure prompt rendering produce one owned catalogue and stable
+system prefix per turn. Native declarations contribute to the fingerprint;
+conversation stays in typed messages. New abstractions must express a current
+domain boundary with a concrete caller.
 
 ```mermaid
 flowchart TD

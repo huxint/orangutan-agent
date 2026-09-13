@@ -1,6 +1,7 @@
 #include <nanobench.h>
 
 #include <span>
+#include <string>
 #include <vector>
 
 #include <oran/core/tool_def.hpp>
@@ -29,6 +30,27 @@ void register_catalog_sections(ankerl::nanobench::Bench& bench) {
     const auto rendered = prompt::render({.system_preamble = "system", .tools = std::span{tools}.first(2)});
     ankerl::nanobench::doNotOptimizeAway(rendered.prefix_hash);
     ankerl::nanobench::doNotOptimizeAway(rendered.prefix_bytes);
+  });
+
+  const std::string preamble(4096, 'p');
+  const std::string memory(8192, 'm');
+  const auto inputs = prompt::RenderInputs{
+      .system_preamble = preamble,
+      .tools = tools,
+      .memory_framing = memory,
+  };
+  bench.unit("8 iterations").relative(false);
+  bench.run("prompt.rebuild_prefix_each_iteration", [&inputs] {
+    for (int iteration = 0; iteration < 8; ++iteration) {
+      const auto rendered = prompt::render(inputs);
+      ankerl::nanobench::doNotOptimizeAway(rendered);
+    }
+  });
+  bench.run("prompt.reuse_prefix_per_turn", [&inputs] {
+    const auto rendered = prompt::render(inputs);
+    for (int iteration = 0; iteration < 8; ++iteration) {
+      ankerl::nanobench::doNotOptimizeAway(rendered);
+    }
   });
 }
 

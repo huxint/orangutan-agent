@@ -42,10 +42,10 @@ Cancellation joins the child's cleanup without waiting for an unrelated session.
 FileRead, FileWrite and FileEdit are the built-in filesystem tools. Memory tools
 and AgentRun provide the other runtime extensions. Default selection exposes all
 registered definitions, including host extensions. The loop owns one sorted
-native catalogue per turn; descriptions and schemas are sent once through the
-provider tool fields. Prompt rendering depends only on core values and includes
-native definitions in its cache fingerprint. Stored capability names remain
-readable for compatibility.
+native catalogue and stable prefix per turn; descriptions and schemas are sent
+once through the provider tool fields. Prompt rendering depends only on core
+tool values and stable text, with conversation kept in typed messages. Stored
+capability names remain readable for compatibility.
 
 Filesystem tools prepare owned, validated calls from final hook input before
 path admission and approval. Path intent and execution use that same request;
@@ -101,8 +101,9 @@ learning quality remain a separate gate in the memory contract.
 Tool-context regressions cover custom registry defaults, explicit subsets and
 empty selections, unknown names, child restrictions and denied effects. Both
 supported protocol payloads contain each selected schema once. Tool definitions
-stay fixed across iterations, host changes appear at the next prompt, and native
-schema changes invalidate cache identity without adding system text.
+and system text stay fixed across iterations, host changes appear at the next
+prompt, and native schema changes invalidate cache identity without adding
+system text.
 Affected release benchmark targets also compile successfully.
 
 Cache regressions inspect both protocol payloads and composed loop/transport
@@ -116,11 +117,10 @@ Hosted quality and compile-budget gaps remain in [live debt](exec-plans/tech-deb
 
 ## Handoff
 
-Tool context reduction is complete. ToolSearch, SessionState, PromotionState,
-the post-turn transcript observer and the rendered-schema cache are removed.
-The tool layer owns pure selection, the prompt layer owns synchronous rendering
-and fingerprints, the loop owns the selected snapshot, and bootstrap maps host
-configuration and child restrictions into those value interfaces.
+Tool selection and prompt preparation are pure value boundaries. The loop owns
+one selected native catalogue and one rendered system prefix per turn. Prompt
+owns joined text and fingerprints; conversation advances through typed messages.
+Bootstrap maps host configuration and child restrictions into those interfaces.
 
 `runtime.prompt.active_tools` keeps its configuration shape: defaults now expose
 all registered tools, explicit lists select only named tools, and `[]` selects
@@ -128,8 +128,8 @@ none. Unknown names fail before provider execution. Hosts using the removed
 discovery or promotion APIs must migrate to native declarations; the
 [tool contract](design-docs/tool-runtime.md) owns compatibility details. Existing
 message encoding, database versions, permission enforcement and child joins are
-preserved. [Prompt design](rules/prompt-design.md) owns the new text section and
-cache identity contract.
+preserved. [Prompt design](rules/prompt-design.md) owns prefix values, cache
+identity and migration from the removed diagnostic sections.
 
 Memory orientation, exact reads and same-turn durable correction remain part of
 ordinary work. All three bound memory tools are directly visible by default;

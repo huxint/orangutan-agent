@@ -8,7 +8,7 @@ composes persisted context, scoped memory recall and explicit permission policy.
 
 1. Resolve the agent/session identity and permission policy before execution.
 2. Load bounded history, retain complete exchanges and load the scoped memory index.
-3. Build a deterministic prefix and append the user's message as dynamic context.
+3. Select native tools and render one deterministic system prefix for the turn.
 4. Request a provider response. Tool-use responses dispatch through one scheduler
    and registry; append their ordered results and request the next response.
 5. Return terminal text and typed content. Persist only the successful transcript
@@ -24,10 +24,11 @@ turn with its tool audits without storing raw prompt bodies.
 
 `RunTurnInputs` contains borrowed prompt/context views and explicit service
 references. They remain valid until the turn and its tool work finish.
-`RunTurnResult` owns the answer, usage, typed assistant blocks, rendered prompt
-and transcript. Cache identity is available in `rendered_prompt`; the duplicate
-`cache_hints` result is removed. The loop forwards unfiltered prefix identity to
-the provider, whose protocol boundary applies the selected route's cache policy.
+`RunTurnResult` owns the answer, usage, typed assistant blocks, stable
+`rendered_prompt` and transcript. `rendered_prompt.system_prompt` is the system
+text used by every iteration; conversation remains in the typed transcript.
+The loop forwards unfiltered prefix identity to the provider, whose protocol
+boundary applies the selected route's cache policy.
 The session coordinator serializes turns using the same session identity.
 
 Persisted history loads at most 128 rows and 512 KiB of encoded content/metadata.
@@ -36,10 +37,15 @@ remain intact.
 
 `RunTurnInputs` supplies an available tool catalogue and optional active names.
 The loop selects and owns a sorted native catalogue once, before provider
-execution. Every iteration uses that same value for declarations and prompt
-fingerprinting; tool outputs never change selection. An absent list exposes all
-available tools, an empty list exposes none, and unknown names fail explicitly.
+execution. The renderer consumes that value and copies stable caller text before
+the first provider request. Every iteration reuses the owned prefix and native
+declarations. Provider or tool callbacks cannot change that turn's prefix;
+the next turn observes host edits. Tool outputs change the conversation, never
+selection or stable text. An absent list exposes all available tools, an empty
+list exposes none, and unknown names fail explicitly.
 The [tool contract](tool-runtime.md) owns selection and dispatch authority.
+[Prompt design](../rules/prompt-design.md) owns the reduced rendering values,
+joining rules and migration from diagnostic sections.
 
 New trace rows store the native definition fingerprint in `active_catalog_hash`
 and zero in the retired `deferred_catalog_hash` column. Existing trace rows and

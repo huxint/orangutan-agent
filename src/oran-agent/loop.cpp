@@ -45,28 +45,6 @@ namespace {
   return default_preamble.section_text;
 }
 
-[[nodiscard]] std::optional<std::string> join_prompt_prefix(const prompt::RenderedPrompt& rendered) {
-  if (rendered.sections.empty()) {
-    return std::nullopt;
-  }
-
-  std::string output;
-  output.reserve(rendered.prefix_bytes - rendered.tool_catalog_bytes + rendered.sections.size());
-  for (const auto& section : rendered.sections) {
-    if (section.id == "conversation_tail") {
-      break;
-    }
-    if (section.content.empty()) {
-      continue;
-    }
-    if (!output.empty()) {
-      output.push_back('\n');
-    }
-    output.append(section.content);
-  }
-  return output;
-}
-
 void append_text_block(std::string& output, std::string_view text) {
   if (!output.empty() && !text.empty()) {
     output.push_back('\n');
@@ -670,10 +648,17 @@ public:
     if (!native_tools) {
       co_return std::unexpected(native_tools.error());
     }
-    const auto system_preamble = system_preamble_for(inputs, default_preamble_);
+    auto rendered = prompt::render(
+        prompt::RenderInputs{
+            .system_preamble = system_preamble_for(inputs, default_preamble_),
+            .tools = *native_tools,
+            .skills_catalog = inputs.skills_catalog,
+            .memory_framing = inputs.memory_framing,
+            .per_agent_overlay = inputs.per_agent_overlay,
+        },
+        options_.prompt_versions);
     const auto thinking_budget =
         inputs.thinking_budget.has_value() ? inputs.thinking_budget : route_.primary.thinking_budget;
-    std::optional<prompt::RenderedPrompt> last_rendered;
     std::string last_route_model = route_.primary.model;
     std::string last_route_profile = route_.primary.profile;
     // Per-turn fallback scheduler, lazily built only when the caller did not
@@ -682,20 +667,9 @@ public:
     std::optional<ToolScheduler> owned_scheduler;
 
     for (std::uint32_t iteration = 1; iteration <= options_.max_iterations; ++iteration) {
-      auto rendered = prompt::render(
-          prompt::RenderInputs{
-              .system_preamble = system_preamble,
-              .tools = *native_tools,
-              .skills_catalog = inputs.skills_catalog,
-              .memory_framing = inputs.memory_framing,
-              .per_agent_overlay = inputs.per_agent_overlay,
-              .conversation_tail = transcript,
-          },
-          options_.prompt_versions);
-
       auto request = provider::Request{
           .messages = transcript,
-          .system_prompt = join_prompt_prefix(rendered),
+          .system_prompt = rendered.system_prompt,
           .tools = *native_tools,
           .tool_choice = inputs.tool_choice,
           .max_tokens = inputs.max_tokens,
@@ -769,7 +743,6 @@ public:
                                          provider_started_at,
                                          provider_finished_at);
       add_usage(total_usage, response->usage);
-      last_rendered = rendered;
       last_route_model = response->model_used.value_or(route_.primary.model);
       last_route_profile = response->route_profile_used.value_or(route_.primary.profile);
 
@@ -966,10 +939,10 @@ public:
       };
     }
 
-    if (trace_writer_configured(inputs) && last_rendered.has_value()) {
+    if (trace_writer_configured(inputs) && options_.max_iterations != 0) {
       auto traced = co_await write_error_trace_turn(inputs,
                                                     route_,
-                                                    *last_rendered,
+                                                    rendered,
                                                     total_usage,
                                                     options_.max_iterations,
                                                     started_at_ns,

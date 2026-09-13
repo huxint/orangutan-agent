@@ -62,7 +62,8 @@ struct TraceContext {
 struct RunTurnInputs {
   /// Stable section (1). An empty value selects `agent::default_system_preamble()`.
   /// Supplying text is an explicit override for tests or embedders that already
-  /// own a repository-versioned preamble.
+  /// own a repository-versioned preamble. Stable text is copied once per turn,
+  /// before the first provider call; the next turn observes host edits.
   std::string_view system_preamble{};
   /// Available definitions. The selected native catalogue is sorted once per
   /// turn and shared by prompt fingerprinting and every provider request.
@@ -115,6 +116,7 @@ struct RunTurnResult {
   core::StopReason stop_reason{core::StopReason::end_turn};
   provider::Usage usage{};
   std::optional<std::string> model_used{};
+  /// Owned system text and cache identity shared by this turn's iterations.
   prompt::RenderedPrompt rendered_prompt{};
   std::uint32_t iterations{0};
   /// Complete transcript tail, including the terminal assistant response.
@@ -141,7 +143,7 @@ public:
   /// the cancelled result is returned.
   /// When `LoopOptions::max_iterations` is exhausted by repeated tool_use
   /// responses and a trace context is configured, an `error` row is written
-  /// with the final iteration's rendered prompt and the cumulative usage
+  /// with the turn's prefix identity and the cumulative usage
   /// before `Error::internal` (reason=`iteration_cap`) returns.
   [[nodiscard]] async::Awaitable<core::Result<RunTurnResult>> run_turn(RunTurnInputs inputs,
                                                                        provider::EventSink* sink = nullptr);

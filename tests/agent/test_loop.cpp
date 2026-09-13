@@ -1,6 +1,7 @@
 #include <oran/agent.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -476,7 +477,8 @@ TEST_CASE("Loop returns text from a single fake-provider end_turn", "[unit][agen
     REQUIRE(result->model_used == std::string{"fake-1"});
     REQUIRE(result->iterations == 1);
     REQUIRE(result->assistant_blocks.size() == 1);
-    REQUIRE(result->rendered_prompt.sections.size() == 5);
+    REQUIRE(result->rendered_prompt.system_prompt ==
+            "system: deterministic test preamble\nskills: none\nmemory: none\noverlay: coder");
     REQUIRE(fake.turns_consumed() == 1);
   });
 }
@@ -510,6 +512,7 @@ TEST_CASE("Loop maps prompt, messages, active tools, and cache hints into the pr
     REQUIRE(request.tool_choice == std::string{"auto"});
     REQUIRE(request.max_tokens == 512);
     REQUIRE(request.system_prompt.has_value());
+    REQUIRE(*request.system_prompt == result->rendered_prompt.system_prompt);
     REQUIRE(request.system_prompt->contains("system: deterministic test preamble"));
     REQUIRE_FALSE(request.system_prompt->contains("Tool: FileRead"));
     REQUIRE_FALSE(request.system_prompt->contains("Tool: MemoryRecall"));
@@ -653,8 +656,7 @@ TEST_CASE("Loop uses the stable default system preamble when no override is supp
     REQUIRE_FALSE(provider.requests()[0].system_prompt->contains("Tool: FileRead"));
     REQUIRE(provider.requests()[0].system_prompt->contains("memory: none"));
     REQUIRE(*provider.requests()[0].system_prompt == *provider.requests()[1].system_prompt);
-    REQUIRE(first->rendered_prompt.sections[0].id == "system_preamble");
-    REQUIRE(first->rendered_prompt.sections[0].content.contains("You are Orangutan"));
+    REQUIRE(first->rendered_prompt.system_prompt == *provider.requests()[0].system_prompt);
 
     RecordingProvider second_provider{provider::Response{
         .blocks = {core::TextContent{.text = "second"}},
@@ -672,9 +674,82 @@ TEST_CASE("Loop uses the stable default system preamble when no override is supp
     auto second = co_await second_loop.run_turn(second_inputs);
 
     REQUIRE(second.has_value());
-    REQUIRE(second->rendered_prompt.sections[0].content == first->rendered_prompt.sections[0].content);
-    REQUIRE(second->rendered_prompt.sections[0].content_hash == first->rendered_prompt.sections[0].content_hash);
-    REQUIRE(second->rendered_prompt.prefix_hash == first->rendered_prompt.prefix_hash);
+    REQUIRE(second->rendered_prompt == first->rendered_prompt);
+  });
+}
+
+TEST_CASE("Loop snapshots stable text for a turn and observes host edits on the next turn",
+          "[unit][agent][loop][prompt]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    const auto done = provider::Response{
+        .blocks = {core::TextContent{.text = "done"}},
+        .stop_reason = core::StopReason::end_turn,
+        .usage = {},
+        .model_used = std::nullopt,
+        .route_profile_used = std::nullopt,
+    };
+    RecordingSequenceProvider provider{{
+        provider::Response{
+            .blocks = {core::ToolUseContent{.id = "edit", .name = "UpdateContext", .input_json = "{}"}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = {},
+            .model_used = std::nullopt,
+            .route_profile_used = std::nullopt,
+        },
+        done,
+        done,
+    }};
+    agent::Loop loop{provider, default_route()};
+    std::array<std::string, 4> text{"system-before", "skills-before", "memory-before", "overlay-before"};
+    tool::Registry registry;
+    REQUIRE(registry.add(core::ToolDef::with_no_input("UpdateContext", "Update host context"),
+                         [&text](std::string_view, tool::DispatchContext&)
+                             -> async::Awaitable<core::Result<tool::Output>> {
+                           // Keep borrowed views valid while changing their source bytes.
+                           for (auto& section : text) {
+                             section.front() = '#';
+                           }
+                           co_return tool::Output::text_only("dynamic tool result");
+                         })
+                .has_value());
+    auto rules = allow_all_rules();
+    permission::NullAuditSink audit;
+    auto context = dispatch_context(io, rules, audit);
+    const auto catalog = registry.catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("dynamic user message")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.system_preamble = text[0];
+    inputs.skills_catalog = text[1];
+    inputs.memory_framing = text[2];
+    inputs.per_agent_overlay = text[3];
+    inputs.tools = &registry;
+    inputs.dispatch_context = &context;
+    const auto first = co_await loop.run_turn(inputs);
+
+    REQUIRE(first.has_value());
+    REQUIRE(provider.requests().size() == 2);
+    for (const auto& request : provider.requests()) {
+      REQUIRE(request.system_prompt == "system-before\nskills-before\nmemory-before\noverlay-before");
+      REQUIRE(request.system_prompt == first->rendered_prompt.system_prompt);
+      REQUIRE(request.cache.has_value());
+      CHECK(request.cache->prefix_hash == first->rendered_prompt.prefix_hash);
+      CHECK(request.cache->prefix_bytes == first->rendered_prompt.prefix_bytes);
+    }
+    REQUIRE(provider.requests()[0].messages == tail);
+    REQUIRE(provider.requests()[1].messages.size() == 3);
+    REQUIRE(tool_result_output_in(provider.requests()[1], "edit") == "dynamic tool result");
+    REQUIRE(first->transcript.size() == 4);
+
+    const std::vector<core::Message> next_tail{core::Message::user_text("next prompt")};
+    inputs.conversation_tail = next_tail;
+    const auto second = co_await loop.run_turn(inputs);
+    REQUIRE(second.has_value());
+    REQUIRE(provider.requests().size() == 3);
+    REQUIRE(provider.requests()[2].messages == next_tail);
+    REQUIRE(provider.requests()[2].system_prompt == "#ystem-before\n#kills-before\n#emory-before\n#verlay-before");
+    REQUIRE(second->rendered_prompt.system_prompt == provider.requests()[2].system_prompt);
+    REQUIRE(second->rendered_prompt.prefix_hash != first->rendered_prompt.prefix_hash);
+    REQUIRE(second->rendered_prompt.prefix_bytes == first->rendered_prompt.prefix_bytes);
   });
 }
 
@@ -2459,8 +2534,42 @@ TEST_CASE("Loop persists iteration-cap trace rows", "[unit][agent][loop][trace]"
     REQUIRE((*row)->stop_reason == "error");
     REQUIRE((*row)->iteration_count == 2);
     REQUIRE((*row)->route_model == "iteration-final");
+    REQUIRE(provider.requests().size() == 2);
+    REQUIRE(provider.requests().front().cache.has_value());
+    CHECK((*row)->prompt_prefix_hash == provider.requests().front().cache->prefix_hash);
+    CHECK((*row)->prompt_prefix_bytes == static_cast<std::int64_t>(provider.requests().front().cache->prefix_bytes));
     REQUIRE((*row)->input_tokens == 10);
     REQUIRE((*row)->output_tokens == 3);
     REQUIRE_FALSE((*row)->cancellation_phase.has_value());
+  });
+}
+
+TEST_CASE("Loop with no iterations makes no provider request or trace row", "[unit][agent][loop][trace]") {
+  TempDb db{"oran-agent-loop-zero-iterations"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    const auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+    RecordingSequenceProvider provider{std::vector<provider::Response>{}};
+    agent::Loop loop{provider, default_route(), agent::LoopOptions{.max_iterations = 0}};
+    const auto catalog = loop_catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("no attempts")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.turn_id = turn_id_with(0x56);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .blocking_executor = io.get_executor(),
+        .session_id = turn_id_with(0x90),
+        .agent_key = "coder",
+        .origin = "test",
+    };
+    const auto result = co_await loop.run_turn(inputs);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(contains_context(result.error(), "reason", "iteration_cap"));
+    CHECK(provider.requests().empty());
+    const auto row = co_await trace.get_turn(*inputs.turn_id);
+    REQUIRE(row.has_value());
+    CHECK_FALSE(row->has_value());
   });
 }
