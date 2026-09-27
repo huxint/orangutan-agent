@@ -37,6 +37,10 @@ configured model, protocol and fallback selection. Response/error/fallback hooks
 and terminal traces consume that attribution directly. The loop accumulates
 execution-priced usage; it does not search route lists, parse error context or
 estimate prices. `RunTurnResult::model_used` is the attributed model string.
+The turn state machine and its observation are separate: one per-turn observer
+publishes provider hooks and writes the single terminal trace for every exit.
+A cancelled exit shields cleanup and records its cancellation phase; a failed
+trace write annotates the turn error without replacing it.
 
 Persisted history loads at most 128 rows and 512 KiB of encoded content/metadata.
 An incomplete leading exchange is removed before model submission. Stored rows
