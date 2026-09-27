@@ -6,8 +6,10 @@ Domain libraries own their own schemas above this boundary.
 
 ## Ownership And Execution
 
-Connections and statements are RAII resources. Statements bind parameters;
-SQL values never enter queries by string interpolation. A `Pool` owns one writer
+Connections, statements and transactions are RAII resources. Statements bind
+parameters, positionally through `bind_all` for fixed parameter lists; SQL
+values never enter queries by string interpolation. A `Transaction` begins
+IMMEDIATE and rolls back on destruction unless its commit succeeded. A `Pool` owns one writer
 and a finite set of readers. Leases are exclusive and keep shared pool state
 alive. Connection setup configures the opened handle from explicit options.
 Per-connection statement caches are bounded and returned statements reset before

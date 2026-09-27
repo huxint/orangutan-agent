@@ -65,13 +65,6 @@ constexpr std::uintmax_t kMaxMigrationFileBytes = 8ULL * 1024 * 1024;
   return error;
 }
 
-[[nodiscard]] core::Error rollback_error(core::Error error, const Migration& migration, Connection& connection) {
-  if (auto rollback = connection.execute("ROLLBACK"); !rollback) {
-    error.with("rollback_error", std::string{rollback.error().message()});
-  }
-  return attach_migration_context(std::move(error), migration);
-}
-
 [[nodiscard]] core::Result<void> validate_migration_list(std::span<const Migration> migrations) {
   std::int64_t expected_version = 1;
   for (const auto& migration : migrations) {
@@ -223,10 +216,7 @@ constexpr std::uintmax_t kMaxMigrationFileBytes = 8ULL * 1024 * 1024;
   if (!insert) {
     return std::unexpected(insert.error());
   }
-  if (auto bound = insert->bind_int64(1, migration.version); !bound) {
-    return std::unexpected(bound.error());
-  }
-  if (auto bound = insert->bind_text(2, migration.name); !bound) {
+  if (auto bound = insert->bind_all(migration.version, migration.name); !bound) {
     return std::unexpected(bound.error());
   }
   auto stepped = insert->step();
@@ -245,7 +235,7 @@ constexpr std::uintmax_t kMaxMigrationFileBytes = 8ULL * 1024 * 1024;
   if (!query) {
     return std::unexpected(query.error());
   }
-  if (auto bound = query->bind_int64(1, version); !bound) {
+  if (auto bound = query->bind_all(version); !bound) {
     return std::unexpected(bound.error());
   }
   auto stepped = query->step();
@@ -268,22 +258,23 @@ constexpr std::uintmax_t kMaxMigrationFileBytes = 8ULL * 1024 * 1024;
 
 [[nodiscard]] core::Result<bool>
 apply_migration(Connection& connection, const Migration& migration, std::size_t migration_count) {
-  if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun) {
-    return std::unexpected(attach_migration_context(begun.error(), migration));
+  auto transaction = Transaction::begin(connection);
+  if (!transaction) {
+    return std::unexpected(attach_migration_context(transaction.error(), migration));
   }
 
   auto applied_versions = read_applied_versions(connection);
   if (!applied_versions) {
-    return std::unexpected(rollback_error(applied_versions.error(), migration, connection));
+    return std::unexpected(attach_migration_context(applied_versions.error(), migration));
   }
   auto current_version = validate_applied_versions(*applied_versions, migration_count);
   if (!current_version) {
-    return std::unexpected(rollback_error(current_version.error(), migration, connection));
+    return std::unexpected(attach_migration_context(current_version.error(), migration));
   }
 
   auto recorded_name = recorded_migration_name(connection, migration.version);
   if (!recorded_name) {
-    return std::unexpected(rollback_error(recorded_name.error(), migration, connection));
+    return std::unexpected(attach_migration_context(recorded_name.error(), migration));
   }
   if (recorded_name->has_value()) {
     if (**recorded_name != migration.name) {
@@ -291,24 +282,24 @@ apply_migration(Connection& connection, const Migration& migration, std::size_t 
           core::Error{core::ErrorKind::conflict, "migration version was applied with a different name"}.with(
               "recorded_name",
               **recorded_name);
-      return std::unexpected(rollback_error(std::move(conflict), migration, connection));
+      return std::unexpected(attach_migration_context(std::move(conflict), migration));
     }
-    if (auto committed = connection.execute("COMMIT"); !committed) {
-      return std::unexpected(rollback_error(committed.error(), migration, connection));
+    if (auto committed = transaction->commit(); !committed) {
+      return std::unexpected(attach_migration_context(committed.error(), migration));
     }
     return false;
   }
 
   if (auto applied = connection.execute(migration.sql); !applied) {
-    return std::unexpected(rollback_error(applied.error(), migration, connection));
+    return std::unexpected(attach_migration_context(applied.error(), migration));
   }
 
   if (auto recorded = record_migration(connection, migration); !recorded) {
-    return std::unexpected(rollback_error(recorded.error(), migration, connection));
+    return std::unexpected(attach_migration_context(recorded.error(), migration));
   }
 
-  if (auto committed = connection.execute("COMMIT"); !committed) {
-    return std::unexpected(rollback_error(committed.error(), migration, connection));
+  if (auto committed = transaction->commit(); !committed) {
+    return std::unexpected(attach_migration_context(committed.error(), migration));
   }
   return true;
 }

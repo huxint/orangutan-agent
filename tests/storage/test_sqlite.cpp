@@ -1,10 +1,13 @@
 // tests/storage/test_sqlite.cpp — expected-only SQLite core coverage.
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -240,4 +243,56 @@ TEST_CASE("read-only connections reject writes", "[unit][storage][sqlite]") {
   auto write = readonly->execute("INSERT INTO items(id) VALUES (1)");
   REQUIRE_FALSE(write.has_value());
   REQUIRE(write.error().kind() == core::ErrorKind::storage);
+}
+
+TEST_CASE("bind_all binds positional values by type", "[unit][storage][sqlite]") {
+  auto connection = open_memory();
+  REQUIRE(connection.execute("CREATE TABLE items(a TEXT, b INTEGER, c REAL, d INTEGER, e BLOB, f TEXT, g TEXT)")
+              .has_value());
+  auto insert = connection.prepare("INSERT INTO items VALUES (?, ?, ?, ?, ?, ?, ?)");
+  REQUIRE(insert.has_value());
+  const auto blob = std::array{std::byte{0x01}, std::byte{0x02}};
+  REQUIRE(insert
+              ->bind_all(std::string{"text"},
+                         7,
+                         0.5,
+                         true,
+                         blob,
+                         std::optional<std::string_view>{},
+                         storage::Null{})
+              .has_value());
+  REQUIRE(insert->step() == storage::StepResult::done);
+
+  auto result = connection.query("SELECT a, b, c, d, typeof(e), length(e), f IS NULL, g IS NULL FROM items");
+  REQUIRE(result.has_value());
+  REQUIRE(result->rows.size() == 1);
+  const auto& row = result->rows[0].values;
+  CHECK(row[0] == "text");
+  CHECK(row[1] == "7");
+  CHECK(row[2] == "0.5");
+  CHECK(row[3] == "1");
+  CHECK(row[4] == "blob");
+  CHECK(row[5] == "2");
+  CHECK(row[6] == "1");
+  CHECK(row[7] == "1");
+}
+
+TEST_CASE("Transaction rolls back unless committed", "[unit][storage][sqlite]") {
+  auto connection = open_memory();
+  REQUIRE(connection.execute("CREATE TABLE items(id INTEGER)").has_value());
+  {
+    auto transaction = storage::Transaction::begin(connection);
+    REQUIRE(transaction.has_value());
+    REQUIRE(connection.execute("INSERT INTO items VALUES (1)").has_value());
+  }
+  {
+    auto transaction = storage::Transaction::begin(connection);
+    REQUIRE(transaction.has_value());
+    REQUIRE(connection.execute("INSERT INTO items VALUES (2)").has_value());
+    REQUIRE(transaction->commit().has_value());
+  }
+  auto result = connection.query("SELECT id FROM items");
+  REQUIRE(result.has_value());
+  REQUIRE(result->rows.size() == 1);
+  CHECK(result->rows[0].values[0] == "2");
 }

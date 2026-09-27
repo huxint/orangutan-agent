@@ -477,4 +477,27 @@ core::Result<QueryResult> Connection::query(std::string_view sql) {
   return result;
 }
 
+core::Result<Transaction> Transaction::begin(Connection& connection) {
+  if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun) {
+    return std::unexpected(std::move(begun).error());
+  }
+  return Transaction{connection};
+}
+
+Transaction::Transaction(Transaction&& other) noexcept : connection_{std::exchange(other.connection_, nullptr)} {}
+
+Transaction::~Transaction() {
+  if (connection_ != nullptr) {
+    [[maybe_unused]] auto rolled_back = connection_->execute("ROLLBACK");
+  }
+}
+
+core::Result<void> Transaction::commit() {
+  if (auto committed = connection_->execute("COMMIT"); !committed) {
+    return committed;
+  }
+  connection_ = nullptr;
+  return {};
+}
+
 }  // namespace orangutan::storage

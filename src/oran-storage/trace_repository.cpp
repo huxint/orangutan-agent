@@ -57,10 +57,6 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
   return core::Error::invalid_argument("trace repository field is invalid").with("field", std::move(field));
 }
 
-[[nodiscard]] std::span<const std::byte, 16> as_span(const TraceId& id) noexcept {
-  return std::span<const std::byte, 16>{id};
-}
-
 [[nodiscard]] std::span<const std::byte> bytes_of(std::string_view text) noexcept {
   return std::as_bytes(std::span{text.data(), text.size()});
 }
@@ -375,10 +371,6 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
   return sql;
 }
 
-[[nodiscard]] core::Result<void> bind_trace_id(Statement& statement, int index, const TraceId& id) {
-  return statement.bind_blob(index, as_span(id));
-}
-
 }  // namespace
 
 TraceRepository::TraceRepository(Pool& pool, TraceRepositoryOptions options) noexcept
@@ -421,81 +413,15 @@ async::Awaitable<core::Result<TraceTurnRecord>> TraceRepository::append_turn(App
   }
   auto& statement = cached->statement();
 
-  if (auto bound = bind_trace_id(statement, 1, request.turn_id); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (request.parent_turn_id.has_value()) {
-    if (auto bound = bind_trace_id(statement, 2, *request.parent_turn_id); !bound) {
-      co_return std::unexpected(bound.error());
-    }
-  } else if (auto bound = statement.bind_null(2); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = bind_trace_id(statement, 3, request.session_id); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(4, request.agent_key); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(5, request.origin); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(6, request.route_profile); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(7, request.route_model); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(8, request.started_at_ns); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(9, request.finished_at_ns); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(10, request.stop_reason); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(11, request.iteration_count); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(12, to_sql_hash(request.prompt_prefix_hash)); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(13, request.prompt_prefix_bytes); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(14, to_sql_hash(request.active_catalog_hash)); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(15, to_sql_hash(request.deferred_catalog_hash)); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(16, request.cache_creation_tokens); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(17, request.cache_read_tokens); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(18, request.input_tokens); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(19, request.output_tokens); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_double(20, request.cost_estimate_usd); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (request.cancellation_phase.has_value()) {
-    if (auto bound = statement.bind_text(21, *request.cancellation_phase); !bound) {
-      co_return std::unexpected(bound.error());
-    }
-  } else if (auto bound = statement.bind_null(21); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_blob(22, bytes_of(request.context_json)); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(23, request.schema_version); !bound) {
+  if (auto bound = statement.bind_all(
+          request.turn_id, request.parent_turn_id, request.session_id, request.agent_key, request.origin,
+          request.route_profile, request.route_model, request.started_at_ns, request.finished_at_ns,
+          request.stop_reason, request.iteration_count, to_sql_hash(request.prompt_prefix_hash),
+          request.prompt_prefix_bytes, to_sql_hash(request.active_catalog_hash),
+          to_sql_hash(request.deferred_catalog_hash), request.cache_creation_tokens, request.cache_read_tokens,
+          request.input_tokens, request.output_tokens, request.cost_estimate_usd, request.cancellation_phase,
+          bytes_of(request.context_json), request.schema_version);
+      !bound) {
     co_return std::unexpected(bound.error());
   }
 
@@ -531,7 +457,7 @@ async::Awaitable<core::Result<std::optional<TraceTurnRecord>>> TraceRepository::
     co_return std::unexpected(cached.error());
   }
   auto& statement = cached->statement();
-  if (auto bound = bind_trace_id(statement, 1, turn_id); !bound) {
+  if (auto bound = statement.bind_all(turn_id); !bound) {
     co_return std::unexpected(bound.error());
   }
 
@@ -576,7 +502,7 @@ TraceRepository::list_turns(ListTraceTurnsOptions options) {
 
   int index = 1;
   if (options.session_id.has_value()) {
-    if (auto bound = bind_trace_id(statement, index++, *options.session_id); !bound) {
+    if (auto bound = statement.bind_blob(index++, *options.session_id); !bound) {
       co_return std::unexpected(bound.error());
     }
   }

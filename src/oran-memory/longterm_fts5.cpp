@@ -314,79 +314,6 @@ required_text(storage::Statement& statement, int index, std::string_view field) 
   };
 }
 
-[[nodiscard]] core::Result<void> bind_key(storage::Statement& statement, int first_index, const RecordKey& key) {
-  if (auto bound = statement.bind_text(first_index, key.scope_key); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(first_index + 1, key.id); !bound) {
-    return bound;
-  }
-  return {};
-}
-
-[[nodiscard]] core::Result<void> bind_record_for_upsert(storage::Statement& statement,
-                                                        const Record& record,
-                                                        std::string_view tags_json,
-                                                        std::string_view linked_json) {
-  if (auto bound = statement.bind_text(1, record.key.scope_key); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(2, record.key.id); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(3, core::enum_name(record.kind)); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(4, record.title); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(5, record.body); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(6, core::time::format_iso8601_utc(record.created_at)); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(7, core::time::format_iso8601_utc(record.updated_at)); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(8, core::time::format_iso8601_utc(record.last_read_at)); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_double(9, record.importance); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(10, tags_json); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(11, linked_json); !bound) {
-    return bound;
-  }
-  return statement.bind_int64(12, record.shadow ? 1 : 0);
-}
-
-[[nodiscard]] core::Result<void>
-bind_record_for_fts(storage::Statement& statement, const Record& record, std::string_view tags_text) {
-  if (auto bound = statement.bind_text(1, record.key.scope_key); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(2, record.key.id); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(3, core::enum_name(record.kind)); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_int64(4, record.shadow ? 1 : 0); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(5, record.title); !bound) {
-    return bound;
-  }
-  if (auto bound = statement.bind_text(6, record.body); !bound) {
-    return bound;
-  }
-  return statement.bind_text(7, tags_text);
-}
-
 [[nodiscard]] core::Result<void> step_done(storage::Statement& statement, std::string_view operation) {
   auto step = statement.step();
   if (!step) {
@@ -399,13 +326,6 @@ bind_record_for_fts(storage::Statement& statement, const Record& record, std::st
   return {};
 }
 
-[[nodiscard]] core::Error rollback_error(core::Error error, storage::Connection& connection) {
-  if (auto rollback = connection.execute("ROLLBACK"); !rollback) {
-    error.with("rollback_error", std::string{rollback.error().message()});
-  }
-  return error;
-}
-
 [[nodiscard]] core::Result<void>
 delete_fts_row(storage::Connection& connection, storage::StatementCache& cache, const RecordKey& key) {
   auto cached = cache.acquire(connection, kDeleteFtsSql);
@@ -413,7 +333,7 @@ delete_fts_row(storage::Connection& connection, storage::StatementCache& cache, 
     return std::unexpected(std::move(cached).error());
   }
   auto& statement = cached->statement();
-  if (auto bound = bind_key(statement, 1, key); !bound) {
+  if (auto bound = statement.bind_all(key.scope_key, key.id); !bound) {
     return bound;
   }
   return step_done(statement, "delete_fts");
@@ -517,7 +437,7 @@ async::Awaitable<core::Result<Record>> Fts5Backend::get(RecordKey key) {
     co_return std::unexpected(std::move(cached).error());
   }
   auto& statement = cached->statement();
-  if (auto bound = bind_key(statement, 1, key); !bound) {
+  if (auto bound = statement.bind_all(key.scope_key, key.id); !bound) {
     co_return std::unexpected(std::move(bound).error());
   }
 
@@ -615,8 +535,9 @@ async::Awaitable<core::Result<Record>> Fts5Backend::upsert(Record record) {
   auto& connection = writer->connection();
   auto& cache = writer->statement_cache();
 
-  if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun) {
-    co_return std::unexpected(std::move(begun).error());
+  auto transaction = storage::Transaction::begin(connection);
+  if (!transaction) {
+    co_return std::unexpected(std::move(transaction).error());
   }
 
   const auto tags_json = string_list_to_json(record.tags);
@@ -625,50 +546,67 @@ async::Awaitable<core::Result<Record>> Fts5Backend::upsert(Record record) {
   {
     auto cached = cache.acquire(connection, kUpsertRecordSql);
     if (!cached) {
-      co_return std::unexpected(rollback_error(std::move(cached).error(), connection));
+      co_return std::unexpected(std::move(cached).error());
     }
     auto& statement = cached->statement();
-    if (auto bound = bind_record_for_upsert(statement, record, tags_json, linked_json); !bound) {
-      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    if (auto bound = statement.bind_all(record.key.scope_key,
+                                            record.key.id,
+                                            core::enum_name(record.kind),
+                                            record.title,
+                                            record.body,
+                                            core::time::format_iso8601_utc(record.created_at),
+                                            core::time::format_iso8601_utc(record.updated_at),
+                                            core::time::format_iso8601_utc(record.last_read_at),
+                                            record.importance,
+                                            tags_json,
+                                            linked_json,
+                                            record.shadow); !bound) {
+      co_return std::unexpected(std::move(bound).error());
     }
     auto step = statement.step();
     if (!step) {
-      co_return std::unexpected(rollback_error(std::move(step).error(), connection));
+      co_return std::unexpected(std::move(step).error());
     }
     if (*step != storage::StepResult::row) {
       co_return std::unexpected(
-          rollback_error(core::Error::storage("long-term memory upsert returned no row"), connection));
+          core::Error::storage("long-term memory upsert returned no row"));
     }
     auto row = read_record_row(statement);
     if (!row) {
-      co_return std::unexpected(rollback_error(std::move(row).error(), connection));
+      co_return std::unexpected(std::move(row).error());
     }
     stored = std::move(*row);
     if (auto done = step_done(statement, "upsert_record"); !done) {
-      co_return std::unexpected(rollback_error(std::move(done).error(), connection));
+      co_return std::unexpected(std::move(done).error());
     }
   }
 
   if (auto deleted = delete_fts_row(connection, cache, stored.key); !deleted) {
-    co_return std::unexpected(rollback_error(std::move(deleted).error(), connection));
+    co_return std::unexpected(std::move(deleted).error());
   }
   {
     auto cached = cache.acquire(connection, kInsertFtsSql);
     if (!cached) {
-      co_return std::unexpected(rollback_error(std::move(cached).error(), connection));
+      co_return std::unexpected(std::move(cached).error());
     }
     auto& statement = cached->statement();
-    const auto tags_text = joined_tags(stored.tags);
-    if (auto bound = bind_record_for_fts(statement, stored, tags_text); !bound) {
-      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    if (auto bound = statement.bind_all(stored.key.scope_key,
+                                        stored.key.id,
+                                        core::enum_name(stored.kind),
+                                        stored.shadow,
+                                        stored.title,
+                                        stored.body,
+                                        joined_tags(stored.tags));
+        !bound) {
+      co_return std::unexpected(std::move(bound).error());
     }
     if (auto inserted = step_done(statement, "insert_fts"); !inserted) {
-      co_return std::unexpected(rollback_error(std::move(inserted).error(), connection));
+      co_return std::unexpected(std::move(inserted).error());
     }
   }
 
-  if (auto committed = connection.execute("COMMIT"); !committed) {
-    co_return std::unexpected(rollback_error(std::move(committed).error(), connection));
+  if (auto committed = transaction->commit(); !committed) {
+    co_return std::unexpected(std::move(committed).error());
   }
   co_return stored;
 }
@@ -688,34 +626,29 @@ async::Awaitable<core::Result<void>> Fts5Backend::touch(std::vector<RecordKey> k
     co_return std::unexpected(std::move(writer).error());
   }
   auto& connection = writer->connection();
-  if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun) {
-    co_return std::unexpected(std::move(begun).error());
+  auto transaction = storage::Transaction::begin(connection);
+  if (!transaction) {
+    co_return std::unexpected(std::move(transaction).error());
   }
   auto cached = writer->statement_cache().acquire(connection, kTouchRecordSql);
   if (!cached) {
-    co_return std::unexpected(rollback_error(std::move(cached).error(), connection));
+    co_return std::unexpected(std::move(cached).error());
   }
   auto& statement = cached->statement();
   const auto read_at_text = core::time::format_iso8601_utc(read_at);
   for (const auto& key : keys) {
     if (auto reset = statement.reset(); !reset) {
-      co_return std::unexpected(rollback_error(std::move(reset).error(), connection));
+      co_return std::unexpected(std::move(reset).error());
     }
-    if (auto bound = statement.bind_text(1, read_at_text); !bound) {
-      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
-    }
-    if (auto bound = bind_key(statement, 2, key); !bound) {
-      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
-    }
-    if (auto bound = statement.bind_text(4, read_at_text); !bound) {
-      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    if (auto bound = statement.bind_all(read_at_text, key.scope_key, key.id, read_at_text); !bound) {
+      co_return std::unexpected(std::move(bound).error());
     }
     if (auto done = step_done(statement, "touch_record"); !done) {
-      co_return std::unexpected(rollback_error(std::move(done).error(), connection));
+      co_return std::unexpected(std::move(done).error());
     }
   }
-  if (auto committed = connection.execute("COMMIT"); !committed) {
-    co_return std::unexpected(rollback_error(std::move(committed).error(), connection));
+  if (auto committed = transaction->commit(); !committed) {
+    co_return std::unexpected(std::move(committed).error());
   }
   co_return core::Result<void>{};
 }
@@ -732,27 +665,28 @@ async::Awaitable<core::Result<void>> Fts5Backend::remove(RecordKey key) {
   auto& connection = writer->connection();
   auto& cache = writer->statement_cache();
 
-  if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun) {
-    co_return std::unexpected(std::move(begun).error());
+  auto transaction = storage::Transaction::begin(connection);
+  if (!transaction) {
+    co_return std::unexpected(std::move(transaction).error());
   }
   if (auto deleted = delete_fts_row(connection, cache, key); !deleted) {
-    co_return std::unexpected(rollback_error(std::move(deleted).error(), connection));
+    co_return std::unexpected(std::move(deleted).error());
   }
   {
     auto cached = cache.acquire(connection, kDeleteRecordSql);
     if (!cached) {
-      co_return std::unexpected(rollback_error(std::move(cached).error(), connection));
+      co_return std::unexpected(std::move(cached).error());
     }
     auto& statement = cached->statement();
-    if (auto bound = bind_key(statement, 1, key); !bound) {
-      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    if (auto bound = statement.bind_all(key.scope_key, key.id); !bound) {
+      co_return std::unexpected(std::move(bound).error());
     }
     if (auto deleted = step_done(statement, "delete_record"); !deleted) {
-      co_return std::unexpected(rollback_error(std::move(deleted).error(), connection));
+      co_return std::unexpected(std::move(deleted).error());
     }
   }
-  if (auto committed = connection.execute("COMMIT"); !committed) {
-    co_return std::unexpected(rollback_error(std::move(committed).error(), connection));
+  if (auto committed = transaction->commit(); !committed) {
+    co_return std::unexpected(std::move(committed).error());
   }
   co_return core::Result<void>{};
 }

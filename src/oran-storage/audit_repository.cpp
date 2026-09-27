@@ -165,32 +165,6 @@ RETURNING id, event_kind, scope_key, agent_key, tool_name, identity, verdict, ou
   return std::optional<std::string>{**std::move(value)};
 }
 
-[[nodiscard]] std::span<const std::byte, 16> turn_id_span(const core::TurnId& id) noexcept {
-  return std::span<const std::byte, 16>{id};
-}
-
-[[nodiscard]] core::Result<void>
-bind_optional_turn_id(Statement& statement, int index, const std::optional<core::TurnId>& id) {
-  if (!id.has_value()) {
-    return statement.bind_null(index);
-  }
-  return statement.bind_blob(index, turn_id_span(*id));
-}
-
-[[nodiscard]] core::Result<void>
-bind_turn_id_match(Statement& statement, int null_flag_index, int id_index, const std::optional<core::TurnId>& id) {
-  if (!id.has_value()) {
-    if (auto bound = statement.bind_int64(null_flag_index, 1); !bound) {
-      return std::unexpected(bound.error());
-    }
-    return statement.bind_null(id_index);
-  }
-  if (auto bound = statement.bind_int64(null_flag_index, 0); !bound) {
-    return std::unexpected(bound.error());
-  }
-  return statement.bind_blob(id_index, turn_id_span(*id));
-}
-
 [[nodiscard]] core::Result<std::optional<core::TurnId>>
 optional_turn_id(Statement& statement, int index, std::string_view field) {
   auto value = statement.column_blob(index);
@@ -358,43 +332,13 @@ async::Awaitable<core::Result<AuditEventRecord>> AuditRepository::append_event(A
   }
   auto& statement = cached->statement();
 
-  if (auto bound = statement.bind_text(1, request.event_kind); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(2, request.scope_key); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(3, request.agent_key); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(4, request.tool_name); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(5, request.identity); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(6, request.verdict); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(7, request.outcome); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(8, request.reason); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (request.input_hash_hex.empty()) {
-    if (auto bound = statement.bind_null(9); !bound) {
-      co_return std::unexpected(bound.error());
-    }
-  } else {
-    if (auto bound = statement.bind_text(9, request.input_hash_hex); !bound) {
-      co_return std::unexpected(bound.error());
-    }
-  }
-  if (auto bound = bind_optional_turn_id(statement, 10, request.parent_turn_id); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(11, request.metadata_json); !bound) {
+  const auto input_hash_hex = request.input_hash_hex.empty()
+                                  ? std::optional<std::string_view>{}
+                                  : std::optional<std::string_view>{request.input_hash_hex};
+  if (auto bound = statement.bind_all(request.event_kind, request.scope_key, request.agent_key, request.tool_name,
+                                      request.identity, request.verdict, request.outcome, request.reason,
+                                      input_hash_hex, request.parent_turn_id, request.metadata_json);
+      !bound) {
     co_return std::unexpected(bound.error());
   }
 
@@ -456,34 +400,11 @@ AuditRepository::update_event_metadata(UpdateAuditEventMetadataRequest request) 
   }
   auto& statement = cached->statement();
 
-  if (auto bound = statement.bind_text(1, request.metadata_json); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(2, request.event_kind); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(3, request.scope_key); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(4, request.agent_key); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(5, request.tool_name); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(6, request.identity); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(7, request.previous_metadata_json); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(8, request.input_hash_hex); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_text(9, request.input_hash_hex); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = bind_turn_id_match(statement, 10, 11, request.parent_turn_id); !bound) {
+  if (auto bound = statement.bind_all(request.metadata_json, request.event_kind, request.scope_key, request.agent_key,
+                                      request.tool_name, request.identity, request.previous_metadata_json,
+                                      request.input_hash_hex, request.input_hash_hex,
+                                      !request.parent_turn_id.has_value(), request.parent_turn_id);
+      !bound) {
     co_return std::unexpected(bound.error());
   }
 
@@ -594,10 +515,7 @@ AuditRepository::list_events_for_turn(core::TurnId parent_turn_id, std::size_t l
   }
   auto& statement = cached->statement();
 
-  if (auto bound = statement.bind_blob(1, turn_id_span(parent_turn_id)); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-  if (auto bound = statement.bind_int64(2, static_cast<std::int64_t>(limit)); !bound) {
+  if (auto bound = statement.bind_all(parent_turn_id, static_cast<std::int64_t>(limit)); !bound) {
     co_return std::unexpected(bound.error());
   }
 
@@ -635,7 +553,7 @@ async::Awaitable<core::Result<std::int64_t>> AuditRepository::count_events(std::
     co_return std::unexpected(cached.error());
   }
   auto& statement = cached->statement();
-  if (auto bound = statement.bind_text(1, scope_key); !bound) {
+  if (auto bound = statement.bind_all(scope_key); !bound) {
     co_return std::unexpected(bound.error());
   }
 
