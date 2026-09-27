@@ -1,7 +1,9 @@
 #include <oran/memory/longterm.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
+#include <vector>
 
 #include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
@@ -20,7 +22,7 @@ async::Awaitable<core::Result<RecallResult>> recall(Backend& backend, RecallRequ
     if (!record) {
       co_return std::unexpected(std::move(record).error());
     }
-    if ((!request.query.include_shadow && record->shadow) ||
+    if (record->shadow ||
         (!request.query.kinds.empty() && !std::ranges::contains(request.query.kinds, record->kind))) {
       co_return std::unexpected(core::Error::not_found("long-term memory record not found"));
     }
@@ -33,21 +35,28 @@ async::Awaitable<core::Result<RecallResult>> recall(Backend& backend, RecallRequ
     hits = std::move(*found);
   }
 
-  const auto read_at = core::time::now_utc();
-  for (auto& hit : hits) {
-    auto touched = co_await backend.touch(TouchRequest{.key = hit.record.key, .read_at = read_at});
-    if (!touched) {
+  if (!hits.empty()) {
+    // Stored timestamps have millisecond precision; the snapshot reports the persisted value.
+    const auto read_at =
+        core::Time{std::chrono::floor<std::chrono::milliseconds>(core::time::now_utc().to_system_time_point())};
+    auto keys = std::vector<RecordKey>{};
+    keys.reserve(hits.size());
+    for (const auto& hit : hits) {
+      keys.push_back(hit.record.key);
+    }
+    if (auto touched = co_await backend.touch(std::move(keys), read_at); !touched) {
       co_return std::unexpected(std::move(touched).error());
     }
-    // Keep the selected content snapshot if another writer changed this note
-    // while the read timestamp was being recorded.
-    hit.record.last_read_at = touched->last_read_at;
+    // The returned content is the selected snapshot; only its read time advances.
+    for (auto& hit : hits) {
+      hit.record.last_read_at = std::max(hit.record.last_read_at, read_at);
+    }
   }
 
-  auto framing = render_recall_framing(hits);
+  auto text = render_recall_text(hits);
   co_return RecallResult{
       .hits = std::move(hits),
-      .framing = std::move(framing),
+      .text = std::move(text),
   };
 }
 

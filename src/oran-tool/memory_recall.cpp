@@ -32,7 +32,6 @@ using json = nlohmann::json;
 
 constexpr std::size_t kDefaultMemoryRecallLimit = 5;
 constexpr std::size_t kMaxMemoryRecallLimit = 20;
-constexpr auto kMemoryKinds = std::array<std::string_view, 5>{"user", "feedback", "project", "reference", "team"};
 constexpr auto kMemoryRecallFields = std::to_array<std::string_view>({"query", "limit", "kinds", "id", "offset"});
 
 constexpr std::string_view kMemoryRecallSchema =
@@ -79,7 +78,7 @@ constexpr std::string_view kMemoryRecallSchema =
                                  .with("field", "kinds")
                                  .with("index", std::to_string(i)));
     }
-    if (!std::ranges::contains(kMemoryKinds, std::string_view{kind})) {
+    if (!std::ranges::contains(detail::kMemoryKinds, std::string_view{kind})) {
       return std::unexpected(
           core::Error::invalid_argument("MemoryRecall: unknown kind").with("field", "kinds").with("kind", kind));
     }

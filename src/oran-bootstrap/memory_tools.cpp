@@ -55,7 +55,7 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
                  "MemoryRecall: {} match{}\n",
                  recalled.hits.size(),
                  recalled.hits.size() == 1 ? "" : "es");
-  text.append(recalled.framing.section_text);
+  text.append(recalled.text);
   return text;
 }
 
@@ -117,8 +117,30 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
   return hook::MemoryReadHitPayload{
       .record = hook_memory_record(hit.record),
       .score = hit.score,
-      .lexical_score = hit.score,
       .redacted_record = redacted_hook_memory_record(hit.record),
+  };
+}
+
+// Index observations carry only the displayed cue; undisplayed metadata stays neutral.
+[[nodiscard]] hook::MemoryReadHitPayload hook_memory_index_hit(const memory::longterm::IndexEntry& entry) {
+  const auto kind = std::string{core::enum_name(entry.kind)};
+  return hook::MemoryReadHitPayload{
+      .record =
+          hook::MemoryRecordPayload{
+              .id = entry.key.id,
+              .scope_key = entry.key.scope_key,
+              .kind = kind,
+              .title = entry.title,
+              .body = entry.summary,
+          },
+      .redacted_record =
+          hook::RedactedMemoryRecordPayload{
+              .id = entry.key.id,
+              .scope_key = entry.key.scope_key,
+              .kind = kind,
+              .title_bytes = entry.title.size(),
+              .body_bytes = entry.summary.size(),
+          },
   };
 }
 
@@ -138,17 +160,13 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
 
 [[nodiscard]] hook::MemoryReadPayload make_memory_read_payload(const tool::DispatchContext& context,
                                                                const tool::MemoryRecallRequest& request,
-                                                               std::span<const memory::longterm::SearchHit> hits,
+                                                               std::string source,
+                                                               std::vector<hook::MemoryReadHitPayload> payload_hits,
                                                                core::Time started_at,
                                                                core::Time finished_at) {
-  auto payload_hits = std::vector<hook::MemoryReadHitPayload>{};
-  payload_hits.reserve(hits.size());
-  for (const auto& hit : hits) {
-    payload_hits.push_back(hook_memory_read_hit(hit));
-  }
   return hook::MemoryReadPayload{
       .who = hook_identity(context),
-      .source = "MemoryRecall",
+      .source = std::move(source),
       .query = request.query,
       .redacted_query_bytes = request.query.size(),
       .limit = request.limit,
@@ -194,9 +212,6 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
                  core::enum_name(record.kind),
                  record.key.id);
   std::format_to(std::back_inserter(text), "title: {}", record.title);
-  if (record.shadow) {
-    text.append("\nstatus: shadow");
-  }
   return text;
 }
 
@@ -231,25 +246,19 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
       co_return std::unexpected(std::move(indexed).error());
     }
     if (ctx.bus != nullptr) {
-      std::vector<memory::longterm::SearchHit> cues;
+      auto cues = std::vector<hook::MemoryReadHitPayload>{};
+      cues.reserve(indexed->entries.size());
       for (const auto& entry : indexed->entries) {
-        cues.push_back(memory::longterm::SearchHit{.record = memory::longterm::Record{
-                                                       .key = entry.key,
-                                                       .kind = entry.kind,
-                                                       .title = entry.title,
-                                                       .body = entry.summary,
-                                                       .tags = {},
-                                                       .linked_record_ids = {},
-                                                   }});
+        cues.push_back(hook_memory_index_hit(entry));
       }
-      auto payload = make_memory_read_payload(ctx, request, cues, started_at, core::time::now_utc());
-      payload.source = "MemoryRecall:index";
-      [[maybe_unused]] auto published =
-          co_await ctx.bus->publish_advisory(hook::Event::memory_read_after, std::move(payload));
+      [[maybe_unused]] auto published = co_await ctx.bus->publish_advisory(
+          hook::Event::memory_read_after,
+          make_memory_read_payload(
+              ctx, request, "MemoryRecall:index", std::move(cues), started_at, core::time::now_utc()));
     }
     auto data = memory::longterm::render_index_data_json(*indexed);
     co_return tool::Output{
-        .text = std::move(indexed->framing.section_text),
+        .text = std::move(indexed->text),
         .data_json = std::move(data),
         .usage = tool::ToolUsage{.match_count = static_cast<std::uint64_t>(indexed->entries.size())},
     };
@@ -262,7 +271,6 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
                                                                                .scope_key = scope_key,
                                                                                .text = request.query,
                                                                                .kinds = *kinds,
-                                                                               .include_shadow = false,
                                                                            },
                                                                        .limit = request.limit,
                                                                        .record_id = request.id,
@@ -272,10 +280,14 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
     co_return std::unexpected(std::move(recalled).error());
   }
   if (ctx.bus != nullptr) {
-    const auto finished_at = core::time::now_utc();
+    auto hits = std::vector<hook::MemoryReadHitPayload>{};
+    hits.reserve(recalled->hits.size());
+    for (const auto& hit : recalled->hits) {
+      hits.push_back(hook_memory_read_hit(hit));
+    }
     [[maybe_unused]] auto published = co_await ctx.bus->publish_advisory(
         hook::Event::memory_read_after,
-        make_memory_read_payload(ctx, request, recalled->hits, started_at, finished_at));
+        make_memory_read_payload(ctx, request, "MemoryRecall", std::move(hits), started_at, core::time::now_utc()));
   }
   auto data_json =
       memory::longterm::render_recall_data_json(std::span<const memory::longterm::SearchHit>{recalled->hits});
@@ -311,7 +323,6 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
       .importance = request.importance,
       .tags = std::move(request.tags),
       .linked_record_ids = std::move(request.linked_record_ids),
-      .shadow = request.shadow,
   };
 
   const auto started_at = core::time::now_utc();
@@ -336,11 +347,7 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
     }
   }
 
-  auto stored = co_await asio::co_spawn(ctx.executor,
-                                        backend.upsert(memory::longterm::WriteRequest{
-                                            .record = std::move(record),
-                                        }),
-                                        asio::use_awaitable);
+  auto stored = co_await asio::co_spawn(ctx.executor, backend.upsert(std::move(record)), asio::use_awaitable);
   if (!stored) {
     co_return std::unexpected(std::move(stored).error());
   }

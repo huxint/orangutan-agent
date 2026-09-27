@@ -199,8 +199,6 @@ struct MemoryWritePayload {
 struct MemoryReadHitPayload {
   MemoryRecordPayload record;
   double score{0.0};
-  std::optional<double> lexical_score{};
-  std::optional<double> vector_score{};
   /// Optional sanitized metadata view. When present, `Bus` clears sensitive
   /// text/list fields from `record` for sinks whose `Sink::kind()` is not
   /// `SinkKind::trusted_local`; trusted-local sinks receive the original

@@ -2,6 +2,12 @@
 
 `oran-memory` owns conversation serialization, scoped durable notes, discovery
 cues and lexical recall. It does not choose an identity or call a provider.
+
+The library is a functional core over one effect port. Note values, validation,
+index selection and rendering are pure functions of their inputs. `Backend` is
+the only storage effect; `recall` and `index` sequence those effects without
+policy of their own. Bootstrap adapts the result to tools and hooks. Every state
+a writer can create must be observable by some reader.
 Useful memory closes a loop: discover an applicable lesson, read it, act on it,
 correct it when new evidence arrives, and make the correction available later.
 
@@ -131,8 +137,11 @@ contains no full record bodies. Browsing never acquires a writer or updates
 
 `recall(Backend&, RecallRequest)` reads an exact ID or searches, updates only the
 selected notes' read timestamps, and returns owned content snapshots and
-framing. Ordinary reads exclude shadow records; raw backend `get` remains able
-to inspect them. Search accepts at most 4096 bytes and 100 backend results.
+text. All selected reads advance in one write transaction; a note removed
+between selection and that write keeps its returned snapshot. Timestamps are
+stored at millisecond precision. Ordinary search and exact recall exclude shadow
+records, and the model cannot create them; raw backend `get` still inspects
+existing rows. Search accepts at most 4096 bytes and 100 backend results.
 Up to 32 literal terms are OR-combined, so useful topic terms need not match
 every word of a question. ASCII punctuation separates terms; non-ASCII runs use
 SQLite's existing unicode61 tokenizer. BM25 weights title/body/tags as 4/1/2.
@@ -141,13 +150,12 @@ general Chinese word segmentation are not supplied by this index. Browsing and
 exact IDs remain available when wording does not match.
 
 Rendering is a pure function of selected content. Timestamps, request IDs and
-scores stay out of prompt framing. An existing row's update preserves its
+scores stay out of prompt text. An existing row's update preserves its
 creation and last-read timestamps and keeps update time monotonic; correcting a
 lesson replaces that scoped ID and its indexed content instead of duplicating it.
 
-Retrieval values carry one lexical score. Tool-result JSON and memory-read hook
-payloads retain `score`, `lexical_score` and a null `vector_score` for compatibility
-with recorded results and hook consumers.
+Retrieval values, tool-result JSON and memory-read hook hits carry one lexical
+`score`.
 
 Memory tools enter through validation, permissions, hooks and audit. Bindings
 receive scope from the host. Writes publish a blocking pre-write gate; accepted

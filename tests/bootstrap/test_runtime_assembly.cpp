@@ -225,7 +225,7 @@ TEST_CASE("RuntimeAssembly::build provisions memory.db at the workspace default 
     REQUIRE(table_exists(memory_db, "longterm_records_fts"));
 
     auto record = make_longterm_record();
-    auto upserted = co_await built->longterm_memory_backend()->upsert(memory::longterm::WriteRequest{.record = record});
+    auto upserted = co_await built->longterm_memory_backend()->upsert(record);
     REQUIRE(upserted.has_value());
 
     auto recalled = co_await memory::longterm::recall(*built->longterm_memory_backend(), memory::longterm::RecallRequest{
@@ -240,7 +240,7 @@ TEST_CASE("RuntimeAssembly::build provisions memory.db at the workspace default 
     REQUIRE(recalled.has_value());
     REQUIRE(recalled->hits.size() == 1);
     REQUIRE(recalled->hits[0].record.key.id == "lt-1");
-    REQUIRE(recalled->framing.section_text.contains("Runtime assembly memory"));
+    REQUIRE(recalled->text.contains("Runtime assembly memory"));
   });
 }
 

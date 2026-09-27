@@ -30,12 +30,11 @@ namespace {
 using json = nlohmann::json;
 
 constexpr double kDefaultMemoryImportance = 0.5;
-constexpr auto kMemoryKinds = std::array<std::string_view, 5>{"user", "feedback", "project", "reference", "team"};
 constexpr auto kMemoryRememberFields = std::to_array<std::string_view>(
-    {"id", "kind", "title", "body", "importance", "tags", "linked_record_ids", "shadow"});
+    {"id", "kind", "title", "body", "importance", "tags", "linked_record_ids"});
 
 constexpr std::string_view kMemoryRememberSchema =
-    R"({"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["user","feedback","project","reference","team"]},"title":{"type":"string"},"body":{"type":"string"},"importance":{"type":"number","minimum":0,"maximum":1},"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true},"linked_record_ids":{"type":"array","items":{"type":"string"},"uniqueItems":true},"shadow":{"type":"boolean"}},"required":["id","kind","title","body"],"additionalProperties":false})";
+    R"({"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["user","feedback","project","reference","team"]},"title":{"type":"string"},"body":{"type":"string"},"importance":{"type":"number","minimum":0,"maximum":1},"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true},"linked_record_ids":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["id","kind","title","body"],"additionalProperties":false})";
 
 [[nodiscard]] core::Result<std::string> require_non_empty_string(const json& parsed, std::string_view field) {
   auto value = detail::require_string_field(parsed, kMemoryRememberName, field);
@@ -45,7 +44,7 @@ constexpr std::string_view kMemoryRememberSchema =
   if (auto valid = detail::validate_memory_text(*value, field, field == "body"); !valid) {
     return std::unexpected(std::move(valid).error());
   }
-  if (field == "kind" && !std::ranges::contains(kMemoryKinds, std::string_view{*value})) {
+  if (field == "kind" && !std::ranges::contains(detail::kMemoryKinds, std::string_view{*value})) {
     return std::unexpected(
         core::Error::invalid_argument("MemoryRemember: unknown kind").with("field", "kind").with("kind", *value));
   }
@@ -67,18 +66,6 @@ constexpr std::string_view kMemoryRememberSchema =
                                .with("field", "importance"));
   }
   return value;
-}
-
-[[nodiscard]] core::Result<bool> parse_shadow(const json& parsed) {
-  if (!parsed.contains("shadow")) {
-    return false;
-  }
-  const auto& raw = parsed["shadow"];
-  if (!raw.is_boolean()) {
-    return std::unexpected(
-        core::Error::invalid_argument("MemoryRemember: `shadow` must be a boolean").with("field", "shadow"));
-  }
-  return raw.get<bool>();
 }
 
 [[nodiscard]] core::Result<std::vector<std::string>> parse_string_array(const json& parsed, std::string_view field) {
@@ -147,10 +134,6 @@ constexpr std::string_view kMemoryRememberSchema =
   if (!linked_record_ids) {
     return std::unexpected(std::move(linked_record_ids).error());
   }
-  auto shadow = parse_shadow(*parsed);
-  if (!shadow) {
-    return std::unexpected(std::move(shadow).error());
-  }
 
   return MemoryRememberRequest{
       .id = std::move(*id),
@@ -160,7 +143,6 @@ constexpr std::string_view kMemoryRememberSchema =
       .importance = *importance,
       .tags = std::move(*tags),
       .linked_record_ids = std::move(*linked_record_ids),
-      .shadow = *shadow,
   };
 }
 

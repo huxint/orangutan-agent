@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <string_view>
 
@@ -9,6 +10,9 @@
 #include <oran/core/str.hpp>
 
 namespace orangutan::tool::detail {
+
+inline constexpr auto kMemoryKinds =
+    std::to_array<std::string_view>({"user", "feedback", "project", "reference", "team"});
 
 [[nodiscard]] inline core::Result<void>
 validate_memory_text(std::string_view text, std::string_view field, bool multiline = false) {

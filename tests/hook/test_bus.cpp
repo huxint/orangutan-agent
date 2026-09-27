@@ -362,7 +362,6 @@ hook::MemoryReadPayload sample_memory_read() {
                           .shadow = false,
                       },
                   .score = 0.9,
-                  .lexical_score = 0.8,
                   .redacted_record =
                       hook::RedactedMemoryRecordPayload{
                           .id = "memory-1",

@@ -700,7 +700,7 @@ TEST_CASE("MemoryRemember delegates parsed record fields through DispatchContext
 
     auto result = co_await registry.dispatch(
         tool::kMemoryRememberName,
-        R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","importance":0.75,"tags":["repo","slice"],"linked_record_ids":["rec-0"],"shadow":true})",
+        R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","importance":0.75,"tags":["repo","slice"],"linked_record_ids":["rec-0"]})",
         ctx);
 
     REQUIRE(result.has_value());
@@ -715,7 +715,6 @@ TEST_CASE("MemoryRemember delegates parsed record fields through DispatchContext
     REQUIRE(seen.importance == 0.75);
     REQUIRE(seen.tags == std::vector<std::string>{"repo", "slice"});
     REQUIRE(seen.linked_record_ids == std::vector<std::string>{"rec-0"});
-    REQUIRE(seen.shadow);
     REQUIRE(sink.events().size() == 1);
     REQUIRE(sink.events()[0].outcome == permission::AuditOutcome::allow);
   });
@@ -775,7 +774,7 @@ TEST_CASE("MemoryRemember rejects malformed input as invalid_argument", "[unit][
         R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","importance":1.25})",
         R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","tags":["repo","repo"]})",
         R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","linked_record_ids":[7]})",
-        R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","shadow":"no"})",
+        R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","shadow":true})",
         R"({"id":"rec-1","kind":"project","title":"Build note","body":"Remember this.","scope_key":"other"})",
     };
 

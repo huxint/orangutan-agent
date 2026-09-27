@@ -105,23 +105,8 @@ WHERE scope_key = ? AND id = ?
 
 constexpr std::string_view kTouchRecordSql = R"sql(
 UPDATE longterm_records
-SET last_read_at = CASE
-  WHEN last_read_at < ? THEN ?
-  ELSE last_read_at
-END
-WHERE scope_key = ? AND id = ?
-RETURNING scope_key,
-          id,
-          kind,
-          title,
-          body,
-          created_at,
-          updated_at,
-          last_read_at,
-          importance,
-          tags_json,
-          linked_record_ids_json,
-          shadow
+SET last_read_at = ?
+WHERE scope_key = ? AND id = ? AND last_read_at < ?
 )sql";
 
 constexpr std::string_view kSearchSelectSql = R"sql(
@@ -144,6 +129,7 @@ JOIN longterm_records AS r
  AND r.id = longterm_records_fts.record_id
 WHERE longterm_records_fts MATCH ?
   AND longterm_records_fts.scope_key = ?
+  AND r.shadow = 0
 )sql";
 
 constexpr std::string_view kSearchOrderSql = R"sql(
@@ -165,16 +151,6 @@ template <std::size_t N>
       },
   };
   return kMigrations;
-}
-
-[[nodiscard]] core::Result<std::int64_t> checked_limit(std::size_t limit) {
-  if (limit == 0) {
-    return std::unexpected(core::Error::invalid_argument("long-term memory search limit must be greater than zero"));
-  }
-  if (limit > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
-    return std::unexpected(core::Error::invalid_argument("long-term memory search limit is too large"));
-  }
-  return static_cast<std::int64_t>(limit);
 }
 
 [[nodiscard]] core::Result<std::string>
@@ -338,18 +314,6 @@ required_text(storage::Statement& statement, int index, std::string_view field) 
   };
 }
 
-[[nodiscard]] core::Result<void> expect_done(storage::Statement& statement, std::string_view operation) {
-  auto done = statement.step();
-  if (!done) {
-    return std::unexpected(std::move(done).error());
-  }
-  if (*done != storage::StepResult::done) {
-    return std::unexpected(core::Error::storage("long-term memory statement returned extra rows")
-                               .with("operation", std::string{operation}));
-  }
-  return {};
-}
-
 [[nodiscard]] core::Result<void> bind_key(storage::Statement& statement, int first_index, const RecordKey& key) {
   if (auto bound = statement.bind_text(first_index, key.scope_key); !bound) {
     return bound;
@@ -499,9 +463,6 @@ delete_fts_row(storage::Connection& connection, storage::StatementCache& cache, 
 
 [[nodiscard]] std::string search_sql_for(const Query& query) {
   std::string sql{kSearchSelectSql};
-  if (!query.include_shadow) {
-    sql += "  AND r.shadow = 0\n";
-  }
   if (!query.kinds.empty()) {
     sql += "  AND r.kind IN (";
     for (std::size_t i = 0; i < query.kinds.size(); ++i) {
@@ -574,7 +535,7 @@ async::Awaitable<core::Result<Record>> Fts5Backend::get(RecordKey key) {
   if (!record) {
     co_return std::unexpected(std::move(record).error());
   }
-  if (auto done = expect_done(statement, "get_record"); !done) {
+  if (auto done = step_done(statement, "get_record"); !done) {
     co_return std::unexpected(std::move(done).error());
   }
   co_return std::move(*record);
@@ -583,10 +544,6 @@ async::Awaitable<core::Result<Record>> Fts5Backend::get(RecordKey key) {
 async::Awaitable<core::Result<std::vector<SearchHit>>> Fts5Backend::search(Query query, std::size_t limit) {
   if (auto valid = validate_query(query, limit); !valid) {
     co_return std::unexpected(std::move(valid).error());
-  }
-  auto limit_value = checked_limit(limit);
-  if (!limit_value) {
-    co_return std::unexpected(std::move(limit_value).error());
   }
   const auto match_query = make_fts_query(query.text);
   if (match_query.empty()) {
@@ -617,7 +574,7 @@ async::Awaitable<core::Result<std::vector<SearchHit>>> Fts5Backend::search(Query
     }
     ++bind_index;
   }
-  if (auto bound = statement.bind_int64(bind_index, *limit_value); !bound) {
+  if (auto bound = statement.bind_int64(bind_index, static_cast<std::int64_t>(limit)); !bound) {
     co_return std::unexpected(std::move(bound).error());
   }
 
@@ -646,8 +603,8 @@ async::Awaitable<core::Result<std::vector<SearchHit>>> Fts5Backend::search(Query
   co_return hits;
 }
 
-async::Awaitable<core::Result<Record>> Fts5Backend::upsert(WriteRequest request) {
-  if (auto valid = validate_write_request(request); !valid) {
+async::Awaitable<core::Result<Record>> Fts5Backend::upsert(Record record) {
+  if (auto valid = validate_record(record); !valid) {
     co_return std::unexpected(std::move(valid).error());
   }
 
@@ -662,8 +619,8 @@ async::Awaitable<core::Result<Record>> Fts5Backend::upsert(WriteRequest request)
     co_return std::unexpected(std::move(begun).error());
   }
 
-  const auto tags_json = string_list_to_json(request.record.tags);
-  const auto linked_json = string_list_to_json(request.record.linked_record_ids);
+  const auto tags_json = string_list_to_json(record.tags);
+  const auto linked_json = string_list_to_json(record.linked_record_ids);
   auto stored = Record{};
   {
     auto cached = cache.acquire(connection, kUpsertRecordSql);
@@ -671,7 +628,7 @@ async::Awaitable<core::Result<Record>> Fts5Backend::upsert(WriteRequest request)
       co_return std::unexpected(rollback_error(std::move(cached).error(), connection));
     }
     auto& statement = cached->statement();
-    if (auto bound = bind_record_for_upsert(statement, request.record, tags_json, linked_json); !bound) {
+    if (auto bound = bind_record_for_upsert(statement, record, tags_json, linked_json); !bound) {
       co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
     }
     auto step = statement.step();
@@ -687,7 +644,7 @@ async::Awaitable<core::Result<Record>> Fts5Backend::upsert(WriteRequest request)
       co_return std::unexpected(rollback_error(std::move(row).error(), connection));
     }
     stored = std::move(*row);
-    if (auto done = expect_done(statement, "upsert_record"); !done) {
+    if (auto done = step_done(statement, "upsert_record"); !done) {
       co_return std::unexpected(rollback_error(std::move(done).error(), connection));
     }
   }
@@ -716,48 +673,51 @@ async::Awaitable<core::Result<Record>> Fts5Backend::upsert(WriteRequest request)
   co_return stored;
 }
 
-async::Awaitable<core::Result<Record>> Fts5Backend::touch(TouchRequest request) {
-  if (auto valid = validate_touch_request(request); !valid) {
-    co_return std::unexpected(std::move(valid).error());
+async::Awaitable<core::Result<void>> Fts5Backend::touch(std::vector<RecordKey> keys, core::Time read_at) {
+  for (const auto& key : keys) {
+    if (auto valid = validate_key(key); !valid) {
+      co_return std::unexpected(std::move(valid).error());
+    }
+  }
+  if (keys.empty()) {
+    co_return core::Result<void>{};
   }
 
   auto writer = co_await pool_->acquire_writer();
   if (!writer) {
     co_return std::unexpected(std::move(writer).error());
   }
-  auto cached = writer->statement_cache().acquire(writer->connection(), kTouchRecordSql);
+  auto& connection = writer->connection();
+  if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun) {
+    co_return std::unexpected(std::move(begun).error());
+  }
+  auto cached = writer->statement_cache().acquire(connection, kTouchRecordSql);
   if (!cached) {
-    co_return std::unexpected(std::move(cached).error());
+    co_return std::unexpected(rollback_error(std::move(cached).error(), connection));
   }
   auto& statement = cached->statement();
-  const auto read_at = core::time::format_iso8601_utc(request.read_at);
-  if (auto bound = statement.bind_text(1, read_at); !bound) {
-    co_return std::unexpected(std::move(bound).error());
+  const auto read_at_text = core::time::format_iso8601_utc(read_at);
+  for (const auto& key : keys) {
+    if (auto reset = statement.reset(); !reset) {
+      co_return std::unexpected(rollback_error(std::move(reset).error(), connection));
+    }
+    if (auto bound = statement.bind_text(1, read_at_text); !bound) {
+      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    }
+    if (auto bound = bind_key(statement, 2, key); !bound) {
+      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    }
+    if (auto bound = statement.bind_text(4, read_at_text); !bound) {
+      co_return std::unexpected(rollback_error(std::move(bound).error(), connection));
+    }
+    if (auto done = step_done(statement, "touch_record"); !done) {
+      co_return std::unexpected(rollback_error(std::move(done).error(), connection));
+    }
   }
-  if (auto bound = statement.bind_text(2, read_at); !bound) {
-    co_return std::unexpected(std::move(bound).error());
+  if (auto committed = connection.execute("COMMIT"); !committed) {
+    co_return std::unexpected(rollback_error(std::move(committed).error(), connection));
   }
-  if (auto bound = bind_key(statement, 3, request.key); !bound) {
-    co_return std::unexpected(std::move(bound).error());
-  }
-
-  auto step = statement.step();
-  if (!step) {
-    co_return std::unexpected(std::move(step).error());
-  }
-  if (*step == storage::StepResult::done) {
-    co_return std::unexpected(core::Error::not_found("long-term memory record not found")
-                                  .with("scope_key", request.key.scope_key)
-                                  .with("id", request.key.id));
-  }
-  auto record = read_record_row(statement);
-  if (!record) {
-    co_return std::unexpected(std::move(record).error());
-  }
-  if (auto done = expect_done(statement, "touch_record"); !done) {
-    co_return std::unexpected(std::move(done).error());
-  }
-  co_return std::move(*record);
+  co_return core::Result<void>{};
 }
 
 async::Awaitable<core::Result<void>> Fts5Backend::remove(RecordKey key) {

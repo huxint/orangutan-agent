@@ -59,7 +59,6 @@ struct MemoryRememberRequest {
   double importance{0.5};
   std::vector<std::string> tags;
   std::vector<std::string> linked_record_ids;
-  bool shadow{false};
 
   friend bool operator==(const MemoryRememberRequest&, const MemoryRememberRequest&) = default;
 };

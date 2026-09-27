@@ -115,8 +115,8 @@ TEST_CASE("longterm::RecordKind uses reflection-backed wire spelling", "[unit][m
 TEST_CASE("longterm validation accepts well-shaped record and query contracts", "[unit][memory][longterm]") {
   auto record = make_record();
   REQUIRE(memory::longterm::validate_record(record).has_value());
-  REQUIRE(memory::longterm::validate_write_request(memory::longterm::WriteRequest{.record = record}).has_value());
-  REQUIRE(memory::longterm::validate_touch_request(memory::longterm::TouchRequest{.key = record.key}).has_value());
+  REQUIRE(memory::longterm::validate_record(record).has_value());
+  REQUIRE(memory::longterm::validate_key(record.key).has_value());
   auto query = memory::longterm::Query{
       .scope_key = "agent:coder",
       .text = "scoped slices",
@@ -199,9 +199,9 @@ TEST_CASE("longterm recall rejects invalid queries before storage access", "[uni
 TEST_CASE("longterm recall framing follows record content", "[unit][memory][longterm][recall]") {
   const auto hits = std::array{memory::longterm::SearchHit{.record = make_record(), .score = 0.9}};
 
-  const auto framing = memory::longterm::render_recall_framing(hits);
+  const auto text = memory::longterm::render_recall_text(hits);
 
-  REQUIRE(framing.section_text == "Long-term memory:\n"
+  REQUIRE(text == "Long-term memory:\n"
                                    "- [project] Build notes (id: rec-1)\n"
                                    "  The repository prefers scoped slices. Docs move with code.\n"
                                    "  tags: repo, workflow\n"
@@ -218,9 +218,9 @@ TEST_CASE("longterm recall persists read timestamps within the query scope", "[u
     const auto record = make_record();
     auto other = record;
     other.key.scope_key = "agent:researcher";
-    auto saved = co_await backend.upsert({.record = record});
+    auto saved = co_await backend.upsert(record);
     REQUIRE(saved.has_value());
-    auto saved_other = co_await backend.upsert({.record = other});
+    auto saved_other = co_await backend.upsert(other);
     REQUIRE(saved_other.has_value());
 
     auto result = co_await memory::longterm::recall(backend, memory::longterm::RecallRequest{
@@ -253,8 +253,7 @@ TEST_CASE("longterm recall data_json preserves record and score fields", "[unit]
   REQUIRE(data_json.contains(R"("scope_key":"agent:coder")"));
   REQUIRE(data_json.contains(R"("created_at":"1970-01-01T00:00:01.000Z")"));
   REQUIRE(data_json.contains(R"("score":0.9)"));
-  REQUIRE(data_json.contains(R"("lexical_score":0.9)"));
-  REQUIRE(data_json.contains(R"("vector_score":null)"));
+  REQUIRE_FALSE(data_json.contains("lexical_score"));
 }
 
 TEST_CASE("longterm remember data_json carries saved record metadata", "[unit][memory][longterm][recall]") {
@@ -298,7 +297,7 @@ TEST_CASE("longterm recall returns empty framing for no matches", "[unit][memory
 
     REQUIRE(result.has_value());
     REQUIRE(result->hits.empty());
-    REQUIRE(result->framing.section_text.empty());
+    REQUIRE(result->text.empty());
   });
 }
 
@@ -334,7 +333,7 @@ TEST_CASE("longterm reopening preserves records and unrelated database content",
       memory::longterm::Fts5Backend backend{pool};
       auto migrated = co_await backend.migrate();
       REQUIRE(migrated.has_value());
-      auto saved = co_await backend.upsert({.record = record});
+      auto saved = co_await backend.upsert(record);
       REQUIRE(saved.has_value());
       auto writer = co_await pool.acquire_writer();
       REQUIRE(writer.has_value());
@@ -395,9 +394,9 @@ TEST_CASE("longterm::Fts5Backend upserts, gets, and searches scoped records", "[
                                   "Scoped slices",
                                   "Researcher notes also mention Orangutan slices.");
 
-    auto inserted_coder = co_await backend.upsert(memory::longterm::WriteRequest{.record = coder});
+    auto inserted_coder = co_await backend.upsert(coder);
     REQUIRE(inserted_coder.has_value());
-    auto inserted_researcher = co_await backend.upsert(memory::longterm::WriteRequest{.record = researcher});
+    auto inserted_researcher = co_await backend.upsert(researcher);
     REQUIRE(inserted_researcher.has_value());
 
     auto fetched = co_await backend.get(memory::longterm::RecordKey{.id = "rec-coder", .scope_key = "agent:coder"});
@@ -455,9 +454,9 @@ TEST_CASE("longterm::Fts5Backend applies kind and shadow filters", "[unit][memor
                                       "A shadow banana marker should stay hidden by default.");
     shadow_project.shadow = true;
 
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = visible_project})).has_value());
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = visible_user})).has_value());
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = shadow_project})).has_value());
+    REQUIRE((co_await backend.upsert(visible_project)).has_value());
+    REQUIRE((co_await backend.upsert(visible_user)).has_value());
+    REQUIRE((co_await backend.upsert(shadow_project)).has_value());
 
     auto project_hits = co_await backend.search(
         memory::longterm::Query{
@@ -470,16 +469,9 @@ TEST_CASE("longterm::Fts5Backend applies kind and shadow filters", "[unit][memor
     REQUIRE(project_hits->size() == 1);
     REQUIRE((*project_hits)[0].record.key.id == "project-visible");
 
-    auto including_shadow = co_await backend.search(
-        memory::longterm::Query{
-            .scope_key = "agent:coder",
-            .text = "banana",
-            .kinds = {memory::longterm::RecordKind::project},
-            .include_shadow = true,
-        },
-        10);
-    REQUIRE(including_shadow.has_value());
-    REQUIRE(including_shadow->size() == 2);
+    auto raw_shadow = co_await backend.get(shadow_project.key);
+    REQUIRE(raw_shadow.has_value());
+    REQUIRE(raw_shadow->shadow);
   });
 }
 
@@ -496,7 +488,7 @@ TEST_CASE("longterm::Fts5Backend updates and removes indexed rows", "[unit][memo
                               memory::longterm::RecordKind::reference,
                               "Original",
                               "The original indexed word is kumquat.");
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = record})).has_value());
+    REQUIRE((co_await backend.upsert(record)).has_value());
 
     auto old_hits = co_await backend.search(
         memory::longterm::Query{
@@ -510,7 +502,7 @@ TEST_CASE("longterm::Fts5Backend updates and removes indexed rows", "[unit][memo
 
     record.title = "Updated";
     record.body = "The replacement indexed word is persimmon.";
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = record})).has_value());
+    REQUIRE((co_await backend.upsert(record)).has_value());
 
     auto stale_hits = co_await backend.search(
         memory::longterm::Query{
@@ -565,22 +557,21 @@ TEST_CASE("longterm::Fts5Backend touches last_read_at without rebuilding indexed
                               "Touch metadata",
                               "Recall touch preserves the indexed apricot text.");
     const auto original_read_at = record.last_read_at;
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = record})).has_value());
+    REQUIRE((co_await backend.upsert(record)).has_value());
 
     const auto touched_at = core::Time{core::Time::time_point{10s}};
-    auto touched = co_await backend.touch(memory::longterm::TouchRequest{.key = record.key, .read_at = touched_at});
-    REQUIRE(touched.has_value());
-    REQUIRE(touched->last_read_at == touched_at);
-    REQUIRE(touched->updated_at == record.updated_at);
+    const auto missing = memory::longterm::RecordKey{.id = "rec-removed", .scope_key = "agent:coder"};
+    REQUIRE((co_await backend.touch({record.key, missing}, touched_at)).has_value());
 
     auto fetched = co_await backend.get(record.key);
     REQUIRE(fetched.has_value());
     REQUIRE(fetched->last_read_at == touched_at);
+    REQUIRE(fetched->updated_at == record.updated_at);
 
-    auto regressed =
-        co_await backend.touch(memory::longterm::TouchRequest{.key = record.key, .read_at = original_read_at});
-    REQUIRE(regressed.has_value());
-    REQUIRE(regressed->last_read_at == touched_at);
+    REQUIRE((co_await backend.touch({record.key}, original_read_at)).has_value());
+    auto unregressed = co_await backend.get(record.key);
+    REQUIRE(unregressed.has_value());
+    REQUIRE(unregressed->last_read_at == touched_at);
 
     auto hits = co_await backend.search(
         memory::longterm::Query{
@@ -610,7 +601,7 @@ TEST_CASE("longterm recall returns indexed records and prompt framing", "[unit][
                               "Scoped recall",
                               "Scoped recall composes over the FTS5 backend.");
     record.tags = {"recall", "fts5"};
-    REQUIRE((co_await backend.upsert(memory::longterm::WriteRequest{.record = record})).has_value());
+    REQUIRE((co_await backend.upsert(record)).has_value());
 
     auto result = co_await memory::longterm::recall(backend, memory::longterm::RecallRequest{
         .query =
@@ -625,8 +616,8 @@ TEST_CASE("longterm recall returns indexed records and prompt framing", "[unit][
     REQUIRE(result.has_value());
     REQUIRE(result->hits.size() == 1);
     REQUIRE(result->hits[0].record.key.id == "recall-rec");
-    REQUIRE(result->framing.section_text.contains("Scoped recall"));
-    REQUIRE(result->framing.section_text.contains("tags: recall, fts5"));
+    REQUIRE(result->text.contains("Scoped recall"));
+    REQUIRE(result->text.contains("tags: recall, fts5"));
   });
 }
 
@@ -654,7 +645,7 @@ TEST_CASE("memory index exposes scoped cues without returning bodies or updating
     hidden.key.id = "hidden";
     hidden.shadow = true;
     for (const auto& record : {feedback, user, project, foreign, hidden}) {
-      auto stored = co_await backend.upsert({.record = record});
+      auto stored = co_await backend.upsert(record);
       REQUIRE(stored.has_value());
     }
 
@@ -669,9 +660,9 @@ TEST_CASE("memory index exposes scoped cues without returning bodies or updating
     REQUIRE(first.has_value());
     REQUIRE(first->entries.size() == 1);
     CHECK(first->entries.front().key == feedback.key);
-    CHECK(first->framing.section_text.contains("先给中文结论"));
-    CHECK_FALSE(first->framing.section_text.contains("FULL_NOTE_END"));
-    CHECK_FALSE(first->framing.section_text.contains("FOREIGN_NOTE"));
+    CHECK(first->text.contains("先给中文结论"));
+    CHECK_FALSE(first->text.contains("FULL_NOTE_END"));
+    CHECK_FALSE(first->text.contains("FOREIGN_NOTE"));
     REQUIRE(first->next_offset == 1);
     const auto data = memory::longterm::render_index_data_json(*first);
     CHECK(data.contains(R"("kind":"memory_index")"));
@@ -724,15 +715,15 @@ TEST_CASE("memory index budget preserves UTF-8 and complete actionable entries",
   CHECK(result->entries.size() < 20);
   CHECK(result->omitted_count == 1);
   CHECK(result->next_offset == result->entries.size() + result->omitted_count);
-  CHECK(result->framing.section_text.size() <= request.max_bytes);
-  CHECK(core::str::is_valid_utf8(result->framing.section_text));
+  CHECK(result->text.size() <= request.max_bytes);
+  CHECK(core::str::is_valid_utf8(result->text));
   for (const auto& entry : result->entries) {
-    CHECK(result->framing.section_text.contains("id: \"" + entry.key.id + "\""));
+    CHECK(result->text.contains("id: \"" + entry.key.id + "\""));
     CHECK(core::str::is_valid_utf8(entry.summary));
     CHECK(entry.summary.ends_with("…"));
   }
-  CHECK_FALSE(result->framing.section_text.contains(large_id));
-  CHECK_FALSE(result->framing.section_text.contains("id: \"note-" + std::to_string(result->entries.size()) + "\""));
+  CHECK_FALSE(result->text.contains(large_id));
+  CHECK_FALSE(result->text.contains("id: \"note-" + std::to_string(result->entries.size()) + "\""));
   const auto repeated = memory::longterm::make_index(candidates, request);
   REQUIRE(repeated.has_value());
   CHECK(*repeated == *result);
@@ -758,7 +749,7 @@ TEST_CASE("memory exact reads resolve index IDs within scope and exclude hidden 
     hidden.key.id = "hidden";
     hidden.shadow = true;
     for (const auto& item : {record, foreign, hidden}) {
-      auto saved = co_await backend.upsert({.record = item});
+      auto saved = co_await backend.upsert(item);
       REQUIRE(saved.has_value());
     }
 
@@ -772,7 +763,7 @@ TEST_CASE("memory exact reads resolve index IDs within scope and exclude hidden 
     REQUIRE(read->hits.size() == 1);
     CHECK(read->hits.front().record.body == record.body);
     CHECK(read->hits.front().record.last_read_at > record.last_read_at);
-    CHECK_FALSE(read->framing.section_text.contains("FOREIGN_BODY"));
+    CHECK_FALSE(read->text.contains("FOREIGN_BODY"));
     auto foreign_after = co_await backend.get(foreign.key);
     REQUIRE(foreign_after.has_value());
     CHECK(*foreign_after == foreign);
@@ -808,7 +799,7 @@ TEST_CASE("memory search matches useful topic words and prefers title evidence",
                             "Miscellaneous",
                             "Snapshots are useful.");
     for (const auto& item : {title, body}) {
-      auto saved = co_await backend.upsert({.record = item});
+      auto saved = co_await backend.upsert(item);
       REQUIRE(saved.has_value());
     }
     auto hits =
@@ -835,17 +826,17 @@ TEST_CASE("correcting a note preserves its creation and read history", "[unit][m
                               memory::longterm::RecordKind::feedback,
                               "Package manager",
                               "Use npm.");
-    auto saved = co_await backend.upsert({.record = record});
+    auto saved = co_await backend.upsert(record);
     REQUIRE(saved.has_value());
     const auto read_at = core::Time{core::Time::time_point{10s}};
-    auto touched = co_await backend.touch({.key = record.key, .read_at = read_at});
+    auto touched = co_await backend.touch({record.key}, read_at);
     REQUIRE(touched.has_value());
     auto replacement = record;
     replacement.body = "Use pnpm. Preserve the existing lockfile.";
     replacement.created_at = core::Time{core::Time::time_point{20s}};
     replacement.updated_at = replacement.created_at;
     replacement.last_read_at = replacement.created_at;
-    auto corrected = co_await backend.upsert({.record = replacement});
+    auto corrected = co_await backend.upsert(replacement);
     REQUIRE(corrected.has_value());
     CHECK(corrected->created_at == record.created_at);
     CHECK(corrected->last_read_at == read_at);

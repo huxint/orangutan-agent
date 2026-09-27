@@ -12,13 +12,12 @@
 #include <vector>
 
 #include <oran/core/error.hpp>
+#include <oran/core/str.hpp>
+
+#include "_impl/text.hpp"
 
 namespace orangutan::memory::longterm {
 namespace {
-
-[[nodiscard]] bool is_blank(std::string_view value) noexcept {
-  return std::ranges::all_of(value, [](char ch) { return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'; });
-}
 
 [[nodiscard]] bool contains_control_char(std::string_view value, bool allow_multiline) noexcept {
   return std::ranges::any_of(value, [allow_multiline](char ch) {
@@ -35,12 +34,12 @@ namespace {
 
 [[nodiscard]] core::Result<void>
 validate_required(std::string_view value, std::string field, bool allow_multiline = false) {
-  if (is_blank(value)) {
+  if (std::ranges::all_of(value, detail::is_space)) {
     return std::unexpected(invalid_field(std::move(field), "long-term memory field must not be blank"));
   }
-  if (contains_control_char(value, allow_multiline)) {
+  if (!core::str::is_valid_utf8(value) || contains_control_char(value, allow_multiline)) {
     return std::unexpected(
-        invalid_field(std::move(field), "long-term memory field must not contain control characters"));
+        invalid_field(std::move(field), "long-term memory field must be UTF-8 without control characters"));
   }
   return {};
 }
@@ -169,14 +168,6 @@ core::Result<void> validate_index_request(const IndexRequest& request) {
     return std::unexpected(invalid_field("max_bytes", "memory index budget must be between 512 and 8192 bytes"));
   }
   return {};
-}
-
-core::Result<void> validate_write_request(const WriteRequest& request) {
-  return validate_record(request.record);
-}
-
-core::Result<void> validate_touch_request(const TouchRequest& request) {
-  return validate_key(request.key);
 }
 
 }  // namespace orangutan::memory::longterm

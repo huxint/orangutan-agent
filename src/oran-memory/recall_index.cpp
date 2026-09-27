@@ -8,6 +8,8 @@
 
 #include <oran/core/str.hpp>
 
+#include "_impl/text.hpp"
+
 namespace orangutan::memory::longterm {
 namespace {
 
@@ -19,19 +21,7 @@ constexpr std::size_t kFooterReserve = 192;
 
 [[nodiscard]] std::string cue(std::string_view text, std::size_t max_bytes) {
   const auto prefix = core::str::truncate_to_code_point(text, max_bytes);
-  std::string out;
-  bool pending_space = false;
-  for (const auto ch : prefix) {
-    if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
-      pending_space = !out.empty();
-    } else {
-      if (pending_space) {
-        out.push_back(' ');
-        pending_space = false;
-      }
-      out.push_back(ch);
-    }
-  }
+  auto out = detail::flatten(prefix);
   if (prefix.size() != text.size()) {
     out += "…";
   }
@@ -44,8 +34,8 @@ core::Result<IndexResult> make_index(std::span<const IndexEntry> candidates, con
   if (auto valid = validate_index_request(request); !valid) {
     return std::unexpected(std::move(valid).error());
   }
-  auto result = IndexResult{.framing = Framing{.section_text = std::string{kIndexHeader}}};
-  auto& text = result.framing.section_text;
+  auto result = IndexResult{.text = std::string{kIndexHeader}};
+  auto& text = result.text;
   std::size_t consumed = 0;
   for (const auto& candidate : candidates.first(std::min(request.limit, candidates.size()))) {
     auto entry = IndexEntry{

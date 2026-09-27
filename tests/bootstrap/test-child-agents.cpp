@@ -198,7 +198,7 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
       record.kind = memory::longterm::RecordKind::project;
       record.title = "sharedanchor";
       record.body = std::string{"sharedanchor in "} + scope;
-      auto stored = co_await fixture.assembly.longterm_memory_backend()->upsert({.record = std::move(record)});
+      auto stored = co_await fixture.assembly.longterm_memory_backend()->upsert(std::move(record));
       REQUIRE(stored.has_value());
     }
     std::vector<hook::ToolAfterPayload> events;
@@ -297,7 +297,7 @@ TEST_CASE("a child memory index cannot exceed its parent's read permission",
     note.key = {.id = "private", .scope_key = "scope-A"};
     note.title = "Private note";
     note.body = "PARENT_PRIVATE_MEMORY";
-    auto stored = co_await fixture.assembly.longterm_memory_backend()->upsert({.record = note});
+    auto stored = co_await fixture.assembly.longterm_memory_backend()->upsert(note);
     REQUIRE(stored.has_value());
     ScriptedProvider provider{{
         calls({call("child", "AgentRun", R"({"agent":"worker","prompt":"Review the task"})")}),

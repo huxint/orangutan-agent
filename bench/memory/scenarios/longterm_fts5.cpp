@@ -99,7 +99,7 @@ void seed_corpus(asio::io_context& io, memory::longterm::Fts5Backend& backend) {
           std::abort();
         }
         for (std::size_t i = 0; i < kCorpusSize; ++i) {
-          auto stored = co_await backend.upsert(memory::longterm::WriteRequest{.record = make_record(i)});
+          auto stored = co_await backend.upsert(make_record(i));
           if (!stored) {
             std::abort();
           }

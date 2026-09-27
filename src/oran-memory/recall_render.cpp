@@ -12,33 +12,12 @@
 #include <nlohmann/json.hpp>
 
 #include <oran/core/enum_names.hpp>
-#include <oran/core/error.hpp>
 #include <oran/core/time.hpp>
+
+#include "_impl/text.hpp"
 
 namespace orangutan::memory::longterm {
 namespace {
-
-[[nodiscard]] bool is_space(char ch) noexcept {
-  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
-}
-
-[[nodiscard]] std::string flatten_for_prompt(std::string_view text) {
-  std::string out;
-  out.reserve(text.size());
-  bool pending_space = false;
-  for (const auto ch : text) {
-    if (is_space(ch)) {
-      pending_space = !out.empty();
-      continue;
-    }
-    if (pending_space) {
-      out.push_back(' ');
-      pending_space = false;
-    }
-    out.push_back(ch);
-  }
-  return out;
-}
 
 void append_string_list(std::string& out, std::string_view label, std::span<const std::string> values) {
   if (values.empty()) {
@@ -82,16 +61,14 @@ void append_string_list(std::string& out, std::string_view label, std::span<cons
 [[nodiscard]] nlohmann::json record_json(const SearchHit& hit) {
   auto out = record_json(hit.record);
   out["score"] = hit.score;
-  out["lexical_score"] = hit.score;
-  out["vector_score"] = nullptr;
   return out;
 }
 
 }  // namespace
 
-Framing render_recall_framing(std::span<const SearchHit> hits) {
+std::string render_recall_text(std::span<const SearchHit> hits) {
   if (hits.empty()) {
-    return Framing{};
+    return {};
   }
 
   std::string text;
@@ -99,16 +76,15 @@ Framing render_recall_framing(std::span<const SearchHit> hits) {
   for (const auto& hit : hits) {
     const auto& record = hit.record;
     std::format_to(std::back_inserter(text),
-                   "- [{}{}] {} (id: {})\n",
+                   "- [{}] {} (id: {})\n",
                    core::enum_name(record.kind),
-                   record.shadow ? " shadow" : "",
                    record.title,
                    record.key.id);
-    std::format_to(std::back_inserter(text), "  {}\n", flatten_for_prompt(record.body));
+    std::format_to(std::back_inserter(text), "  {}\n", detail::flatten(record.body));
     append_string_list(text, "tags", record.tags);
     append_string_list(text, "linked", record.linked_record_ids);
   }
-  return Framing{.section_text = std::move(text)};
+  return text;
 }
 
 std::string render_recall_data_json(std::span<const SearchHit> hits) {

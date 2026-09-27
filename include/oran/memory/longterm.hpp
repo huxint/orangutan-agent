@@ -15,7 +15,6 @@
 #include <oran/core/enum_names.hpp>
 #include <oran/core/result.hpp>
 #include <oran/core/time.hpp>
-#include <oran/memory/framing.hpp>
 #include <oran/storage/migrations.hpp>
 
 namespace orangutan::storage {
@@ -60,7 +59,6 @@ struct Query {
   std::string scope_key;
   std::string text;
   std::vector<RecordKind> kinds;
-  bool include_shadow{false};
 
   friend bool operator==(const Query&, const Query&) = default;
 };
@@ -70,19 +68,6 @@ struct SearchHit {
   double score{0.0};
 
   friend bool operator==(const SearchHit&, const SearchHit&) = default;
-};
-
-struct WriteRequest {
-  Record record;
-
-  friend bool operator==(const WriteRequest&, const WriteRequest&) = default;
-};
-
-struct TouchRequest {
-  RecordKey key;
-  core::Time read_at{core::Time::epoch()};
-
-  friend bool operator==(const TouchRequest&, const TouchRequest&) = default;
 };
 
 struct RecallRequest {
@@ -96,7 +81,7 @@ struct RecallRequest {
 
 struct RecallResult {
   std::vector<SearchHit> hits;
-  Framing framing;
+  std::string text;
 
   friend bool operator==(const RecallResult&, const RecallResult&) = default;
 };
@@ -123,7 +108,7 @@ struct IndexEntry {
 
 struct IndexResult {
   std::vector<IndexEntry> entries{};
-  Framing framing{};
+  std::string text{};
   std::optional<std::size_t> next_offset{};
   /// Legacy IDs too large to fit even one entry are reported and skipped.
   std::size_t omitted_count{0};
@@ -143,13 +128,15 @@ public:
   Backend& operator=(Backend&&) = delete;
 
   [[nodiscard]] virtual async::Awaitable<core::Result<Record>> get(RecordKey key) = 0;
+  /// Full notes matching topic words, excluding shadow rows.
   [[nodiscard]] virtual async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query,
                                                                                       std::size_t limit) = 0;
   /// Return bounded cues and at most one look-ahead entry, without returning
   /// full bodies or acquiring a writer.
   [[nodiscard]] virtual async::Awaitable<core::Result<std::vector<IndexEntry>>> list(IndexRequest request) = 0;
-  [[nodiscard]] virtual async::Awaitable<core::Result<Record>> upsert(WriteRequest request) = 0;
-  [[nodiscard]] virtual async::Awaitable<core::Result<Record>> touch(TouchRequest request) = 0;
+  [[nodiscard]] virtual async::Awaitable<core::Result<Record>> upsert(Record record) = 0;
+  /// Advance read timestamps in one write; rows removed meanwhile are skipped.
+  [[nodiscard]] virtual async::Awaitable<core::Result<void>> touch(std::vector<RecordKey> keys, core::Time read_at) = 0;
   [[nodiscard]] virtual async::Awaitable<core::Result<void>> remove(RecordKey key) = 0;
 };
 
@@ -169,8 +156,8 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<Record>> get(RecordKey key) override;
   [[nodiscard]] async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query, std::size_t limit) override;
   [[nodiscard]] async::Awaitable<core::Result<std::vector<IndexEntry>>> list(IndexRequest request) override;
-  [[nodiscard]] async::Awaitable<core::Result<Record>> upsert(WriteRequest request) override;
-  [[nodiscard]] async::Awaitable<core::Result<Record>> touch(TouchRequest request) override;
+  [[nodiscard]] async::Awaitable<core::Result<Record>> upsert(Record record) override;
+  [[nodiscard]] async::Awaitable<core::Result<void>> touch(std::vector<RecordKey> keys, core::Time read_at) override;
   [[nodiscard]] async::Awaitable<core::Result<void>> remove(RecordKey key) override;
 
 private:
@@ -188,7 +175,7 @@ private:
 /// Pure projection and budgeting. Candidates include one look-ahead row for paging.
 [[nodiscard]] core::Result<IndexResult> make_index(std::span<const IndexEntry> candidates, const IndexRequest& request);
 
-[[nodiscard]] Framing render_recall_framing(std::span<const SearchHit> hits);
+[[nodiscard]] std::string render_recall_text(std::span<const SearchHit> hits);
 [[nodiscard]] std::string render_index_data_json(const IndexResult& index);
 [[nodiscard]] std::string render_recall_data_json(std::span<const SearchHit> hits);
 [[nodiscard]] std::string render_remember_data_json(const Record& record);
@@ -198,8 +185,6 @@ private:
 [[nodiscard]] core::Result<void> validate_query(const Query& query, std::size_t limit);
 [[nodiscard]] core::Result<void> validate_recall_request(const RecallRequest& request);
 [[nodiscard]] core::Result<void> validate_index_request(const IndexRequest& request);
-[[nodiscard]] core::Result<void> validate_write_request(const WriteRequest& request);
-[[nodiscard]] core::Result<void> validate_touch_request(const TouchRequest& request);
 
 }  // namespace orangutan::memory::longterm
 

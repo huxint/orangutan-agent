@@ -730,9 +730,7 @@ TEST_CASE("AgentSession exposes memory orientation by default without a recall h
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false);
     REQUIRE(assembly.longterm_memory_backend() != nullptr);
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
-        .record = make_longterm_record("lt-default", "Prefer small changes with clear reasons."),
-    });
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("lt-default", "Prefer small changes with clear reasons."));
     REQUIRE(upserted.has_value());
 
     RecordingProvider recording{{text_response("done")}};
@@ -759,13 +757,11 @@ TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false);
     REQUIRE(assembly.longterm_memory_backend() != nullptr);
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
-        .record = make_longterm_record("lt-recall-1", "Recall plumbing reaches the prompt boundary."),
-    });
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("lt-recall-1", "Recall plumbing reaches the prompt boundary."));
     REQUIRE(upserted.has_value());
     auto foreign = make_longterm_record("foreign", "Recall plumbing belongs to another workspace.");
     foreign.key.scope_key = "scope-B";
-    auto foreign_saved = co_await assembly.longterm_memory_backend()->upsert({.record = std::move(foreign)});
+    auto foreign_saved = co_await assembly.longterm_memory_backend()->upsert(std::move(foreign));
     REQUIRE(foreign_saved.has_value());
     std::vector<MemoryHookCapture> hook_captures;
     MemoryCaptureSink sink{hook_captures};
@@ -835,9 +831,7 @@ TEST_CASE("AgentSession dispatches MemoryRecall through long-term runtime",
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false);
     REQUIRE(assembly.longterm_memory_backend() != nullptr);
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
-        .record = make_longterm_record("lt-tool-recall", "Memory tool found toolrecallanchor in the project."),
-    });
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("lt-tool-recall", "Memory tool found toolrecallanchor in the project."));
     REQUIRE(upserted.has_value());
     std::vector<MemoryHookCapture> hook_captures;
     MemoryCaptureSink sink{hook_captures};
@@ -1056,9 +1050,7 @@ TEST_CASE("AgentSession dispatches MemoryForget through long-term backend",
     std::vector<MemoryHookCapture> hook_captures;
     MemoryCaptureSink sink{hook_captures};
     assembly.hook_bus().bind(sink, {hook::Event::memory_forget});
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(memory::longterm::WriteRequest{
-        .record = make_longterm_record("lt-tool-forget", "Memory forget should remove forgetanchor."),
-    });
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("lt-tool-forget", "Memory forget should remove forgetanchor."));
     REQUIRE(upserted.has_value());
 
     RecordingProvider recording{{
@@ -1431,9 +1423,7 @@ TEST_CASE("automatic orientation reports denied memory without leaking it or blo
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
     auto cfg = parse_config(R"({"permissions":{"deny":[{"tool_pattern":"MemoryRecall"}]}})");
     auto assembly = build_assembly(temp.path(), io, false);
-    auto saved = co_await assembly.longterm_memory_backend()->upsert({
-        .record = make_longterm_record("private", "Private recall content"),
-    });
+    auto saved = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("private", "Private recall content"));
     REQUIRE(saved.has_value());
     std::vector<MemoryHookCapture> captures;
     MemoryCaptureSink sink{captures};
@@ -1468,7 +1458,7 @@ TEST_CASE("memory corrections become visible and readable in a fresh session",
     original.body += std::string(1000, 'x') + "ORIGINAL_FULL_DETAIL";
     {
       auto assembly = build_assembly(temp.path(), io, false);
-      auto seeded = co_await assembly.longterm_memory_backend()->upsert({.record = original});
+      auto seeded = co_await assembly.longterm_memory_backend()->upsert(original);
       REQUIRE(seeded.has_value());
       RecordingProvider provider{{
           tool_response("MemoryRecall", "read-old", R"({"id":"response-style"})"),
@@ -1526,8 +1516,7 @@ TEST_CASE("session memory orientation consumes configuration and honors opt-out"
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
     auto cfg = parse_config(R"({"memory":{"longterm":{"recall":{"enabled":false}}}})");
     auto assembly = build_assembly(temp.path(), io, false);
-    auto seeded = co_await assembly.longterm_memory_backend()->upsert(
-        {.record = make_longterm_record("stored", "Saved context.")});
+    auto seeded = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("stored", "Saved context."));
     REQUIRE(seeded.has_value());
     std::vector<MemoryHookCapture> captures;
     MemoryCaptureSink sink{captures};
@@ -1549,9 +1538,7 @@ TEST_CASE("an automatic memory index cannot be rewritten into full prompt conten
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false);
-    auto seeded = co_await assembly.longterm_memory_backend()->upsert({
-        .record = make_longterm_record("note", "DETAIL_MUST_STAY_OUT_OF_AUTOMATIC_PREFIX"),
-    });
+    auto seeded = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("note", "DETAIL_MUST_STAY_OUT_OF_AUTOMATIC_PREFIX"));
     REQUIRE(seeded.has_value());
     hook::InProcessSink rewrite{
         "rewrite-index",
