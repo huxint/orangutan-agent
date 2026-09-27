@@ -12,7 +12,7 @@
 //      subscribed to `tool_before` / `tool_after`. Measures the cost of the
 //      two `publish_advisory` no-op map lookups the dispatch pays for "bus
 //      is attached but nothing listens".
-//   C. `dispatch_allow_with_two_sinks` — bus + one InProcessSink subscribed
+//   C. `dispatch_allow_with_two_sinks` — bus + one callback sink subscribed
 //      to both `tool_before` and `tool_after`. Measures the per-call cost
 //      of two actual sink dispatches.
 //
@@ -125,19 +125,22 @@ void register_tool_hooks(ankerl::nanobench::Bench& bench) {
   hook::Bus busy_bus;
   std::size_t before_count = 0;
   std::size_t after_count = 0;
-  hook::InProcessSink before_sink{
-      "bench-before",
-      [&before_count](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
+  hook::Sink before_sink{
+      .id = "bench-before",
+      .observe = [&before_count](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> {
         ++before_count;
-        co_return core::Result<void>{};
-      }};
-  hook::InProcessSink after_sink{"bench-after",
-                                 [&after_count](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
-                                   ++after_count;
-                                   co_return core::Result<void>{};
-                                 }};
-  busy_bus.bind(before_sink, {hook::Event::tool_before});
-  busy_bus.bind(after_sink, {hook::Event::tool_after});
+        co_return;
+      },
+  };
+  hook::Sink after_sink{
+      .id = "bench-after",
+      .observe = [&after_count](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> {
+        ++after_count;
+        co_return;
+      },
+  };
+  busy_bus.subscribe(before_sink, {hook::Event::tool_before});
+  busy_bus.subscribe(after_sink, {hook::Event::tool_after});
 
   tool::DispatchContext ctx_c{
       .executor = io.get_executor(),

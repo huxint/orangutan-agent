@@ -653,31 +653,29 @@ TEST_CASE("FileRead retains workspace authority across the approval window",
     ctx.now = fixed_now();
 
     orangutan::hook::Bus bus;
-    orangutan::hook::InProcessSink prompt{
-        "root-replacement-prompt",
-        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
-          co_return core::Result<void>{};
-        }};
-    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
-                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
-      std::error_code ec;
-      std::filesystem::rename(root, moved_root, ec);
-      if (ec) {
-        co_return std::unexpected(core::Error::io("test failed to rename workspace root").with("detail", ec.message()));
-      }
-      std::filesystem::create_directory_symlink(outside, root, ec);
-      if (ec) {
-        co_return std::unexpected(
-            core::Error::io("test failed to replace workspace root").with("detail", ec.message()));
-      }
-      co_return orangutan::hook::HookDecision{
-          .reason = "operator_approved:operator-1",
-          .rewritten_input_json = std::nullopt,
-          .approval_expires_at = std::nullopt,
-          .trace = {},
-      };
-    });
-    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+    orangutan::hook::Sink prompt{
+        .id = "root-replacement-prompt",
+        .decide = [&](orangutan::hook::Event,
+                      orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
+          std::error_code ec;
+          std::filesystem::rename(root, moved_root, ec);
+          if (ec) {
+            co_return std::unexpected(
+                core::Error::io("test failed to rename workspace root").with("detail", ec.message()));
+          }
+          std::filesystem::create_directory_symlink(outside, root, ec);
+          if (ec) {
+            co_return std::unexpected(
+                core::Error::io("test failed to replace workspace root").with("detail", ec.message()));
+          }
+          co_return orangutan::hook::HookDecision{
+              .reason = "operator_approved:operator-1",
+              .rewritten_input_json = std::nullopt,
+              .trace = {},
+          };
+        },
+    };
+    bus.subscribe(prompt, {orangutan::hook::Event::permission_ask_rendered});
     ctx.bus = &bus;
 
     auto read = co_await registry.dispatch(tool::kFileReadName, R"({"path":"note.txt"})", ctx);
@@ -719,31 +717,29 @@ TEST_CASE("FileRead rejects a symlink escape introduced during approval",
     ctx.now = fixed_now();
 
     orangutan::hook::Bus bus;
-    orangutan::hook::InProcessSink prompt{
-        "symlink-race-prompt",
-        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
-          co_return core::Result<void>{};
-        }};
-    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
-                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
-      std::error_code ec;
-      std::filesystem::rename(root / "safe", moved_directory, ec);
-      if (ec) {
-        co_return std::unexpected(core::Error::io("test failed to rename safe directory").with("detail", ec.message()));
-      }
-      std::filesystem::create_directory_symlink(outside, root / "safe", ec);
-      if (ec) {
-        co_return std::unexpected(
-            core::Error::io("test failed to introduce escaping symlink").with("detail", ec.message()));
-      }
-      co_return orangutan::hook::HookDecision{
-          .reason = "operator_approved:operator-1",
-          .rewritten_input_json = std::nullopt,
-          .approval_expires_at = std::nullopt,
-          .trace = {},
-      };
-    });
-    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+    orangutan::hook::Sink prompt{
+        .id = "symlink-race-prompt",
+        .decide = [&](orangutan::hook::Event,
+                      orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
+          std::error_code ec;
+          std::filesystem::rename(root / "safe", moved_directory, ec);
+          if (ec) {
+            co_return std::unexpected(
+                core::Error::io("test failed to rename safe directory").with("detail", ec.message()));
+          }
+          std::filesystem::create_directory_symlink(outside, root / "safe", ec);
+          if (ec) {
+            co_return std::unexpected(
+                core::Error::io("test failed to introduce escaping symlink").with("detail", ec.message()));
+          }
+          co_return orangutan::hook::HookDecision{
+              .reason = "operator_approved:operator-1",
+              .rewritten_input_json = std::nullopt,
+              .trace = {},
+          };
+        },
+    };
+    bus.subscribe(prompt, {orangutan::hook::Event::permission_ask_rendered});
     ctx.bus = &bus;
 
     auto read = co_await registry.dispatch(tool::kFileReadName, R"({"path":"safe/note.txt"})", ctx);
@@ -830,31 +826,29 @@ TEST_CASE("FileWrite retains workspace authority across the approval window",
     ctx.now = fixed_now();
 
     orangutan::hook::Bus bus;
-    orangutan::hook::InProcessSink prompt{
-        "write-root-replacement-prompt",
-        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
-          co_return core::Result<void>{};
-        }};
-    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
-                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
-      std::error_code ec;
-      std::filesystem::rename(root, moved_root, ec);
-      if (ec) {
-        co_return std::unexpected(core::Error::io("test failed to rename workspace root").with("detail", ec.message()));
-      }
-      std::filesystem::create_directory_symlink(outside, root, ec);
-      if (ec) {
-        co_return std::unexpected(
-            core::Error::io("test failed to replace workspace root").with("detail", ec.message()));
-      }
-      co_return orangutan::hook::HookDecision{
-          .reason = "operator_approved:operator-1",
-          .rewritten_input_json = std::nullopt,
-          .approval_expires_at = std::nullopt,
-          .trace = {},
-      };
-    });
-    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+    orangutan::hook::Sink prompt{
+        .id = "write-root-replacement-prompt",
+        .decide = [&](orangutan::hook::Event,
+                      orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
+          std::error_code ec;
+          std::filesystem::rename(root, moved_root, ec);
+          if (ec) {
+            co_return std::unexpected(
+                core::Error::io("test failed to rename workspace root").with("detail", ec.message()));
+          }
+          std::filesystem::create_directory_symlink(outside, root, ec);
+          if (ec) {
+            co_return std::unexpected(
+                core::Error::io("test failed to replace workspace root").with("detail", ec.message()));
+          }
+          co_return orangutan::hook::HookDecision{
+              .reason = "operator_approved:operator-1",
+              .rewritten_input_json = std::nullopt,
+              .trace = {},
+          };
+        },
+    };
+    bus.subscribe(prompt, {orangutan::hook::Event::permission_ask_rendered});
     ctx.bus = &bus;
 
     auto written =
@@ -929,31 +923,29 @@ TEST_CASE("FileEdit rejects a symlink escape introduced during approval",
     ctx.now = fixed_now();
 
     orangutan::hook::Bus bus;
-    orangutan::hook::InProcessSink prompt{
-        "edit-symlink-race-prompt",
-        [](orangutan::hook::Event, orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
-          co_return core::Result<void>{};
-        }};
-    prompt.set_blocking_handler([&](orangutan::hook::Event, orangutan::hook::PayloadPtr)
-                                    -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
-      std::error_code ec;
-      std::filesystem::rename(root / "safe", moved_safe, ec);
-      if (ec) {
-        co_return std::unexpected(core::Error::io("test failed to rename safe directory").with("detail", ec.message()));
-      }
-      std::filesystem::create_directory_symlink(outside, root / "safe", ec);
-      if (ec) {
-        co_return std::unexpected(
-            core::Error::io("test failed to introduce escaping symlink").with("detail", ec.message()));
-      }
-      co_return orangutan::hook::HookDecision{
-          .reason = "operator_approved:operator-1",
-          .rewritten_input_json = std::nullopt,
-          .approval_expires_at = std::nullopt,
-          .trace = {},
-      };
-    });
-    bus.bind(prompt, {orangutan::hook::Event::permission_ask_rendered});
+    orangutan::hook::Sink prompt{
+        .id = "edit-symlink-race-prompt",
+        .decide = [&](orangutan::hook::Event,
+                      orangutan::hook::PayloadPtr) -> async::Awaitable<core::Result<orangutan::hook::HookDecision>> {
+          std::error_code ec;
+          std::filesystem::rename(root / "safe", moved_safe, ec);
+          if (ec) {
+            co_return std::unexpected(
+                core::Error::io("test failed to rename safe directory").with("detail", ec.message()));
+          }
+          std::filesystem::create_directory_symlink(outside, root / "safe", ec);
+          if (ec) {
+            co_return std::unexpected(
+                core::Error::io("test failed to introduce escaping symlink").with("detail", ec.message()));
+          }
+          co_return orangutan::hook::HookDecision{
+              .reason = "operator_approved:operator-1",
+              .rewritten_input_json = std::nullopt,
+              .trace = {},
+          };
+        },
+    };
+    bus.subscribe(prompt, {orangutan::hook::Event::permission_ask_rendered});
     ctx.bus = &bus;
 
     auto edited = co_await registry.dispatch(tool::kFileEditName,

@@ -57,20 +57,35 @@ public:
     REQUIRE(tool::register_file_read(registry).has_value());
     REQUIRE(tool::register_file_write(registry).has_value());
     REQUIRE(tool::register_file_edit(registry).has_value());
-    sink.set_blocking_handler(
-        [this](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
-          if (event == hook::Event::permission_ask_rendered) {
-            ++approval_requests;
-            co_return hook::HookDecision{.reason = "test operator"};
-          }
-          const auto& before = std::get<hook::ToolBeforePayload>(*payload);
-          if (auto it = decisions.find(before.who.identity); it != decisions.end()) {
-            co_return it->second;
-          }
-          co_return hook::HookDecision{};
-        });
-    bus.bind(sink, {hook::Event::tool_before, hook::Event::tool_dispatched, hook::Event::tool_after,
-                   hook::Event::tool_error, hook::Event::permission_ask_rendered});
+    bus.subscribe(hook::Sink{
+                      .id = "admission",
+                      .observe = [this](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<void> {
+                        const auto& after = std::get<hook::ToolAfterPayload>(*payload);
+                        completed.push_back(after);
+                        if (!after.succeeded) {
+                          co_return;
+                        }
+                        executed.push_back(after);
+                        // Completion observations finish before the path lock is released.
+                        if (after.who.identity == "holder") {
+                          static_cast<void>(co_await release.receive());
+                        }
+                      },
+                      .decide = [this](hook::Event event,
+                                       hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+                        if (event == hook::Event::permission_ask_rendered) {
+                          ++approval_requests;
+                          co_return hook::HookDecision{.reason = "test operator"};
+                        }
+                        const auto& before = std::get<hook::ToolBeforePayload>(*payload);
+                        if (auto it = decisions.find(before.who.identity); it != decisions.end()) {
+                          co_return it->second;
+                        }
+                        co_return hook::HookDecision{};
+                      },
+                      .trusted_local = true,
+                  },
+                  {hook::Event::tool_before, hook::Event::tool_after, hook::Event::permission_ask_rendered});
   }
 
   ~Admission() {
@@ -135,29 +150,10 @@ public:
   permission::RecordingAuditSink audit;
   hook::Bus bus{{.advisory_timeout = 2s}};
   std::map<std::string, hook::HookDecision> decisions;
-  std::vector<hook::ToolDispatchedPayload> dispatched;
+  /// Successful completions: calls whose executor ran and returned.
+  std::vector<hook::ToolAfterPayload> executed;
   std::vector<hook::ToolAfterPayload> completed;
-  std::vector<hook::ToolErrorPayload> errors;
   std::size_t approval_requests{0};
-  hook::InProcessSink sink{"admission",
-                           [this](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
-                             if (event == hook::Event::tool_dispatched) {
-                               const auto& call = std::get<hook::ToolDispatchedPayload>(*payload);
-                               dispatched.push_back(call);
-                               if (call.who.identity == "holder") {
-                                 auto released = co_await release.receive();
-                                 if (!released) {
-                                   co_return std::unexpected(std::move(released).error());
-                                 }
-                               }
-                             } else if (event == hook::Event::tool_after) {
-                               completed.push_back(std::get<hook::ToolAfterPayload>(*payload));
-                             } else if (event == hook::Event::tool_error) {
-                               errors.push_back(std::get<hook::ToolErrorPayload>(*payload));
-                             }
-                             co_return core::Result<void>{};
-                           },
-                           hook::SinkKind::trusted_local};
 };
 
 void require_success(const std::shared_ptr<Call>& call) {
@@ -198,7 +194,7 @@ TEST_CASE("Tool admission excludes paths after input rewrite", "[integration][to
   fixture.poll();
   auto second = fixture.start("FileWrite", R"({"path":"b.txt","content":"unused"})", "second");
   fixture.poll();
-  const auto admitted_while_held = fixture.dispatched.size();
+  const auto admitted_while_held = fixture.executed.size();
   const auto audited_while_held = fixture.audit.events().size();
   fixture.finish_holder();
 
@@ -209,8 +205,8 @@ TEST_CASE("Tool admission excludes paths after input rewrite", "[integration][to
   REQUIRE(fixture.contents("shared.txt") == "second");
   REQUIRE_FALSE(std::filesystem::exists(fixture.root / "a.txt"));
   REQUIRE_FALSE(std::filesystem::exists(fixture.root / "b.txt"));
-  REQUIRE(fixture.dispatched[0].input_json == first_input);
-  REQUIRE(fixture.dispatched[1].input_json == second_input);
+  REQUIRE(fixture.executed[0].input_json == first_input);
+  REQUIRE(fixture.executed[1].input_json == second_input);
   REQUIRE(fixture.audit.events()[1].input_hash == permission::ApprovalAuthority::input_hash(second_input));
 }
 
@@ -268,7 +264,7 @@ TEST_CASE("Tool admission veto finishes without waiting for a held path", "[inte
   REQUIRE_FALSE(vetoed->failure);
   REQUIRE_FALSE(vetoed->result->has_value());
   REQUIRE(vetoed->result->error().kind() == core::ErrorKind::permission_denied);
-  REQUIRE(fixture.dispatched.size() == 1);
+  REQUIRE(fixture.executed.size() == 1);
   REQUIRE(fixture.completed.size() == 2);
   REQUIRE(fixture.contents("shared.txt") == "holder");
 }
@@ -311,7 +307,7 @@ TEST_CASE("Tool admission cancellation preserves approval and lets the next call
   REQUIRE_FALSE(cancelled->result->has_value());
   REQUIRE(cancelled->result->error().kind() == core::ErrorKind::cancelled);
   REQUIRE_FALSE(cancelled->context.resolved_path.has_value());
-  REQUIRE(fixture.dispatched.size() == 2);
+  REQUIRE(fixture.executed.size() == 2);
   REQUIRE(fixture.completed.size() == 3);
   REQUIRE(fixture.contents("shared.txt") == "approved");
   REQUIRE(fixture.audit.events().size() == 2);
@@ -358,7 +354,7 @@ TEST_CASE("Tool admission releases a refused or unaudited operation without effe
     refused->context.approval_token = &token;
   }
   fixture.poll();
-  const bool no_effect = !std::filesystem::exists(fixture.root / "final.txt") && fixture.dispatched.empty();
+  const bool no_effect = !std::filesystem::exists(fixture.root / "final.txt") && fixture.executed.empty();
   auto recovered = fixture.start("FileWrite", R"({"path":"final.txt","content":"recovered"})", "recovered");
   fixture.poll();
 
@@ -403,7 +399,7 @@ TEST_CASE("Tool admission does not extend approval expiry while waiting for a pa
   REQUIRE(std::ranges::any_of(expiring->result->error().context(),
                               [](const auto& entry) { return entry.first == "reason" && entry.second == "expired"; }));
   REQUIRE(fixture.contents("shared.txt") == "holder");
-  REQUIRE(fixture.dispatched.size() == 1);
+  REQUIRE(fixture.executed.size() == 1);
 }
 
 TEST_CASE("File preparation rejects invalid input before approval or authority",
@@ -496,16 +492,15 @@ TEST_CASE("File preparation rejects invalid input before approval or authority",
       REQUIRE(call->result->error().kind() == core::ErrorKind::invalid_argument);
       REQUIRE_FALSE(call->context.resolved_path.has_value());
       REQUIRE(fixture.approval_requests == 0);
-      REQUIRE(fixture.dispatched.empty());
+      REQUIRE(fixture.executed.empty());
       REQUIRE(fixture.audit.events().size() == previous + 1);
       const auto& event = fixture.audit.events().back();
       REQUIRE(event.outcome == permission::AuditOutcome::deny);
       REQUIRE(event.reason == "invalid_tool_input");
       REQUIRE(event.input_hash == permission::ApprovalAuthority::input_hash(input));
-      REQUIRE(fixture.errors.size() == previous + 1);
       REQUIRE(fixture.completed.size() == previous + 1);
-      REQUIRE(fixture.errors.back().error_kind == "invalid_argument");
       REQUIRE_FALSE(fixture.completed.back().succeeded);
+      REQUIRE(fixture.completed.back().error_kind == "invalid_argument");
       auto unused = broker->check(token, name, input, "invalid", call->context.now);
       REQUIRE(unused.has_value());
     }
@@ -539,7 +534,7 @@ TEST_CASE("File preparation rejects rewritten invalid input without waiting for 
   REQUIRE(call->result->error().kind() == core::ErrorKind::invalid_argument);
   REQUIRE_FALSE(call->context.resolved_path.has_value());
   REQUIRE(fixture.audit.events().back().input_hash == permission::ApprovalAuthority::input_hash(invalid));
-  REQUIRE(fixture.dispatched.size() == 1);
+  REQUIRE(fixture.executed.size() == 1);
   REQUIRE(fixture.contents("shared.txt") == "holder");
 }
 
@@ -579,8 +574,8 @@ TEST_CASE("File preparation executes repaired hook input and options",
   } else {
     REQUIRE(fixture.contents(input.contains("nested") ? "nested/new.txt" : "shared.txt") == expected);
   }
-  REQUIRE(fixture.dispatched.size() == 1);
-  REQUIRE(fixture.dispatched.front().input_json == input);
+  REQUIRE(fixture.executed.size() == 1);
+  REQUIRE(fixture.executed.front().input_json == input);
   REQUIRE(fixture.audit.events().front().input_hash == permission::ApprovalAuthority::input_hash(input));
 }
 

@@ -59,7 +59,7 @@ Each slice updates [permissions-and-hooks](../../design-docs/permissions-and-hoo
 
 ## Verification
 
-- [ ] Hooks: `test-hook`, `test-tool`, `test-agent`, `test-bootstrap`, bench build.
+- [x] Hooks: `test-hook`, `test-tool`, `test-agent`, `test-bootstrap`, bench build.
 - [ ] Audit: `test-storage`, `test-permission`, `test-tool`, a migration on a
   database that already has rows, bench build.
 - [ ] Each slice: `xmake build -j4`, `xmake test -j4`, `make ci`.

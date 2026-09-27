@@ -63,34 +63,41 @@ final hook input, so a hook may repair an initially malformed request.
 
 ## Hook Contracts
 
-Blocking consumers interpret decisions before the effect. Advisory consumers
-observe outcomes and cannot change the result. Timeouts and bounded child
-ownership isolate sinks; a timed-out child may still require a lifetime join.
-Default sinks receive redacted inputs; trusted local sinks may inspect originals.
+A `hook::Sink` is an owned value: an id, an optional `observe` callback, an
+optional `decide` callback and a trust flag. `Bus::subscribe` takes ownership;
+there is no sink subclassing, unsubscription or publish outcome.
+
+Gates decide before the effect. The bus asks each `decide` callback in
+subscription order and the first non-`proceed` decision wins. An error or
+exception becomes a `hook_error` veto; exceeding the blocking timeout becomes
+`hook_timeout`. The approval prompt is the exception: it waits for the human's
+decision until the turn is cancelled. Tool gates may proceed, veto, rewrite the
+input or require approval; the memory write gate accepts only proceed or veto.
+The decision trace names every consulted gate and travels to the audit row.
+
+Observers run concurrently, cannot change the result and cannot affect the
+publisher or sibling sinks. The bus joins them, or abandons one that ignores
+cancellation at the advisory deadline; an abandoned observer keeps its sink
+alive until it finishes. Untrusted sinks receive redacted inputs, structured
+tool output and memory text; trusted local sinks may inspect originals.
 
 - **Blocking**: `tool_before`, `permission_ask_rendered`, `memory_write_before`.
 
-Tool hooks surround registry execution. Provider hooks report request, response,
-error and fallback metadata. Memory hooks report accepted recalls/writes/deletes;
-the pre-write hook consumes proceed/veto and rejects unsupported decisions.
-
 The event vocabulary follows the production publishers: the agent loop owns
 provider observations, registry dispatch owns tool observations, memory bindings
-own record observations, and approval resolution owns the prompt gate.
-`EventTraits` is the blocking-admission contract used by `publish_blocking<E>`;
-all other events use advisory publication. Payloads carry the corresponding tool,
-memory, provider or approval values.
+own record observations, and approval resolution owns the prompt gate. Each fact
+has one event: `tool_after` reports success or failure, and `provider_response`
+names the served target, so a fallback is a served profile that differs from the
+route's primary profile. `hook::is_gate` defines the blocking set used by
+`publish_blocking<E>`; all other events use advisory publication.
 
 ```cpp
 enum class Event {
   provider_request,
   provider_response,
   provider_error,
-  provider_fallback,
   tool_before,
-  tool_dispatched,
   tool_after,
-  tool_error,
   memory_read_after,
   memory_write_before,
   memory_write_after,

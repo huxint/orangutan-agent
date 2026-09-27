@@ -238,13 +238,14 @@ bootstrap::AgentSessionOptions base_runner_options(asio::io_context& io,
   return base_runner_options(io.get_executor(), assembly, cfg, provider_system);
 }
 
-hook::InProcessSink provider_capture_sink(std::vector<ProviderHookCapture>& captures) {
-  return hook::InProcessSink{
-      "provider-capture",
-      [&captures](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+hook::Sink provider_capture_sink(std::vector<ProviderHookCapture>& captures) {
+  return hook::Sink{
+      .id = "provider-capture",
+      .observe = [&captures](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<void> {
         captures.push_back(ProviderHookCapture{.event = event, .payload = *payload});
-        co_return core::Result<void>{};
-      }};
+        co_return;
+      },
+  };
 }
 
 class RecordingProvider final : public provider::System {
@@ -285,35 +286,23 @@ private:
   mutable std::deque<provider::Response> responses_;
 };
 
-class MemoryCaptureSink final : public hook::Sink {
-public:
-  explicit MemoryCaptureSink(std::vector<MemoryHookCapture>& captures,
-                             hook::HookDecision blocking_decision = hook::HookDecision{})
-      : captures_{&captures}, blocking_decision_{std::move(blocking_decision)} {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return "memory-capture";
-  }
-
-  [[nodiscard]] hook::SinkKind kind() const noexcept override {
-    return hook::SinkKind::trusted_local;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event event, hook::PayloadPtr payload) override {
-    captures_->push_back(MemoryHookCapture{.event = event, .payload = *payload});
-    co_return core::Result<void>{};
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event event,
-                                                                                   hook::PayloadPtr payload) override {
-    captures_->push_back(MemoryHookCapture{.event = event, .payload = *payload});
-    co_return blocking_decision_;
-  }
-
-private:
-  std::vector<MemoryHookCapture>* captures_;
-  hook::HookDecision blocking_decision_;
-};
+/// Trusted sink that records every memory observation and gate request.
+hook::Sink memory_capture_sink(std::vector<MemoryHookCapture>& captures,
+                               hook::HookDecision blocking_decision = hook::HookDecision{}) {
+  return hook::Sink{
+      .id = "memory-capture",
+      .observe = [&captures](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<void> {
+        captures.push_back(MemoryHookCapture{.event = event, .payload = *payload});
+        co_return;
+      },
+      .decide = [&captures, blocking_decision](hook::Event event, hook::PayloadPtr payload)
+          -> async::Awaitable<core::Result<hook::HookDecision>> {
+        captures.push_back(MemoryHookCapture{.event = event, .payload = *payload});
+        co_return blocking_decision;
+      },
+      .trusted_local = true,
+  };
+}
 
 }  // namespace
 
@@ -555,7 +544,7 @@ TEST_CASE("AgentSession publishes provider hooks through RuntimeAssembly",
     auto assembly = build_assembly(temp.path(), io, false);
     std::vector<ProviderHookCapture> captures;
     auto sink = provider_capture_sink(captures);
-    assembly.hook_bus().bind(sink, {hook::Event::provider_request, hook::Event::provider_response});
+    assembly.hook_bus().subscribe(sink, {hook::Event::provider_request, hook::Event::provider_response});
 
     std::vector<provider::ScriptedTurn> plan;
     plan.push_back(provider::ScriptedTurn{
@@ -764,8 +753,8 @@ TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
     auto foreign_saved = co_await assembly.longterm_memory_backend()->upsert(std::move(foreign));
     REQUIRE(foreign_saved.has_value());
     std::vector<MemoryHookCapture> hook_captures;
-    MemoryCaptureSink sink{hook_captures};
-    assembly.hook_bus().bind(sink, {hook::Event::memory_read_after});
+    auto sink = memory_capture_sink(hook_captures);
+    assembly.hook_bus().subscribe(sink, {hook::Event::memory_read_after});
     write_file(temp.path() / "note.txt", "long-term recall fixture\n");
 
     RecordingProvider recording{{
@@ -834,8 +823,8 @@ TEST_CASE("AgentSession dispatches MemoryRecall through long-term runtime",
     auto upserted = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("lt-tool-recall", "Memory tool found toolrecallanchor in the project."));
     REQUIRE(upserted.has_value());
     std::vector<MemoryHookCapture> hook_captures;
-    MemoryCaptureSink sink{hook_captures};
-    assembly.hook_bus().bind(sink, {hook::Event::memory_read_after});
+    auto sink = memory_capture_sink(hook_captures);
+    assembly.hook_bus().subscribe(sink, {hook::Event::memory_read_after});
 
     RecordingProvider recording{{
         provider::Response{
@@ -903,8 +892,8 @@ TEST_CASE("AgentSession dispatches MemoryRemember through long-term backend",
     auto assembly = build_assembly(temp.path(), io, false);
     REQUIRE(assembly.longterm_memory_backend() != nullptr);
     std::vector<MemoryHookCapture> hook_captures;
-    MemoryCaptureSink sink{hook_captures};
-    assembly.hook_bus().bind(sink, {hook::Event::memory_write_before, hook::Event::memory_write_after});
+    auto sink = memory_capture_sink(hook_captures);
+    assembly.hook_bus().subscribe(sink, {hook::Event::memory_write_before, hook::Event::memory_write_after});
 
     RecordingProvider recording{{
         provider::Response{
@@ -991,8 +980,8 @@ TEST_CASE("AgentSession lets MemoryWrite.before veto MemoryRemember",
     auto veto = hook::HookDecision{};
     veto.kind = hook::HookDecisionKind::veto;
     veto.reason = "memory policy";
-    MemoryCaptureSink sink{hook_captures, std::move(veto)};
-    assembly.hook_bus().bind(sink, {hook::Event::memory_write_before, hook::Event::memory_write_after});
+    auto sink = memory_capture_sink(hook_captures, std::move(veto));
+    assembly.hook_bus().subscribe(sink, {hook::Event::memory_write_before, hook::Event::memory_write_after});
 
     RecordingProvider recording{{
         provider::Response{
@@ -1048,8 +1037,8 @@ TEST_CASE("AgentSession dispatches MemoryForget through long-term backend",
     auto assembly = build_assembly(temp.path(), io, false);
     REQUIRE(assembly.longterm_memory_backend() != nullptr);
     std::vector<MemoryHookCapture> hook_captures;
-    MemoryCaptureSink sink{hook_captures};
-    assembly.hook_bus().bind(sink, {hook::Event::memory_forget});
+    auto sink = memory_capture_sink(hook_captures);
+    assembly.hook_bus().subscribe(sink, {hook::Event::memory_forget});
     auto upserted = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("lt-tool-forget", "Memory forget should remove forgetanchor."));
     REQUIRE(upserted.has_value());
 
@@ -1426,8 +1415,8 @@ TEST_CASE("automatic orientation reports denied memory without leaking it or blo
     auto saved = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("private", "Private recall content"));
     REQUIRE(saved.has_value());
     std::vector<MemoryHookCapture> captures;
-    MemoryCaptureSink sink{captures};
-    assembly.hook_bus().bind(sink, {hook::Event::memory_read_after});
+    auto sink = memory_capture_sink(captures);
+    assembly.hook_bus().subscribe(sink, {hook::Event::memory_read_after});
     RecordingProvider recording{{text_response("unexpected")}};
     auto options = base_runner_options(io, assembly, cfg, recording);
     options.longterm_recall = bootstrap::LongtermRecallOptions{.enabled = true};
@@ -1519,8 +1508,8 @@ TEST_CASE("session memory orientation consumes configuration and honors opt-out"
     auto seeded = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("stored", "Saved context."));
     REQUIRE(seeded.has_value());
     std::vector<MemoryHookCapture> captures;
-    MemoryCaptureSink sink{captures};
-    assembly.hook_bus().bind(sink, {hook::Event::memory_read_after});
+    auto sink = memory_capture_sink(captures);
+    assembly.hook_bus().subscribe(sink, {hook::Event::memory_read_after});
     RecordingProvider provider{{text_response("done")}};
     auto session = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, provider));
     REQUIRE(session.has_value());
@@ -1540,19 +1529,18 @@ TEST_CASE("an automatic memory index cannot be rewritten into full prompt conten
     auto assembly = build_assembly(temp.path(), io, false);
     auto seeded = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("note", "DETAIL_MUST_STAY_OUT_OF_AUTOMATIC_PREFIX"));
     REQUIRE(seeded.has_value());
-    hook::InProcessSink rewrite{
-        "rewrite-index",
-        [](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; }};
-    rewrite.set_blocking_handler(
-        [](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+    hook::Sink rewrite{
+        .id = "rewrite-index",
+        .decide = [](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
           auto decision = hook::HookDecision{};
           if (std::get<hook::ToolBeforePayload>(*payload).tool_name == "MemoryRecall") {
             decision.kind = hook::HookDecisionKind::rewrite;
             decision.rewritten_input_json = R"({"id":"note"})";
           }
           co_return decision;
-        });
-    assembly.hook_bus().bind(rewrite, {hook::Event::tool_before});
+        },
+    };
+    assembly.hook_bus().subscribe(rewrite, {hook::Event::tool_before});
     RecordingProvider provider{{text_response("done")}};
     auto session = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, provider));
     REQUIRE(session.has_value());

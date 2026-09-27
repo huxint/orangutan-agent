@@ -304,13 +304,14 @@ agent::RunTurnInputs base_inputs(const std::vector<core::ToolDef>& catalog, cons
   };
 }
 
-hook::InProcessSink provider_capture_sink(std::vector<ProviderHookCapture>& captures) {
-  return hook::InProcessSink{
-      "provider-capture",
-      [&captures](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+hook::Sink provider_capture_sink(std::vector<ProviderHookCapture>& captures) {
+  return hook::Sink{
+      .id = "provider-capture",
+      .observe = [&captures](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<void> {
         captures.push_back(ProviderHookCapture{.event = event, .payload = *payload});
-        co_return core::Result<void>{};
-      }};
+        co_return;
+      },
+  };
 }
 
 /// RecordingProvider is a narrow white-box fixture for Loop's request mapping.
@@ -758,7 +759,7 @@ TEST_CASE("Loop publishes provider request and response hooks", "[unit][agent][l
     hook::Bus bus;
     std::vector<ProviderHookCapture> captures;
     auto sink = provider_capture_sink(captures);
-    bus.bind(sink, {hook::Event::provider_request, hook::Event::provider_response});
+    bus.subscribe(sink, {hook::Event::provider_request, hook::Event::provider_response});
 
     const auto catalog = loop_catalog();
     const std::vector<core::Message> tail{core::Message::user_text("hook this")};
@@ -830,7 +831,7 @@ TEST_CASE("Loop publishes provider error hooks", "[unit][agent][loop][hooks]") {
     hook::Bus bus;
     std::vector<ProviderHookCapture> captures;
     auto sink = provider_capture_sink(captures);
-    bus.bind(sink, {hook::Event::provider_request, hook::Event::provider_error});
+    bus.subscribe(sink, {hook::Event::provider_request, hook::Event::provider_error});
 
     const auto catalog = loop_catalog();
     const std::vector<core::Message> tail{core::Message::user_text("fail")};
@@ -887,7 +888,7 @@ TEST_CASE("Loop attributes terminal fallback errors to the failing fallback targ
     hook::Bus bus;
     std::vector<ProviderHookCapture> captures;
     auto sink = provider_capture_sink(captures);
-    bus.bind(sink, {hook::Event::provider_request, hook::Event::provider_error});
+    bus.subscribe(sink, {hook::Event::provider_request, hook::Event::provider_error});
 
     const auto catalog = loop_catalog();
     const std::vector<core::Message> tail{core::Message::user_text("fail")};
@@ -994,7 +995,7 @@ TEST_CASE("Loop persists execution cost through response hooks and trace", "[uni
     hook::Bus bus;
     std::vector<ProviderHookCapture> captures;
     auto sink = provider_capture_sink(captures);
-    bus.bind(sink, {hook::Event::provider_response});
+    bus.subscribe(sink, {hook::Event::provider_response});
 
     const auto catalog = loop_catalog();
     const std::vector<core::Message> tail{core::Message::user_text("price this")};
@@ -1057,8 +1058,7 @@ TEST_CASE("Loop preserves provider-supplied usage cost over route pricing", "[un
   });
 }
 
-TEST_CASE("Loop publishes provider fallback hooks when execution serves a fallback profile",
-          "[unit][agent][loop][hooks]") {
+TEST_CASE("Loop reports the served fallback target on provider_response", "[unit][agent][loop][hooks]") {
   test::run_async([](asio::io_context&) -> async::Awaitable<void> {
     provider::FakeProvider provider{{
         {.response = std::nullopt, .deltas = {}, .error = core::Error::network("primary unavailable"), .latency = {}},
@@ -1077,7 +1077,7 @@ TEST_CASE("Loop publishes provider fallback hooks when execution serves a fallba
     hook::Bus bus;
     std::vector<ProviderHookCapture> captures;
     auto sink = provider_capture_sink(captures);
-    bus.bind(sink, {hook::Event::provider_request, hook::Event::provider_response, hook::Event::provider_fallback});
+    bus.subscribe(sink, {hook::Event::provider_request, hook::Event::provider_response});
 
     const auto catalog = loop_catalog();
     const std::vector<core::Message> tail{core::Message::user_text("fallback")};
@@ -1090,21 +1090,18 @@ TEST_CASE("Loop publishes provider fallback hooks when execution serves a fallba
     auto result = co_await loop.run_turn(inputs);
 
     REQUIRE(result.has_value());
-    REQUIRE(captures.size() == 3);
+    REQUIRE(captures.size() == 2);
     REQUIRE(captures[0].event == hook::Event::provider_request);
     REQUIRE(captures[1].event == hook::Event::provider_response);
-    REQUIRE(captures[2].event == hook::Event::provider_fallback);
-    const auto* fallback = std::get_if<hook::ProviderFallbackPayload>(&captures[2].payload);
-    REQUIRE(fallback != nullptr);
-    REQUIRE(fallback->who.agent_key == "coder");
-    REQUIRE(fallback->primary_profile == "primary");
-    REQUIRE(fallback->primary_model == "primary-1");
-    REQUIRE(fallback->primary_protocol == "anthropic_messages");
-    REQUIRE(fallback->served_profile == "fallback");
-    REQUIRE(fallback->served_model == "fallback-1");
-    REQUIRE(fallback->served_protocol == "openai_responses");
-    REQUIRE(fallback->finished_at >= fallback->started_at);
-    REQUIRE(fallback->duration.count() >= 0);
+    const auto* response = std::get_if<hook::ProviderResponsePayload>(&captures[1].payload);
+    REQUIRE(response != nullptr);
+    REQUIRE(response->who.agent_key == "coder");
+    REQUIRE(response->route_profile == "primary");
+    REQUIRE(response->route_model == "primary-1");
+    REQUIRE(response->route_protocol == "anthropic_messages");
+    REQUIRE(response->served_profile == "fallback");
+    REQUIRE(response->served_model == "fallback-1");
+    REQUIRE(response->served_protocol == "openai_responses");
   });
 }
 
@@ -1581,13 +1578,10 @@ TEST_CASE("Loop refreshes dispatch time for blocking permission approvals", "[un
 
     hook::Bus bus;
     std::vector<hook::PermissionAskRenderedPayload> prompts;
-    hook::InProcessSink prompt{
-        "agent-approval",
-        [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
-          co_return core::Result<void>{};
-        }};
-    prompt.set_blocking_handler(
-        [&prompts](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+    hook::Sink prompt{
+        .id = "agent-approval",
+        .decide = [&prompts](hook::Event event,
+                             hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
           REQUIRE(event == hook::Event::permission_ask_rendered);
           const auto* ask = std::get_if<hook::PermissionAskRenderedPayload>(payload.get());
           REQUIRE(ask != nullptr);
@@ -1596,8 +1590,9 @@ TEST_CASE("Loop refreshes dispatch time for blocking permission approvals", "[un
           hook::HookDecision decision{};
           decision.reason = "operator_approved:operator-1";
           co_return decision;
-        });
-    bus.bind(prompt, {hook::Event::permission_ask_rendered});
+        },
+    };
+    bus.subscribe(prompt, {hook::Event::permission_ask_rendered});
 
     auto ctx = dispatch_context(io, rules, audit);
     ctx.approval_broker = &broker;

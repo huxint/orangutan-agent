@@ -28,26 +28,13 @@ namespace test = orangutan::tests;
 
 namespace {
 
-class DecisionSink final : public hook::Sink {
-public:
-  explicit DecisionSink(hook::HookDecision decision) : decision_{std::move(decision)} {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return "approval-test";
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event, hook::PayloadPtr) override {
-    co_return core::Result<void>{};
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event,
-                                                                                   hook::PayloadPtr) override {
-    co_return decision_;
-  }
-
-private:
-  hook::HookDecision decision_;
-};
+[[nodiscard]] hook::Sink deciding(hook::HookDecision decision) {
+  return hook::Sink{
+      .id = "approval-test",
+      .decide = [decision = std::move(decision)](hook::Event, hook::PayloadPtr)
+          -> async::Awaitable<core::Result<hook::HookDecision>> { co_return decision; },
+  };
+}
 
 [[nodiscard]] permission::ApprovalBroker make_broker() {
   auto broker = permission::ApprovalBroker::with_random_secret();
@@ -179,9 +166,8 @@ TEST_CASE("approval resolution issues a replay token after operator approval", "
     const auto decision = ask_decision();
     auto operator_decision = hook::HookDecision{};
     operator_decision.reason = "operator_approved:operator-1";
-    DecisionSink sink{operator_decision};
     hook::Bus bus;
-    bus.bind(sink, {hook::Event::permission_ask_rendered});
+    bus.subscribe(deciding(operator_decision), {hook::Event::permission_ask_rendered});
     auto token = permission::ApprovalToken{};
 
     auto resolved = co_await detail::resolve_ask(detail::ApprovalRequest{
@@ -207,9 +193,8 @@ TEST_CASE("approval resolution rejects proceed without operator identity", "[uni
     auto broker = make_broker();
     const auto now = fixed_now();
     const auto decision = ask_decision();
-    DecisionSink sink{hook::HookDecision{}};
     hook::Bus bus;
-    bus.bind(sink, {hook::Event::permission_ask_rendered});
+    bus.subscribe(deciding(hook::HookDecision{}), {hook::Event::permission_ask_rendered});
 
     auto resolved = co_await detail::resolve_ask(detail::ApprovalRequest{
         .tool_name = "Demo",

@@ -1,19 +1,7 @@
-// include/oran/hook/sink.hpp — abstract hook sink.
-//
-// A sink receives one (`Event`, `PayloadPtr`) at a time and reports success
-// or failure. Sinks are non-owning from the bus's point of view; the caller
-// owns them (typically the bootstrap layer) and the bus keeps raw pointers.
-//
-// Concurrency. Sinks are not thread-safe. The bus dispatches on the agent's
-// strand; advisory publishes may run different subscribed sinks as sibling
-// child coroutines, but one sink receives at most one callback for a single
-// event publish. Sinks that need to publish elsewhere wrap themselves in an
-// `asio::strand`.
-
 #pragma once
 
-#include <cstdint>
-#include <string_view>
+#include <functional>
+#include <string>
 
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/result.hpp>
@@ -23,56 +11,25 @@
 
 namespace orangutan::hook {
 
-/// Trust classification for hook sinks. Default sinks receive redacted
-/// payloads; trusted-local sinks are in-process consumers that may inspect
-/// raw structured tool data.
-enum class SinkKind : std::uint8_t {
-  default_,
-  trusted_local,
-};
+/// Host callbacks subscribed to events; `Bus` owns the value.
+///
+/// `observe` receives advisory events. Its failures are isolated from the
+/// publisher and from sibling sinks. `decide` gates blocking events; an empty
+/// callback proceeds, and an error or exception becomes a `hook_error` veto.
+/// Untrusted sinks receive redacted payloads; trusted-local sinks may inspect
+/// original inputs, structured tool output and memory text.
+///
+/// Callbacks run on the publisher's strand. Advisory sinks may run
+/// concurrently with sibling sinks, but a sink receives one callback per
+/// publish. The shared payload stays alive across suspension points.
+struct Sink {
+  using Observe = std::function<async::Awaitable<void>(Event, PayloadPtr)>;
+  using Decide = std::function<async::Awaitable<core::Result<HookDecision>>(Event, PayloadPtr)>;
 
-/// Event consumer borrowed by Bus. InProcessSink binds host callbacks.
-class Sink {
-public:
-  Sink() = default;
-  virtual ~Sink() = default;
-
-  Sink(const Sink&) = delete;
-  Sink& operator=(const Sink&) = delete;
-  Sink(Sink&&) = delete;
-  Sink& operator=(Sink&&) = delete;
-
-  /// Stable sink identifier included in publish outcomes and decision traces.
-  [[nodiscard]] virtual std::string_view id() const noexcept = 0;
-
-  /// Redaction policy for payload delivery. The default is conservative:
-  /// external or unclassified sinks do not receive raw `ToolAfterPayload`
-  /// structured output bytes.
-  [[nodiscard]] virtual SinkKind kind() const noexcept {
-    return SinkKind::default_;
-  }
-
-  /// Receive one event. The bus calls this once per published event the
-  /// sink is subscribed to. Returning an error is captured in the
-  /// publish outcome but does not abort the publish for other sinks
-  /// (advisory contract). The shared payload is immutable and remains
-  /// alive across suspension points; sinks copy out only the fields they
-  /// need to retain after returning.
-  [[nodiscard]] virtual async::Awaitable<core::Result<void>> receive(Event event, PayloadPtr payload) = 0;
-
-  /// Decide how to handle a blocking event (`tool_before`,
-  /// `permission_ask_rendered`, `memory_write_before`).
-  /// The bus calls this through `publish_blocking<E>` once per subscribed
-  /// sink in subscription order and stops at the first non-`proceed`
-  /// decision. The default implementation returns `HookDecision{}`
-  /// (i.e. `kind = proceed`, empty `reason`) so sinks that only care
-  /// about advisory events can ignore this method entirely; sinks that
-  /// want to veto / rewrite / require_approval override it.
-  ///
-  /// Returning an error is treated as a veto by `publish_blocking`
-  /// (`reason = hook_error`); a thrown exception is captured the same
-  /// way.
-  [[nodiscard]] virtual async::Awaitable<core::Result<HookDecision>> handle_blocking(Event event, PayloadPtr payload);
+  std::string id;
+  Observe observe{};
+  Decide decide{};
+  bool trusted_local{false};
 };
 
 }  // namespace orangutan::hook

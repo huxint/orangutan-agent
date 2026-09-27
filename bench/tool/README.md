@@ -50,8 +50,8 @@ A-vs-B comparisons:
   `DispatchContext::bus = nullptr` — the slice-17 baseline. The
   empty-bus case sets `bus` to a real `hook::Bus` with no sinks
   subscribed; dispatch still pays the two `publish_advisory` map
-  lookups but each returns an empty outcome. The two-sinks case binds
-  one `InProcessSink` each to `tool_before` and `tool_after`, so
+  lookups but each returns immediately. The two-sinks case binds
+  one callback sink each to `tool_before` and `tool_after`, so
   dispatch awaits the two sink coroutines. The
   (with_empty_bus − no_hooks) delta is the "bus attached but nothing
   listens" cost the agent loop pays to keep the bus wired; the

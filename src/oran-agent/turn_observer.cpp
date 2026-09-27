@@ -129,33 +129,6 @@ make_provider_error_payload(const RunTurnInputs& inputs,
   };
 }
 
-[[nodiscard]] std::optional<hook::ProviderFallbackPayload>
-make_provider_fallback_payload(const RunTurnInputs& inputs,
-                               const provider::Route& route,
-                               const provider::execution::Attribution& target,
-                               std::uint32_t iteration,
-                               core::Time started_at,
-                               core::Time finished_at) {
-  if (!target.fallback) {
-    return std::nullopt;
-  }
-  return hook::ProviderFallbackPayload{
-      .who = hook_identity(inputs),
-      .origin = std::string{inputs.origin},
-      .turn_id = inputs.turn_id,
-      .iteration = iteration,
-      .primary_profile = route.primary.profile,
-      .primary_model = route.primary.model,
-      .primary_protocol = std::string{core::enum_name(route.primary.protocol)},
-      .served_profile = target.profile,
-      .served_model = target.model,
-      .served_protocol = std::string{core::enum_name(target.protocol)},
-      .started_at = started_at,
-      .finished_at = finished_at,
-      .duration = duration_between(started_at, finished_at),
-  };
-}
-
 [[nodiscard]] async::Awaitable<void> publish_provider_request(const RunTurnInputs& inputs,
                                                               const provider::Request& request,
                                                               const provider::Route& route,
@@ -164,9 +137,8 @@ make_provider_fallback_payload(const RunTurnInputs& inputs,
   if (inputs.bus == nullptr) {
     co_return;
   }
-  [[maybe_unused]] auto outcome = co_await inputs.bus->publish_advisory(
-      hook::Event::provider_request,
-      make_provider_request_payload(inputs, request, route, iteration, started_at));
+  co_await inputs.bus->publish_advisory(hook::Event::provider_request,
+                                        make_provider_request_payload(inputs, request, route, iteration, started_at));
 }
 
 [[nodiscard]] async::Awaitable<void> publish_provider_response(const RunTurnInputs& inputs,
@@ -179,13 +151,9 @@ make_provider_fallback_payload(const RunTurnInputs& inputs,
   if (inputs.bus == nullptr) {
     co_return;
   }
-  [[maybe_unused]] auto response_outcome = co_await inputs.bus->publish_advisory(
+  co_await inputs.bus->publish_advisory(
       hook::Event::provider_response,
       make_provider_response_payload(inputs, response, route, target, iteration, started_at, finished_at));
-  if (auto fallback = make_provider_fallback_payload(inputs, route, target, iteration, started_at, finished_at)) {
-    [[maybe_unused]] auto fallback_outcome =
-        co_await inputs.bus->publish_advisory(hook::Event::provider_fallback, std::move(*fallback));
-  }
 }
 
 [[nodiscard]] async::Awaitable<void> publish_provider_error(const RunTurnInputs& inputs,
@@ -197,7 +165,7 @@ make_provider_fallback_payload(const RunTurnInputs& inputs,
   if (inputs.bus == nullptr) {
     co_return;
   }
-  [[maybe_unused]] auto outcome = co_await inputs.bus->publish_advisory(
+  co_await inputs.bus->publish_advisory(
       hook::Event::provider_error,
       make_provider_error_payload(inputs, error, failing_target, iteration, started_at, finished_at));
 }

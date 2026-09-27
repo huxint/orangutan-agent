@@ -202,13 +202,14 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
       REQUIRE(stored.has_value());
     }
     std::vector<hook::ToolAfterPayload> events;
-    hook::InProcessSink capture{
-        "child-tools",
-        [&events](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+    hook::Sink capture{
+        .id = "child-tools",
+        .observe = [&events](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<void> {
           events.push_back(std::get<hook::ToolAfterPayload>(*payload));
-          co_return core::Result<void>{};
-        }};
-    fixture.assembly.hook_bus().bind(capture, {hook::Event::tool_after});
+          co_return;
+        },
+    };
+    fixture.assembly.hook_bus().subscribe(capture, {hook::Event::tool_after});
     ScriptedProvider provider{{
         answer("saved parent answer"),
         calls({call("child-1", "AgentRun", R"({"agent":"worker","prompt":"inspect"})")}),
@@ -390,11 +391,9 @@ TEST_CASE("AgentRun evaluates parent restrictions after a child input rewrite",
         policies(
             R"({"allow":[{"tool_pattern":"AgentRun"},{"tool_pattern":"FileWrite","input_pattern":"allowed.txt"}]})",
             R"({"allow":[{"tool_pattern":"FileWrite"}]})")};
-    hook::InProcessSink rewrite{
-        "rewrite-child",
-        [](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; }};
-    rewrite.set_blocking_handler(
-        [](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+    hook::Sink rewrite{
+        .id = "rewrite-child",
+        .decide = [](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
           const auto& before = std::get<hook::ToolBeforePayload>(*payload);
           hook::HookDecision decision;
           if (before.who.agent_key == "worker" && before.tool_name == "FileWrite") {
@@ -402,8 +401,9 @@ TEST_CASE("AgentRun evaluates parent restrictions after a child input rewrite",
             decision.rewritten_input_json = R"({"path":"blocked.txt","content":"rewritten"})";
           }
           co_return decision;
-        });
-    fixture.assembly.hook_bus().bind(rewrite, {hook::Event::tool_before});
+        },
+    };
+    fixture.assembly.hook_bus().subscribe(rewrite, {hook::Event::tool_before});
     ScriptedProvider provider{{
         calls({call("child-1", "AgentRun", R"({"agent":"worker","prompt":"write"})")}),
         calls({call("write-1", "FileWrite", R"({"path":"allowed.txt","content":"original"})")}),
@@ -608,17 +608,17 @@ TEST_CASE("AgentRun child writes proceed after bounded approval", "[integration]
             R"({"allow":[{"tool_pattern":"AgentRun"}],"ask":[{"tool_pattern":"FileWrite","replay_max":2,"approval_ttl_seconds":90}]})",
             R"({"ask":[{"tool_pattern":"FileWrite","replay_max":8,"approval_ttl_seconds":20}]})")};
     std::vector<hook::PermissionAskRenderedPayload> approvals;
-    hook::InProcessSink approve{
-        "approve-child",
-        [](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> { co_return core::Result<void>{}; }};
-    approve.set_blocking_handler(
-        [&approvals](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+    hook::Sink approve{
+        .id = "approve-child",
+        .decide = [&approvals](hook::Event,
+                               hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
           approvals.push_back(std::get<hook::PermissionAskRenderedPayload>(*payload));
           hook::HookDecision decision;
           decision.reason = "operator_approved:owner";
           co_return decision;
-        });
-    fixture.assembly.hook_bus().bind(approve, {hook::Event::permission_ask_rendered});
+        },
+    };
+    fixture.assembly.hook_bus().subscribe(approve, {hook::Event::permission_ask_rendered});
     ScriptedProvider provider{{
         calls({call("child-1", "AgentRun", R"({"agent":"worker","prompt":"write"})")}),
         calls({call("write-1", "FileWrite", R"({"path":"approved.txt","content":"approved child content"})")}),

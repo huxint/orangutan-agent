@@ -30,33 +30,12 @@ struct ToolBeforePayload {
   std::string tool_name;
   std::string input_json;
   /// Optional sanitized input view. When present, `Bus` delivers this value
-  /// as `input_json` to sinks whose `Sink::kind()` is not
-  /// `SinkKind::trusted_local`; trusted-local sinks receive the original
-  /// `input_json`.
+  /// as `input_json` to sinks that are not `Sink::trusted_local`.
   std::optional<std::string> redacted_input_json{};
   Identity who;
   /// Wall-clock instant the dispatch started — sinks correlate
   /// `tool_before` with `tool_after` via this field plus tool_name.
   core::Time started_at{};
-};
-
-/// Pre-handler payload. Published only when the handler is about to run —
-/// i.e. on the `allow` verdict OR on an `ask` verdict that the approval
-/// broker promoted to `approved`. Sinks subscribed to `tool_dispatched`
-/// see only the calls whose handlers will actually execute, which is the
-/// natural hook point for last-mile rate-limiting or "ready to invoke"
-/// logging without filtering out the deny/short-circuit/reject paths.
-/// `verdict` is the `permission::Verdict` enum's wire spelling (`allow`
-/// or `ask`) so sinks can distinguish a free allow from an approved ask.
-struct ToolDispatchedPayload {
-  std::string tool_name;
-  std::string input_json;
-  /// Optional sanitized input view for non-trusted sinks. See
-  /// `ToolBeforePayload::redacted_input_json`.
-  std::optional<std::string> redacted_input_json{};
-  Identity who;
-  core::Time started_at{};
-  std::string verdict;
 };
 
 /// Usage metrics copied from `tool::Output::usage` without making
@@ -76,8 +55,8 @@ struct ToolUsage {
 
 /// Post-dispatch payload. Published at every exit from `Registry::dispatch`
 /// (handler returned, permission denied, broker rejection, audit error).
-/// The `succeeded` boolean tracks the dispatch outcome; on failure
-/// `error_kind` / `error_message` carry the propagated error.
+/// Failure observers filter on `succeeded`; `error_kind` / `error_message`
+/// carry the propagated error.
 struct ToolAfterPayload {
   std::string tool_name;
   std::string input_json;
@@ -89,8 +68,7 @@ struct ToolAfterPayload {
   /// Verbatim `Output::text` on success; empty string on failure.
   std::string output_text;
   /// Raw structured output bytes copied from `Output::data_json` on success.
-  /// `Bus` redacts this field for sinks whose `Sink::kind()` is not
-  /// `SinkKind::trusted_local`.
+  /// `Bus` redacts this field for sinks that are not `Sink::trusted_local`.
   std::optional<std::string> data_json{};
   /// Metrics copied from `Output::usage` on success; all fields empty on
   /// dispatch failure.
@@ -104,27 +82,6 @@ struct ToolAfterPayload {
   core::Time finished_at{};
   /// `finished_at - started_at`. Stored separately so sinks don't have to
   /// recompute it from two `core::Time` values.
-  std::chrono::nanoseconds duration{0};
-};
-
-/// Failure-only narrow payload. Published alongside `tool_after` whenever
-/// the dispatch result is an error (permission deny, broker rejection,
-/// audit error, handler error). Sinks that only care about failures
-/// (e.g. a Slack alerter, a failure-bucket counter) subscribe to
-/// `tool_error` and skip the `tool_after::succeeded` filter dance.
-struct ToolErrorPayload {
-  std::string tool_name;
-  std::string input_json;
-  /// Optional sanitized input view for non-trusted sinks. See
-  /// `ToolBeforePayload::redacted_input_json`.
-  std::optional<std::string> redacted_input_json{};
-  Identity who;
-  /// `core::Error::kind` enumerator wire spelling
-  /// (e.g. `permission_denied`, `not_found`, `internal`).
-  std::string error_kind;
-  std::string error_message;
-  core::Time started_at{};
-  core::Time finished_at{};
   std::chrono::nanoseconds duration{0};
 };
 
@@ -160,8 +117,8 @@ struct MemoryRecordPayload {
   core::Time updated_at{};
   core::Time last_read_at{};
   double importance{0.0};
-  std::vector<std::string> tags;
-  std::vector<std::string> linked_record_ids;
+  std::vector<std::string> tags{};
+  std::vector<std::string> linked_record_ids{};
   bool shadow{false};
 };
 
@@ -185,9 +142,7 @@ struct MemoryWritePayload {
   Identity who;
   MemoryRecordPayload record;
   /// Optional sanitized metadata view. When present, `Bus` clears sensitive
-  /// text/list fields from `record` for sinks whose `Sink::kind()` is not
-  /// `SinkKind::trusted_local`; trusted-local sinks receive the original
-  /// `record`.
+  /// text/list fields from `record` for sinks that are not `Sink::trusted_local`.
   std::optional<RedactedMemoryRecordPayload> redacted_record{};
   core::Time started_at{};
   core::Time finished_at{};
@@ -200,9 +155,7 @@ struct MemoryReadHitPayload {
   MemoryRecordPayload record;
   double score{0.0};
   /// Optional sanitized metadata view. When present, `Bus` clears sensitive
-  /// text/list fields from `record` for sinks whose `Sink::kind()` is not
-  /// `SinkKind::trusted_local`; trusted-local sinks receive the original
-  /// `record`.
+  /// text/list fields from `record` for sinks that are not `Sink::trusted_local`.
   std::optional<RedactedMemoryRecordPayload> redacted_record{};
 };
 
@@ -271,7 +224,8 @@ struct ProviderRequestPayload {
 };
 
 /// Provider response metadata. `served_*` names the concrete route target that
-/// produced the response after execution-layer retry/fallback attribution.
+/// produced the response after execution-layer retry/fallback attribution; a
+/// fallback is a served profile that differs from `route_profile`.
 struct ProviderResponsePayload {
   Identity who;
   std::string origin;
@@ -308,41 +262,18 @@ struct ProviderErrorPayload {
   std::chrono::nanoseconds duration{0};
 };
 
-/// Provider fallback metadata. Published when the served route profile differs
-/// from the primary route profile for the turn.
-struct ProviderFallbackPayload {
-  Identity who;
-  std::string origin;
-  std::optional<core::TurnId> turn_id{};
-  std::uint32_t iteration{0};
-  std::string primary_profile;
-  std::string primary_model;
-  std::string primary_protocol;
-  std::string served_profile;
-  std::string served_model;
-  std::string served_protocol;
-  core::Time started_at{};
-  core::Time finished_at{};
-  std::chrono::nanoseconds duration{0};
-};
-
 using Payload = std::variant<ToolBeforePayload,
-                             ToolDispatchedPayload,
                              ToolAfterPayload,
-                             ToolErrorPayload,
                              PermissionAskRenderedPayload,
                              MemoryReadPayload,
                              MemoryWritePayload,
                              MemoryForgetPayload,
                              ProviderRequestPayload,
                              ProviderResponsePayload,
-                             ProviderErrorPayload,
-                             ProviderFallbackPayload>;
+                             ProviderErrorPayload>;
 
 /// Shared immutable payload delivered to sinks. `Bus` builds at most one raw
-/// payload and one redacted payload per publish, then shares those snapshots
-/// across subscribed sinks so multi-sink fan-out does not clone the same
-/// structured payload for every receiver.
+/// and one redacted snapshot per publish and shares them across sinks.
 using PayloadPtr = std::shared_ptr<const Payload>;
 
 }  // namespace orangutan::hook

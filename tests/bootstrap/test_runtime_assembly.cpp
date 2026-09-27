@@ -7,6 +7,7 @@
 #include <utility>
 
 #include <asio/io_context.hpp>
+#include <asio/this_coro.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -160,8 +161,25 @@ TEST_CASE("RuntimeAssembly::build installs a hook bus with blocking timeout",
   auto assembly = bootstrap::RuntimeAssembly::build(temp.path().string(), io.get_executor(), std::move(options));
 
   REQUIRE(assembly.has_value());
-  REQUIRE(assembly->hook_bus().options().blocking_timeout == 75ms);
-  REQUIRE(assembly->hook_bus().binding_count() == 0);
+  auto& bus = assembly->hook_bus();
+  bus.subscribe(
+      hook::Sink{.id = "slow",
+                 .decide = [](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<hook::HookDecision>> {
+                   auto slept = co_await async::sleep_for(co_await asio::this_coro::executor, 1s);
+                   if (!slept) {
+                     co_return std::unexpected(std::move(slept).error());
+                   }
+                   co_return hook::HookDecision{};
+                 }},
+      {hook::Event::tool_before});
+  test::run_async(
+      [&](asio::io_context&) -> async::Awaitable<void> {
+        auto decision = co_await bus.publish_blocking<hook::Event::tool_before>(hook::ToolBeforePayload{});
+        REQUIRE(decision.has_value());
+        REQUIRE(decision->reason == "hook_timeout");
+        REQUIRE(decision->trace.at(0).elapsed == 75ms);
+      },
+      500ms);
 }
 
 TEST_CASE("RuntimeAssembly::build provisions audit.db at the workspace default path",

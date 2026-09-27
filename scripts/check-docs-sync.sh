@@ -234,11 +234,10 @@ fi
 
 # -----------------------------------------------------------------------------
 # Check 11: hook Event enum matches the permissions-and-hooks.md catalogue and
-# the EventTraits blocking specializations match the documented blocking set.
+# the `is_gate` cases match the documented blocking set.
 # -----------------------------------------------------------------------------
 event_header="${repo_root}/include/oran/hook/event.hpp"
 events_doc="${repo_root}/docs/design-docs/permissions-and-hooks.md"
-traits_header="${repo_root}/include/oran/hook/event_traits.hpp"
 if [[ -f "${event_header}" && -f "${events_doc}" ]]; then
   actual_events=$(sed -n '/enum class Event/,/^};/p' "${event_header}" | grep -oE '[a-z_0-9]+,' | tr -d ' ,' | sort -u || true)
   doc_events=$(sed -n '/enum class Event {/,/^};/p' "${events_doc}" | grep -oE '[a-z_0-9]+,' | tr -d ' ,' | sort -u || true)
@@ -255,25 +254,23 @@ if [[ -f "${event_header}" && -f "${events_doc}" ]]; then
     fi
   done <<<"${doc_events}"
 
-  if [[ -f "${traits_header}" ]]; then
-    blocking_set=$(grep -oE 'EventTraits<Event::[a-z_0-9]+>' "${traits_header}" | sed 's/EventTraits<Event:://; s/>//' | sort -u || true)
-    doc_blocking=$(
-      grep -oE '^- \*\*Blocking\*\*.*$' "${events_doc}" |
-        grep -oE '`[a-z_0-9]+`' | tr -d '`' | sort -u || true
-    )
-    while IFS= read -r event; do
-      [[ -z "${event}" ]] && continue
-      if ! grep -q "^${event}$" <<<"${blocking_set}"; then
-        fail "documented blocking event '${event}' has no EventTraits specialization in event_traits.hpp."
-      fi
-    done <<<"${doc_blocking}"
-    while IFS= read -r event; do
-      [[ -z "${event}" ]] && continue
-      if ! grep -q "^${event}$" <<<"${doc_blocking}"; then
-        fail "EventTraits<Event::${event}> is not listed in the documented blocking set."
-      fi
-    done <<<"${blocking_set}"
-  fi
+  blocking_set=$(sed -n '/is_gate(Event event)/,/^}/p' "${event_header}" | grep -oE 'case Event::[a-z_0-9]+:' | sed 's/case Event:://; s/://' | sort -u || true)
+  doc_blocking=$(
+    grep -oE '^- \*\*Blocking\*\*.*$' "${events_doc}" |
+      grep -oE '`[a-z_0-9]+`' | tr -d '`' | sort -u || true
+  )
+  while IFS= read -r event; do
+    [[ -z "${event}" ]] && continue
+    if ! grep -q "^${event}$" <<<"${blocking_set}"; then
+      fail "documented blocking event '${event}' is not a case of hook::is_gate in event.hpp."
+    fi
+  done <<<"${doc_blocking}"
+  while IFS= read -r event; do
+    [[ -z "${event}" ]] && continue
+    if ! grep -q "^${event}$" <<<"${doc_blocking}"; then
+      fail "hook::is_gate lists Event::${event}, which is not in the documented blocking set."
+    fi
+  done <<<"${blocking_set}"
 fi
 
 # -----------------------------------------------------------------------------

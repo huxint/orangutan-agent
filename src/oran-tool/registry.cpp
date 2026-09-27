@@ -133,17 +133,13 @@ namespace {
       .with("hook_reason", std::move(reason));
 }
 
-[[nodiscard]] permission::Decision
-require_approval_decision(permission::Decision decision, const hook::HookDecision& hook_decision, core::Time now) {
+[[nodiscard]] permission::Decision require_approval_decision(permission::Decision decision,
+                                                             const hook::HookDecision& hook_decision) {
   if (decision.verdict != permission::Verdict::allow) {
     return decision;
   }
   decision.verdict = permission::Verdict::ask;
   decision.reason = hook_decision_reason(hook_decision, "hook require_approval");
-  if (hook_decision.approval_expires_at.has_value() && *hook_decision.approval_expires_at > now) {
-    decision.approval_ttl = std::chrono::duration_cast<std::chrono::seconds>(
-        hook_decision.approval_expires_at->to_system_time_point() - now.to_system_time_point());
-  }
   return decision;
 }
 
@@ -228,21 +224,6 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
   return payload;
 }
 
-[[nodiscard]] hook::ToolDispatchedPayload build_dispatched_payload(std::string_view name,
-                                                                   std::string_view input_json,
-                                                                   const DispatchContext& ctx,
-                                                                   core::Time started_at,
-                                                                   permission::Verdict verdict) {
-  return hook::ToolDispatchedPayload{
-      .tool_name = std::string{name},
-      .input_json = std::string{input_json},
-      .redacted_input_json = detail::redacted_hook_input_json(name, input_json),
-      .who = make_hook_identity(ctx),
-      .started_at = started_at,
-      .verdict = std::string{core::enum_name(verdict)},
-  };
-}
-
 [[nodiscard]] hook::PermissionAskRenderedPayload build_permission_ask_payload(std::string_view name,
                                                                               std::string_view input_json,
                                                                               const DispatchContext& ctx,
@@ -257,26 +238,6 @@ require_approval_decision(permission::Decision decision, const hook::HookDecisio
       .approval_ttl = decision.approval_ttl,
       .requested_at = ctx.now,
       .turn_id = ctx.parent_turn_id,
-  };
-}
-
-[[nodiscard]] hook::ToolErrorPayload build_error_payload(std::string_view name,
-                                                         std::string_view input_json,
-                                                         const DispatchContext& ctx,
-                                                         core::Time started_at,
-                                                         core::Time finished_at,
-                                                         const core::Error& error) {
-  return hook::ToolErrorPayload{
-      .tool_name = std::string{name},
-      .input_json = std::string{input_json},
-      .redacted_input_json = detail::redacted_hook_input_json(name, input_json),
-      .who = make_hook_identity(ctx),
-      .error_kind = error_kind_label(error),
-      .error_message = std::string{error.message()},
-      .started_at = started_at,
-      .finished_at = finished_at,
-      .duration = std::chrono::duration_cast<std::chrono::nanoseconds>(finished_at.to_system_time_point() -
-                                                                       started_at.to_system_time_point()),
   };
 }
 
@@ -530,7 +491,7 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
       decision = permission::intersect(std::move(parent), std::move(decision));
     }
     if (hook_requires_approval) {
-      decision = require_approval_decision(std::move(decision), hook_decision, ctx.now);
+      decision = require_approval_decision(std::move(decision), hook_decision);
     }
     if (path_resolution.requires_approval) {
       decision = require_workspace_override_approval(std::move(decision));
@@ -597,12 +558,6 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     } else if (path_resolution.error.has_value()) {
       result = std::unexpected(std::move(*path_resolution.error).with("tool", std::string{name}));
     } else {
-      if (handler_about_to_run && ctx.bus != nullptr) {
-        [[maybe_unused]] auto dispatched_outcome = co_await ctx.bus->publish_advisory(
-            hook::Event::tool_dispatched,
-            build_dispatched_payload(name, effective_input, ctx, started_at, decision.verdict));
-      }
-
       if (handler_about_to_run) {
         result = co_await prepared->execute(ctx);
       } else if (decision.verdict == permission::Verdict::deny) {
@@ -634,15 +589,9 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
   }
 
   if (ctx.bus != nullptr) {
-    const auto finished_at = core::time::now_utc();
-    if (!result) {
-      [[maybe_unused]] auto error_outcome = co_await ctx.bus->publish_advisory(
-          hook::Event::tool_error,
-          build_error_payload(name, effective_input, ctx, started_at, finished_at, result.error()));
-    }
-    [[maybe_unused]] auto after_outcome = co_await ctx.bus->publish_advisory(
+    co_await ctx.bus->publish_advisory(
         hook::Event::tool_after,
-        build_after_payload(name, effective_input, ctx, started_at, finished_at, result));
+        build_after_payload(name, effective_input, ctx, started_at, core::time::now_utc(), result));
   }
 
   co_return result;

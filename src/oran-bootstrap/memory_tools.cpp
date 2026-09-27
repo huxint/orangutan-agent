@@ -251,10 +251,13 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
       for (const auto& entry : indexed->entries) {
         cues.push_back(hook_memory_index_hit(entry));
       }
-      [[maybe_unused]] auto published = co_await ctx.bus->publish_advisory(
-          hook::Event::memory_read_after,
-          make_memory_read_payload(
-              ctx, request, "MemoryRecall:index", std::move(cues), started_at, core::time::now_utc()));
+      co_await ctx.bus->publish_advisory(hook::Event::memory_read_after,
+                                         make_memory_read_payload(ctx,
+                                                                  request,
+                                                                  "MemoryRecall:index",
+                                                                  std::move(cues),
+                                                                  started_at,
+                                                                  core::time::now_utc()));
     }
     auto data = memory::longterm::render_index_data_json(*indexed);
     co_return tool::Output{
@@ -285,7 +288,7 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
     for (const auto& hit : recalled->hits) {
       hits.push_back(hook_memory_read_hit(hit));
     }
-    [[maybe_unused]] auto published = co_await ctx.bus->publish_advisory(
+    co_await ctx.bus->publish_advisory(
         hook::Event::memory_read_after,
         make_memory_read_payload(ctx, request, "MemoryRecall", std::move(hits), started_at, core::time::now_utc()));
   }
@@ -353,9 +356,8 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
   }
   if (ctx.bus != nullptr) {
     const auto finished_at = core::time::now_utc();
-    [[maybe_unused]] auto after_outcome =
-        co_await ctx.bus->publish_advisory(hook::Event::memory_write_after,
-                                           make_memory_write_payload(*stored, ctx, started_at, finished_at));
+    co_await ctx.bus->publish_advisory(hook::Event::memory_write_after,
+                                       make_memory_write_payload(*stored, ctx, started_at, finished_at));
   }
   auto data_json = memory::longterm::render_remember_data_json(*stored);
   co_return tool::Output{
@@ -382,9 +384,8 @@ parse_memory_tool_recall_kinds(std::span<const std::string> names) {
   }
   if (ctx.bus != nullptr) {
     const auto finished_at = core::time::now_utc();
-    [[maybe_unused]] auto forget_outcome =
-        co_await ctx.bus->publish_advisory(hook::Event::memory_forget,
-                                           make_memory_forget_payload(key, ctx, started_at, finished_at));
+    co_await ctx.bus->publish_advisory(hook::Event::memory_forget,
+                                       make_memory_forget_payload(key, ctx, started_at, finished_at));
   }
   auto data_json = memory::longterm::render_forget_data_json(key);
   co_return tool::Output{

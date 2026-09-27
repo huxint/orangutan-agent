@@ -33,7 +33,7 @@ The session coordinator serializes turns using the same session identity.
 
 The loop calls `provider::execution::run` over its borrowed backend and route.
 Execution returns owned attribution alongside a result: profile, reported or
-configured model, protocol and fallback selection. Response/error/fallback hooks
+configured model, protocol and fallback selection. Response/error hooks
 and terminal traces consume that attribution directly. The loop accumulates
 execution-priced usage; it does not search route lists, parse error context or
 estimate prices. `RunTurnResult::model_used` is the attributed model string.

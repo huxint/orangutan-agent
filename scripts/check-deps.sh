@@ -71,7 +71,7 @@ declare -A LAYER_NAME=(
 #   io     -> async    : every io call hops onto the executor.
 #   storage-> async    : Pool/Repository acquire writer/reader slots via the executor.
 #   tool   -> permission: dispatch consults RuleSet + AuditSink directly.
-#   tool   -> hook     : dispatch publishes tool_before / tool_dispatched / tool_error / tool_after.
+#   tool   -> hook     : dispatch publishes tool_before / tool_after.
 declare -A ALLOWED_SIBLING=(
   [http__async]=1
   [io__async]=1

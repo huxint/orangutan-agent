@@ -28,9 +28,8 @@ drive_publish(asio::io_context& io, hook::Bus& bus, hook::Event event, hook::Pay
   asio::co_spawn(
       io,
       [&]() -> async::Awaitable<void> {
-        auto outcome = co_await bus.publish_advisory(event, payload);
-        counter += outcome.sinks.size();
-        co_return;
+        co_await bus.publish_advisory(event, payload);
+        ++counter;
       },
       asio::detached);
   io.run();
@@ -56,38 +55,26 @@ drive_publish(asio::io_context& io, hook::Bus& bus, hook::Event event, hook::Pay
   return counter;
 }
 
-hook::InProcessSink make_noop_sink(std::string id, std::size_t& counter) {
-  return hook::InProcessSink{std::move(id),
-                             [&counter](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
-                               counter++;
-                               co_return core::Result<void>{};
-                             }};
+hook::Sink make_noop_sink(std::string id, std::size_t& counter) {
+  return hook::Sink{
+      .id = std::move(id),
+      .observe = [&counter](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> {
+        ++counter;
+        co_return;
+      },
+  };
 }
 
-class BlockingBenchSink final : public hook::Sink {
-public:
-  BlockingBenchSink(std::string id, std::size_t& counter, hook::HookDecision decision = {})
-      : id_(std::move(id)), counter_(&counter), decision_(std::move(decision)) {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return id_;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event, hook::PayloadPtr) override {
-    co_return core::Result<void>{};
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>> handle_blocking(hook::Event,
-                                                                                   hook::PayloadPtr) override {
-    ++(*counter_);
-    co_return decision_;
-  }
-
-private:
-  std::string id_;
-  std::size_t* counter_;
-  hook::HookDecision decision_;
-};
+hook::Sink make_gate(std::string id, std::size_t& counter, hook::HookDecision decision = {}) {
+  return hook::Sink{
+      .id = std::move(id),
+      .decide = [&counter, decision = std::move(decision)](hook::Event, hook::PayloadPtr)
+          -> async::Awaitable<core::Result<hook::HookDecision>> {
+        ++counter;
+        co_return decision;
+      },
+  };
+}
 
 hook::Payload sample_payload() {
   return hook::Payload{hook::ToolBeforePayload{
@@ -131,7 +118,7 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
   hook::Bus bus_b;
   std::size_t counter_b = 0;
   auto sink_b = make_noop_sink("sink-b", counter_b);
-  bus_b.bind(sink_b, {hook::Event::tool_before});
+  bus_b.subscribe(sink_b, {hook::Event::tool_before});
   bench.run("publish_one_sink", [&] {
     const auto value = drive_publish(io, bus_b, hook::Event::tool_before, payload_b);
     ankerl::nanobench::doNotOptimizeAway(value);
@@ -145,9 +132,9 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
   auto sink_c1 = make_noop_sink("sink-c1", counter_c1);
   auto sink_c2 = make_noop_sink("sink-c2", counter_c2);
   auto sink_c3 = make_noop_sink("sink-c3", counter_c3);
-  bus_c.bind(sink_c1, {hook::Event::tool_before});
-  bus_c.bind(sink_c2, {hook::Event::tool_before});
-  bus_c.bind(sink_c3, {hook::Event::tool_before});
+  bus_c.subscribe(sink_c1, {hook::Event::tool_before});
+  bus_c.subscribe(sink_c2, {hook::Event::tool_before});
+  bus_c.subscribe(sink_c3, {hook::Event::tool_before});
   bench.run("publish_three_sinks", [&] {
     const auto value = drive_publish(io, bus_c, hook::Event::tool_before, payload_c);
     ankerl::nanobench::doNotOptimizeAway(value);
@@ -166,8 +153,8 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
   auto payload_e = sample_payload();
   hook::Bus bus_e;
   std::size_t counter_e = 0;
-  BlockingBenchSink sink_e{"sink-e", counter_e};
-  bus_e.bind(sink_e, {hook::Event::tool_before});
+  auto sink_e = make_gate("sink-e", counter_e);
+  bus_e.subscribe(sink_e, {hook::Event::tool_before});
   bench.run("publish_blocking_one_sink", [&] {
     const auto value = drive_blocking_publish(io, bus_e, payload_e);
     ankerl::nanobench::doNotOptimizeAway(value);
@@ -179,12 +166,12 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
   std::size_t counter_f1 = 0;
   std::size_t counter_f2 = 0;
   std::size_t counter_f3 = 0;
-  BlockingBenchSink sink_f1{"sink-f1", counter_f1};
-  BlockingBenchSink sink_f2{"sink-f2", counter_f2};
-  BlockingBenchSink sink_f3{"sink-f3", counter_f3};
-  bus_f.bind(sink_f1, {hook::Event::tool_before});
-  bus_f.bind(sink_f2, {hook::Event::tool_before});
-  bus_f.bind(sink_f3, {hook::Event::tool_before});
+  auto sink_f1 = make_gate("sink-f1", counter_f1);
+  auto sink_f2 = make_gate("sink-f2", counter_f2);
+  auto sink_f3 = make_gate("sink-f3", counter_f3);
+  bus_f.subscribe(sink_f1, {hook::Event::tool_before});
+  bus_f.subscribe(sink_f2, {hook::Event::tool_before});
+  bus_f.subscribe(sink_f3, {hook::Event::tool_before});
   bench.run("publish_blocking_three_sinks_all_proceed", [&] {
     const auto value = drive_blocking_publish(io, bus_f, payload_f);
     ankerl::nanobench::doNotOptimizeAway(value);
@@ -201,12 +188,12 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
   hook::HookDecision veto{};
   veto.kind = hook::HookDecisionKind::veto;
   veto.reason = "bench";
-  BlockingBenchSink sink_g1{"sink-g1", counter_g1};
-  BlockingBenchSink sink_g2{"sink-g2", counter_g2, std::move(veto)};
-  BlockingBenchSink sink_g3{"sink-g3", counter_g3};
-  bus_g.bind(sink_g1, {hook::Event::tool_before});
-  bus_g.bind(sink_g2, {hook::Event::tool_before});
-  bus_g.bind(sink_g3, {hook::Event::tool_before});
+  auto sink_g1 = make_gate("sink-g1", counter_g1);
+  auto sink_g2 = make_gate("sink-g2", counter_g2, std::move(veto));
+  auto sink_g3 = make_gate("sink-g3", counter_g3);
+  bus_g.subscribe(sink_g1, {hook::Event::tool_before});
+  bus_g.subscribe(sink_g2, {hook::Event::tool_before});
+  bus_g.subscribe(sink_g3, {hook::Event::tool_before});
   bench.run("publish_blocking_short_circuit_second", [&] {
     const auto value = drive_blocking_publish(io, bus_g, payload_g);
     ankerl::nanobench::doNotOptimizeAway(value);
@@ -219,7 +206,7 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
   hook::Bus bus_h;
   std::size_t counter_h = 0;
   auto sink_h = make_noop_sink("sink-h", counter_h);
-  bus_h.bind(sink_h, {hook::Event::tool_after});
+  bus_h.subscribe(sink_h, {hook::Event::tool_after});
   bench.run("publish_one_default_sink_large_redacted_payload", [&] {
     const auto value = drive_publish(io, bus_h, hook::Event::tool_after, payload_h);
     ankerl::nanobench::doNotOptimizeAway(value);
@@ -234,9 +221,9 @@ void register_hook_bus(ankerl::nanobench::Bench& bench) {
   auto sink_i1 = make_noop_sink("sink-i1", counter_i1);
   auto sink_i2 = make_noop_sink("sink-i2", counter_i2);
   auto sink_i3 = make_noop_sink("sink-i3", counter_i3);
-  bus_i.bind(sink_i1, {hook::Event::tool_after});
-  bus_i.bind(sink_i2, {hook::Event::tool_after});
-  bus_i.bind(sink_i3, {hook::Event::tool_after});
+  bus_i.subscribe(sink_i1, {hook::Event::tool_after});
+  bus_i.subscribe(sink_i2, {hook::Event::tool_after});
+  bus_i.subscribe(sink_i3, {hook::Event::tool_after});
   bench.run("publish_three_default_sinks_large_redacted_payload", [&] {
     const auto value = drive_publish(io, bus_i, hook::Event::tool_after, payload_i);
     ankerl::nanobench::doNotOptimizeAway(value);

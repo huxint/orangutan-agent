@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -10,6 +11,7 @@
 #include <asio/this_coro.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <oran/async.hpp>
 #include <oran/core/error.hpp>
@@ -81,125 +83,56 @@ using namespace std::chrono_literals;
   };
 }
 
-/// `Sink` whose `handle_blocking` records every call and yields a
-/// caller-supplied decision. The advisory `receive` path is unused here
-/// but must remain implementable since `Sink::receive` is pure virtual.
-class BlockingSink final : public hook::Sink {
-public:
-  BlockingSink(std::string id, hook::HookDecision decision) : id_(std::move(id)), decision_(std::move(decision)) {}
+[[nodiscard]] hook::HookDecision decision_of(hook::HookDecisionKind kind, std::string reason = {}) {
+  return hook::HookDecision{.kind = kind, .reason = std::move(reason)};
+}
 
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return id_;
-  }
+/// Gate that counts its calls and returns a fixed decision.
+[[nodiscard]] hook::Sink deciding(std::string id, hook::HookDecision decision, std::size_t& calls) {
+  return hook::Sink{
+      .id = std::move(id),
+      .decide = [decision = std::move(decision),
+                 &calls](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        ++calls;
+        co_return decision;
+      },
+  };
+}
 
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::PayloadPtr /*payload*/) override {
-    co_return core::Result<void>{};
-  }
+[[nodiscard]] hook::Sink deciding(std::string id, hook::HookDecision decision) {
+  return hook::Sink{
+      .id = std::move(id),
+      .decide = [decision = std::move(decision)](hook::Event, hook::PayloadPtr)
+          -> async::Awaitable<core::Result<hook::HookDecision>> { co_return decision; },
+  };
+}
 
-  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>>
-  handle_blocking(hook::Event /*event*/, hook::PayloadPtr /*payload*/) override {
-    ++calls_;
-    co_return decision_;
-  }
+/// Gate that proceeds after `delay` unless cancelled first.
+[[nodiscard]] hook::Sink slow(std::string id, std::chrono::milliseconds delay) {
+  return hook::Sink{
+      .id = std::move(id),
+      .decide = [delay](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        auto slept = co_await async::sleep_for(co_await asio::this_coro::executor, delay);
+        if (!slept) {
+          co_return std::unexpected(std::move(slept).error());
+        }
+        co_return hook::HookDecision{};
+      },
+  };
+}
 
-  [[nodiscard]] std::size_t calls() const noexcept {
-    return calls_;
-  }
-
-private:
-  std::string id_;
-  hook::HookDecision decision_;
-  std::size_t calls_{0};
-};
-
-/// `Sink` whose `handle_blocking` returns a `core::Result` error.
-class FailingBlockingSink final : public hook::Sink {
-public:
-  FailingBlockingSink(std::string id, std::string reason) : id_(std::move(id)), reason_(std::move(reason)) {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return id_;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::PayloadPtr /*payload*/) override {
-    co_return core::Result<void>{};
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>>
-  handle_blocking(hook::Event /*event*/, hook::PayloadPtr /*payload*/) override {
-    co_return std::unexpected(core::Error::internal(reason_));
-  }
-
-private:
-  std::string id_;
-  std::string reason_;
-};
-
-/// Cancellation-aware sink that stays inside `handle_blocking` longer
-/// than the bus timeout. The bus should synthesize `hook_timeout` and
-/// cancel this awaitable before the test helper's hard timeout fires.
-class SlowBlockingSink final : public hook::Sink {
-public:
-  SlowBlockingSink(std::string id, std::chrono::milliseconds delay) : id_(std::move(id)), delay_(delay) {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return id_;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::PayloadPtr /*payload*/) override {
-    co_return core::Result<void>{};
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>>
-  handle_blocking(hook::Event /*event*/, hook::PayloadPtr /*payload*/) override {
-    ++calls_;
-    const auto executor = co_await asio::this_coro::executor;
-    auto slept = co_await async::sleep_for(executor, delay_);
-    if (!slept) {
-      co_return std::unexpected(std::move(slept).error());
-    }
-    co_return hook::HookDecision{};
-  }
-
-  [[nodiscard]] std::size_t calls() const noexcept {
-    return calls_;
-  }
-
-private:
-  std::string id_;
-  std::chrono::milliseconds delay_;
-  std::size_t calls_{0};
-};
-
-/// `Sink` whose `handle_blocking` throws an exception from its
-/// awaitable. Mirrors the existing throwing-sink coverage in
-/// `test_bus.cpp` for advisory publishes.
-class ThrowingBlockingSink final : public hook::Sink {
-public:
-  ThrowingBlockingSink(std::string id, std::string reason) : id_(std::move(id)), reason_(std::move(reason)) {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return id_;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::PayloadPtr /*payload*/) override {
-    co_return core::Result<void>{};
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<hook::HookDecision>>
-  handle_blocking(hook::Event /*event*/, hook::PayloadPtr /*payload*/) override {
-    throw std::runtime_error{reason_};
-    co_return hook::HookDecision{};
-  }
-
-private:
-  std::string id_;
-  std::string reason_;
-};
+/// Gate that copies the delivered payload and proceeds.
+template <class T>
+[[nodiscard]] hook::Sink copying(std::string id, T& copy, bool trusted_local = false) {
+  return hook::Sink{
+      .id = std::move(id),
+      .decide = [&copy](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        copy = std::get<T>(*payload);
+        co_return hook::HookDecision{};
+      },
+      .trusted_local = trusted_local,
+  };
+}
 
 }  // namespace
 
@@ -211,158 +144,78 @@ TEST_CASE("publish_blocking on empty bus returns proceed", "[hook][bus][blocking
     REQUIRE(result->kind == hook::HookDecisionKind::proceed);
     REQUIRE(result->reason.empty());
     REQUIRE(result->trace.empty());
-    co_return;
   });
 }
 
-TEST_CASE("Sink default handle_blocking returns proceed", "[hook][bus][blocking]") {
+TEST_CASE("publish_blocking skips observe-only sinks", "[hook][bus][blocking]") {
   hook::Bus bus;
-  // An InProcessSink without a blocking handler installed falls back to
-  // Sink::handle_blocking, which yields HookDecision{} (proceed).
-  hook::InProcessSink sink{
-      "default-sink",
-      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
-        co_return core::Result<void>{};
-      }};
-  bus.bind(sink, {hook::Event::tool_before});
+  bus.subscribe(hook::Sink{.id = "observer",
+                           .observe = [](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> { co_return; }},
+                {hook::Event::tool_before});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
     auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before());
     REQUIRE(result.has_value());
     REQUIRE(result->kind == hook::HookDecisionKind::proceed);
-    co_return;
+    REQUIRE(result->trace.empty());
   });
 }
 
-TEST_CASE("publish_blocking returns single sink's veto decision", "[hook][bus][blocking]") {
-  hook::Bus bus;
-  hook::HookDecision veto{};
-  veto.kind = hook::HookDecisionKind::veto;
-  veto.reason = "policy";
-  BlockingSink sink{"policy-sink", veto};
-  bus.bind(sink, {hook::Event::tool_before});
-
-  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before());
-    REQUIRE(result.has_value());
-    REQUIRE(result->kind == hook::HookDecisionKind::veto);
-    REQUIRE(result->reason == "policy");
-    REQUIRE(result->trace.size() == 1);
-    REQUIRE(result->trace[0].sink_id == "policy-sink");
-    REQUIRE(result->trace[0].kind == hook::HookDecisionKind::veto);
-    REQUIRE(result->trace[0].reason == "policy");
-    co_return;
-  });
-
-  REQUIRE(sink.calls() == 1);
-}
-
-TEST_CASE("publish_blocking returns single sink's rewrite decision", "[hook][bus][blocking]") {
-  hook::Bus bus;
-  hook::HookDecision rewrite{};
-  rewrite.kind = hook::HookDecisionKind::rewrite;
-  rewrite.reason = "narrow_path";
+TEST_CASE("publish_blocking returns a single gate's decision", "[hook][bus][blocking]") {
+  auto rewrite = decision_of(hook::HookDecisionKind::rewrite, "narrow_path");
   rewrite.rewritten_input_json = std::string{R"({"path":"src/main.cpp"})"};
-  BlockingSink sink{"rewriter", rewrite};
-  bus.bind(sink, {hook::Event::tool_before});
+  const auto decision = GENERATE_COPY(decision_of(hook::HookDecisionKind::veto, "policy"),
+                                      rewrite,
+                                      decision_of(hook::HookDecisionKind::require_approval, "operator_review"));
+  hook::Bus bus;
+  std::size_t calls = 0;
+  bus.subscribe(deciding("gate", decision, calls), {hook::Event::tool_before});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
     auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before());
     REQUIRE(result.has_value());
-    REQUIRE(result->kind == hook::HookDecisionKind::rewrite);
-    REQUIRE(result->reason == "narrow_path");
-    REQUIRE(result->rewritten_input_json == R"({"path":"src/main.cpp"})");
-    co_return;
+    REQUIRE(result->kind == decision.kind);
+    REQUIRE(result->reason == decision.reason);
+    REQUIRE(result->rewritten_input_json == decision.rewritten_input_json);
+    REQUIRE(result->trace.size() == 1);
+    REQUIRE(result->trace[0].sink_id == "gate");
+    REQUIRE(result->trace[0].kind == decision.kind);
+    REQUIRE(result->trace[0].reason == decision.reason);
   });
+
+  REQUIRE(calls == 1);
 }
 
-TEST_CASE("publish_blocking returns single sink's require_approval decision", "[hook][bus][blocking]") {
+TEST_CASE("publish_blocking short-circuits at the first non-proceed gate", "[hook][bus][blocking]") {
   hook::Bus bus;
-  hook::HookDecision require{};
-  require.kind = hook::HookDecisionKind::require_approval;
-  require.reason = "operator_review";
-  BlockingSink sink{"approval-router", require};
-  bus.bind(sink, {hook::Event::permission_ask_rendered});
-
-  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto result = co_await bus.publish_blocking<hook::Event::permission_ask_rendered>(
-        hook::PermissionAskRenderedPayload{
-            .tool_name = "FileWrite",
-            .input_json = R"({"path":"notes.txt","content":"notes"})",
-            .who = hook::Identity{.scope_key = "scope", .agent_key = "agent", .identity = "operator"},
-            .decision_reason = "operator_review",
-        });
-    REQUIRE(result.has_value());
-    REQUIRE(result->kind == hook::HookDecisionKind::require_approval);
-    REQUIRE(result->reason == "operator_review");
-    co_return;
-  });
-}
-
-TEST_CASE("publish_blocking short-circuits at first non-proceed sink", "[hook][bus][blocking]") {
-  hook::Bus bus;
-  hook::HookDecision proceed{};
-  hook::HookDecision veto{};
-  veto.kind = hook::HookDecisionKind::veto;
-  veto.reason = "first-veto";
-  BlockingSink first{"first", veto};
-  BlockingSink second{"second", proceed};
-  BlockingSink third{"third", proceed};
-  bus.bind(first, {hook::Event::tool_before});
-  bus.bind(second, {hook::Event::tool_before});
-  bus.bind(third, {hook::Event::tool_before});
+  std::size_t first = 0;
+  std::size_t second = 0;
+  std::size_t third = 0;
+  bus.subscribe(deciding("first", {}, first), {hook::Event::tool_before});
+  bus.subscribe(deciding("second", decision_of(hook::HookDecisionKind::veto, "second-veto"), second),
+                {hook::Event::tool_before});
+  bus.subscribe(deciding("third", {}, third), {hook::Event::tool_before});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
     auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before());
     REQUIRE(result.has_value());
     REQUIRE(result->kind == hook::HookDecisionKind::veto);
-    REQUIRE(result->reason == "first-veto");
-    REQUIRE(result->trace.size() == 1);
-    REQUIRE(result->trace[0].sink_id == "first");
-    REQUIRE(result->trace[0].kind == hook::HookDecisionKind::veto);
-    co_return;
-  });
-
-  REQUIRE(first.calls() == 1);
-  REQUIRE(second.calls() == 0);
-  REQUIRE(third.calls() == 0);
-}
-
-TEST_CASE("publish_blocking consults later sink when earlier returns proceed", "[hook][bus][blocking]") {
-  hook::Bus bus;
-  hook::HookDecision proceed{};
-  hook::HookDecision require{};
-  require.kind = hook::HookDecisionKind::require_approval;
-  require.reason = "second-required";
-  BlockingSink first{"first", proceed};
-  BlockingSink second{"second", require};
-  bus.bind(first, {hook::Event::tool_before});
-  bus.bind(second, {hook::Event::tool_before});
-
-  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before());
-    REQUIRE(result.has_value());
-    REQUIRE(result->kind == hook::HookDecisionKind::require_approval);
-    REQUIRE(result->reason == "second-required");
+    REQUIRE(result->reason == "second-veto");
     REQUIRE(result->trace.size() == 2);
     REQUIRE(result->trace[0].sink_id == "first");
     REQUIRE(result->trace[0].kind == hook::HookDecisionKind::proceed);
     REQUIRE(result->trace[1].sink_id == "second");
-    REQUIRE(result->trace[1].kind == hook::HookDecisionKind::require_approval);
-    co_return;
   });
 
-  REQUIRE(first.calls() == 1);
-  REQUIRE(second.calls() == 1);
+  REQUIRE(first == 1);
+  REQUIRE(second == 1);
+  REQUIRE(third == 0);
 }
 
-TEST_CASE("publish_blocking returns proceed when all sinks proceed", "[hook][bus][blocking]") {
+TEST_CASE("publish_blocking returns proceed with every consulted gate traced", "[hook][bus][blocking]") {
   hook::Bus bus;
-  hook::HookDecision proceed{};
-  BlockingSink first{"first", proceed};
-  BlockingSink second{"second", proceed};
-  bus.bind(first, {hook::Event::tool_before});
-  bus.bind(second, {hook::Event::tool_before});
+  bus.subscribe(deciding("first", {}), {hook::Event::tool_before});
+  bus.subscribe(deciding("second", {}), {hook::Event::tool_before});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
     auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before());
@@ -370,67 +223,43 @@ TEST_CASE("publish_blocking returns proceed when all sinks proceed", "[hook][bus
     REQUIRE(result->kind == hook::HookDecisionKind::proceed);
     REQUIRE(result->trace.size() == 2);
     REQUIRE(result->trace[0].sink_id == "first");
-    REQUIRE(result->trace[0].kind == hook::HookDecisionKind::proceed);
     REQUIRE(result->trace[1].sink_id == "second");
-    REQUIRE(result->trace[1].kind == hook::HookDecisionKind::proceed);
-    co_return;
   });
-
-  REQUIRE(first.calls() == 1);
-  REQUIRE(second.calls() == 1);
 }
 
-TEST_CASE("sink error becomes veto with reason=hook_error", "[hook][bus][blocking]") {
+TEST_CASE("gate errors and exceptions veto with reason=hook_error", "[hook][bus][blocking]") {
+  const bool throws = GENERATE(false, true);
   hook::Bus bus;
-  FailingBlockingSink first{"failing", "boom"};
-  hook::HookDecision proceed{};
-  BlockingSink second{"second", proceed};
-  bus.bind(first, {hook::Event::tool_before});
-  bus.bind(second, {hook::Event::tool_before});
+  std::size_t later = 0;
+  bus.subscribe(hook::Sink{.id = "failing",
+                           .decide = [throws](hook::Event,
+                                              hook::PayloadPtr) -> async::Awaitable<core::Result<hook::HookDecision>> {
+                             if (throws) {
+                               throw std::runtime_error{"boom"};
+                             }
+                             co_return std::unexpected(core::Error::internal("boom"));
+                           }},
+                {hook::Event::tool_before});
+  bus.subscribe(deciding("later", {}, later), {hook::Event::tool_before});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
     auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before());
     REQUIRE(result.has_value());
     REQUIRE(result->kind == hook::HookDecisionKind::veto);
-    REQUIRE(result->reason.starts_with("hook_error"));
-    REQUIRE(result->reason.contains("boom"));
-    REQUIRE(result->reason.contains("[sink=failing]"));
+    REQUIRE(result->reason == "hook_error: boom [sink=failing]");
     REQUIRE(result->trace.size() == 1);
     REQUIRE(result->trace[0].sink_id == "failing");
     REQUIRE(result->trace[0].kind == hook::HookDecisionKind::veto);
-    co_return;
   });
 
-  // Second sink not called: the failing sink short-circuited the walk.
-  // (BlockingSink::calls is the call counter; second has none.)
+  REQUIRE(later == 0);
 }
 
-TEST_CASE("throwing sink becomes veto with reason=hook_error", "[hook][bus][blocking]") {
-  hook::Bus bus;
-  ThrowingBlockingSink first{"thrower", "kaboom"};
-  bus.bind(first, {hook::Event::tool_before});
-
-  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before());
-    REQUIRE(result.has_value());
-    REQUIRE(result->kind == hook::HookDecisionKind::veto);
-    REQUIRE(result->reason.starts_with("hook_error"));
-    REQUIRE(result->reason.contains("kaboom"));
-    REQUIRE(result->reason.contains("[sink=thrower]"));
-    REQUIRE(result->trace.size() == 1);
-    REQUIRE(result->trace[0].sink_id == "thrower");
-    REQUIRE(result->trace[0].kind == hook::HookDecisionKind::veto);
-    co_return;
-  });
-}
-
-TEST_CASE("blocking sink timeout becomes veto with elapsed trace", "[hook][bus][blocking]") {
+TEST_CASE("gate timeout becomes veto with elapsed trace", "[hook][bus][blocking]") {
   hook::Bus bus{hook::BusOptions{.blocking_timeout = 5ms}};
-  SlowBlockingSink first{"slow", 1s};
-  hook::HookDecision proceed{};
-  BlockingSink second{"second", proceed};
-  bus.bind(first, {hook::Event::tool_before});
-  bus.bind(second, {hook::Event::tool_before});
+  std::size_t later = 0;
+  bus.subscribe(slow("slow", 1s), {hook::Event::tool_before});
+  bus.subscribe(deciding("later", {}, later), {hook::Event::tool_before});
 
   test::run_async(
       [&](asio::io_context& /*io*/) -> async::Awaitable<void> {
@@ -440,153 +269,83 @@ TEST_CASE("blocking sink timeout becomes veto with elapsed trace", "[hook][bus][
         REQUIRE(result->reason == "hook_timeout");
         REQUIRE(result->trace.size() == 1);
         REQUIRE(result->trace[0].sink_id == "slow");
-        REQUIRE(result->trace[0].kind == hook::HookDecisionKind::veto);
-        REQUIRE(result->trace[0].reason == "hook_timeout");
         REQUIRE(result->trace[0].elapsed == 5ms);
-        co_return;
       },
       250ms);
 
-  REQUIRE(first.calls() == 1);
-  REQUIRE(second.calls() == 0);
+  REQUIRE(later == 0);
 }
 
-TEST_CASE("InProcessSink blocking handler drives the decision", "[hook][bus][blocking]") {
-  hook::Bus bus;
-  hook::InProcessSink sink{
-      "in-process",
-      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
-        co_return core::Result<void>{};
-      }};
-  sink.set_blocking_handler(
-      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<hook::HookDecision>> {
-        hook::HookDecision decision{};
-        decision.kind = hook::HookDecisionKind::rewrite;
-        decision.reason = "narrowed";
-        decision.rewritten_input_json = std::string{R"({"path":"src/x"})"};
-        co_return decision;
-      });
-  bus.bind(sink, {hook::Event::tool_before});
+TEST_CASE("approval prompts wait for a decision beyond the gate timeout", "[hook][bus][blocking]") {
+  hook::Bus bus{hook::BusOptions{.blocking_timeout = 5ms}};
+  bus.subscribe(slow("operator", 50ms), {hook::Event::permission_ask_rendered});
 
-  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before());
-    REQUIRE(result.has_value());
-    REQUIRE(result->kind == hook::HookDecisionKind::rewrite);
-    REQUIRE(result->reason == "narrowed");
-    REQUIRE(result->rewritten_input_json == R"({"path":"src/x"})");
-    co_return;
-  });
-}
-
-TEST_CASE("publish_blocking redacts input_json when a sanitized view is present", "[hook][bus][blocking][redaction]") {
-  hook::Bus bus;
-  std::string default_input;
-  std::string trusted_input;
-  hook::InProcessSink default_sink{
-      "default",
-      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
-        co_return core::Result<void>{};
-      }};
-  default_sink.set_blocking_handler(
-      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
-        const auto* before = std::get_if<hook::ToolBeforePayload>(payload.get());
-        REQUIRE(before != nullptr);
-        default_input = before->input_json;
-        co_return hook::HookDecision{};
-      });
-  hook::InProcessSink trusted_sink{
-      "trusted",
-      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
-        co_return core::Result<void>{};
+  test::run_async(
+      [&](asio::io_context& /*io*/) -> async::Awaitable<void> {
+        auto result = co_await bus.publish_blocking<hook::Event::permission_ask_rendered>(
+            hook::PermissionAskRenderedPayload{.tool_name = "FileWrite", .decision_reason = "operator_review"});
+        REQUIRE(result.has_value());
+        REQUIRE(result->kind == hook::HookDecisionKind::proceed);
+        REQUIRE(result->trace.size() == 1);
+        REQUIRE_FALSE(result->trace[0].elapsed.has_value());
       },
-      hook::SinkKind::trusted_local};
-  trusted_sink.set_blocking_handler(
-      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
-        const auto* before = std::get_if<hook::ToolBeforePayload>(payload.get());
-        REQUIRE(before != nullptr);
-        trusted_input = before->input_json;
-        co_return hook::HookDecision{};
-      });
-  bus.bind(default_sink, {hook::Event::tool_before});
-  bus.bind(trusted_sink, {hook::Event::tool_before});
+      1s);
+}
+
+TEST_CASE("publish_blocking redacts input_json for untrusted gates", "[hook][bus][blocking][redaction]") {
+  hook::Bus bus;
+  hook::ToolBeforePayload redacted;
+  hook::ToolBeforePayload original;
+  bus.subscribe(copying("default", redacted), {hook::Event::tool_before});
+  bus.subscribe(copying("trusted", original, true), {hook::Event::tool_before});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
     auto result = co_await bus.publish_blocking<hook::Event::tool_before>(sample_before_with_redacted_input());
     REQUIRE(result.has_value());
-    REQUIRE(result->kind == hook::HookDecisionKind::proceed);
     REQUIRE(result->trace.size() == 2);
-    co_return;
   });
 
-  REQUIRE(default_input ==
+  REQUIRE(redacted.input_json ==
           R"({"kind":"redacted_tool_input","input_hash":"abc","old_string_bytes":6,"new_string_bytes":6})");
-  REQUIRE(trusted_input == R"({"path":"notes.md","old_string":"secret","new_string":"public"})");
+  REQUIRE(original.input_json == R"({"path":"notes.md","old_string":"secret","new_string":"public"})");
 }
 
-TEST_CASE("publish_blocking redacts memory write records for default sinks",
+TEST_CASE("publish_blocking redacts memory write records for untrusted gates",
           "[hook][bus][blocking][redaction][memory]") {
   hook::Bus bus;
-  hook::MemoryWritePayload default_payload;
-  hook::MemoryWritePayload trusted_payload;
-  hook::InProcessSink default_sink{
-      "default",
-      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
-        co_return core::Result<void>{};
-      }};
-  default_sink.set_blocking_handler(
-      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
-        const auto* before = std::get_if<hook::MemoryWritePayload>(payload.get());
-        REQUIRE(before != nullptr);
-        default_payload = *before;
-        co_return hook::HookDecision{};
-      });
-  hook::InProcessSink trusted_sink{
-      "trusted",
-      [](hook::Event /*event*/, hook::PayloadPtr /*payload*/) -> async::Awaitable<core::Result<void>> {
-        co_return core::Result<void>{};
-      },
-      hook::SinkKind::trusted_local};
-  trusted_sink.set_blocking_handler(
-      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
-        const auto* before = std::get_if<hook::MemoryWritePayload>(payload.get());
-        REQUIRE(before != nullptr);
-        trusted_payload = *before;
-        co_return hook::HookDecision{};
-      });
-  bus.bind(default_sink, {hook::Event::memory_write_before});
-  bus.bind(trusted_sink, {hook::Event::memory_write_before});
+  hook::MemoryWritePayload redacted;
+  hook::MemoryWritePayload original;
+  bus.subscribe(copying("default", redacted), {hook::Event::memory_write_before});
+  bus.subscribe(copying("trusted", original, true), {hook::Event::memory_write_before});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
     auto result = co_await bus.publish_blocking<hook::Event::memory_write_before>(sample_memory_write());
     REQUIRE(result.has_value());
-    REQUIRE(result->kind == hook::HookDecisionKind::proceed);
     REQUIRE(result->trace.size() == 2);
-    co_return;
   });
 
-  REQUIRE(default_payload.record.id == "memory-1");
-  REQUIRE(default_payload.record.kind == "project");
-  REQUIRE(default_payload.record.title.empty());
-  REQUIRE(default_payload.record.body.empty());
-  REQUIRE(default_payload.record.tags.empty());
-  REQUIRE(default_payload.record.linked_record_ids.empty());
-  REQUIRE(default_payload.redacted_record.has_value());
-  REQUIRE(default_payload.redacted_record->title_bytes == std::string_view{"Sensitive title"}.size());
-  REQUIRE(default_payload.redacted_record->body_bytes == std::string_view{"Sensitive body"}.size());
-  REQUIRE(default_payload.redacted_record->tag_count == 2);
-  REQUIRE(default_payload.redacted_record->linked_record_count == 1);
+  REQUIRE(redacted.record.id == "memory-1");
+  REQUIRE(redacted.record.kind == "project");
+  REQUIRE(redacted.record.title.empty());
+  REQUIRE(redacted.record.body.empty());
+  REQUIRE(redacted.record.tags.empty());
+  REQUIRE(redacted.record.linked_record_ids.empty());
+  REQUIRE(redacted.redacted_record->title_bytes == std::string_view{"Sensitive title"}.size());
+  REQUIRE(redacted.redacted_record->body_bytes == std::string_view{"Sensitive body"}.size());
+  REQUIRE(redacted.redacted_record->tag_count == 2);
+  REQUIRE(redacted.redacted_record->linked_record_count == 1);
 
-  REQUIRE(trusted_payload.record.title == "Sensitive title");
-  REQUIRE(trusted_payload.record.body == "Sensitive body");
-  REQUIRE(trusted_payload.record.tags == std::vector<std::string>{"secret", "project"});
-  REQUIRE(trusted_payload.record.linked_record_ids == std::vector<std::string>{"linked-1"});
+  REQUIRE(original.record.title == "Sensitive title");
+  REQUIRE(original.record.body == "Sensitive body");
+  REQUIRE(original.record.tags == std::vector<std::string>{"secret", "project"});
+  REQUIRE(original.record.linked_record_ids == std::vector<std::string>{"linked-1"});
 }
 
-TEST_CASE("EventTraits restricts blocking publication to effect gates", "[hook][event][blocking]") {
-  STATIC_REQUIRE(hook::HasBlockingDecision<hook::Event::tool_before>);
-  STATIC_REQUIRE(hook::HasBlockingDecision<hook::Event::permission_ask_rendered>);
-  STATIC_REQUIRE(hook::HasBlockingDecision<hook::Event::memory_write_before>);
-  STATIC_REQUIRE_FALSE(hook::HasBlockingDecision<hook::Event::tool_after>);
-  STATIC_REQUIRE_FALSE(hook::HasBlockingDecision<hook::Event::memory_read_after>);
-  STATIC_REQUIRE_FALSE(hook::HasBlockingDecision<hook::Event::provider_response>);
+TEST_CASE("only effect gates admit blocking publication", "[hook][event][blocking]") {
+  STATIC_REQUIRE(hook::is_gate(hook::Event::tool_before));
+  STATIC_REQUIRE(hook::is_gate(hook::Event::permission_ask_rendered));
+  STATIC_REQUIRE(hook::is_gate(hook::Event::memory_write_before));
+  STATIC_REQUIRE_FALSE(hook::is_gate(hook::Event::tool_after));
+  STATIC_REQUIRE_FALSE(hook::is_gate(hook::Event::memory_read_after));
+  STATIC_REQUIRE_FALSE(hook::is_gate(hook::Event::provider_response));
 }

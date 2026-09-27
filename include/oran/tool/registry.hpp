@@ -165,10 +165,9 @@ struct DispatchContext {
   /// `hook::Event::tool_before` after the registry resolves the tool def
   /// (i.e., for every known tool name) and consumes veto / rewrite /
   /// require_approval decisions before workspace resolution and permission
-  /// evaluation. It then publishes advisory `tool_dispatched` before
-  /// handlers run, `tool_error` on failures, and `tool_after` at every
-  /// exit. The pointer is non-owning; the caller (typically the agent loop)
-  /// keeps the bus alive across dispatch invocations.
+  /// evaluation. It publishes advisory `tool_after` at every exit. The
+  /// pointer is non-owning; the caller (typically the agent loop) keeps the
+  /// bus alive across dispatch invocations.
   hook::Bus* bus{nullptr};
   /// Optional long-term memory recall service. When set, `MemoryRecall` calls
   /// it with the parsed query, limit, and kind spellings, and returns the

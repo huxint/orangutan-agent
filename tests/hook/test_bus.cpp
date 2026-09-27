@@ -1,16 +1,16 @@
-// tests/hook/test_bus.cpp — `hook::Bus` subscribe/publish coverage.
+// tests/hook/test_bus.cpp — `hook::Bus` subscription and advisory publication.
 
 #include <algorithm>
 #include <chrono>
-#include <concepts>
 #include <cstddef>
 #include <exception>
+#include <iterator>
+#include <memory>
 #include <optional>
-#include <span>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -40,260 +40,43 @@ namespace {
 
 using namespace std::chrono_literals;
 
-/// Recording sink — captures every (event, payload, payload_kind) tuple. The
-/// `payload_kind` is a stable string the test can match against.
 struct Capture {
+  std::string sink;
   hook::Event event;
-  std::string payload_kind;
+  /// Identity of the shared snapshot; only valid for comparison.
+  const hook::Payload* snapshot;
+  hook::Payload payload;
   std::string input_json;
   std::optional<std::string> data_json;
 };
 
-[[nodiscard]] std::string payload_kind(const hook::Payload& payload) {
-  return std::visit(
-      [](const auto& alt) -> std::string {
-        using T = std::decay_t<decltype(alt)>;
-        if constexpr (std::same_as<T, hook::ToolBeforePayload>) {
-          return "before";
-        } else if constexpr (std::same_as<T, hook::ToolDispatchedPayload>) {
-          return "dispatched";
-        } else if constexpr (std::same_as<T, hook::ToolAfterPayload>) {
-          return "after";
-        } else if constexpr (std::same_as<T, hook::ToolErrorPayload>) {
-          return "error";
-        } else if constexpr (std::same_as<T, hook::PermissionAskRenderedPayload>) {
-          return "ask";
-        } else if constexpr (std::same_as<T, hook::MemoryReadPayload>) {
-          return "memory_read";
-        } else if constexpr (std::same_as<T, hook::MemoryWritePayload>) {
-          return "memory_write";
-        } else if constexpr (std::same_as<T, hook::MemoryForgetPayload>) {
-          return "memory_forget";
-        } else if constexpr (std::same_as<T, hook::ProviderRequestPayload>) {
-          return "provider_request";
-        } else if constexpr (std::same_as<T, hook::ProviderResponsePayload>) {
-          return "provider_response";
-        } else if constexpr (std::same_as<T, hook::ProviderErrorPayload>) {
-          return "provider_error";
-        } else if constexpr (std::same_as<T, hook::ProviderFallbackPayload>) {
-          return "provider_fallback";
+[[nodiscard]] hook::Sink recording_sink(std::string id, std::vector<Capture>& captures, bool trusted_local = false) {
+  return hook::Sink{
+      .id = id,
+      .observe = [id, &captures](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<void> {
+        auto capture = Capture{.sink = id, .event = event, .snapshot = payload.get(), .payload = *payload};
+        std::visit(
+            [&](const auto& alt) {
+              if constexpr (requires { alt.input_json; }) {
+                capture.input_json = alt.input_json;
+              }
+            },
+            *payload);
+        if (const auto* after = std::get_if<hook::ToolAfterPayload>(payload.get()); after != nullptr) {
+          capture.data_json = after->data_json;
         }
+        captures.push_back(std::move(capture));
+        co_return;
       },
-      payload);
+      .trusted_local = trusted_local,
+  };
 }
 
-class RecordingSink final : public hook::Sink {
-public:
-  explicit RecordingSink(std::string id, hook::SinkKind kind = hook::SinkKind::default_)
-      : id_(std::move(id)), kind_(kind) {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return id_;
-  }
-
-  [[nodiscard]] hook::SinkKind kind() const noexcept override {
-    return kind_;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event event, hook::PayloadPtr payload) override {
-    std::string input_json;
-    std::optional<std::string> data_json;
-    std::visit(
-        [&](const auto& alt) {
-          if constexpr (requires { alt.input_json; }) {
-            input_json = alt.input_json;
-          }
-        },
-        *payload);
-    if (const auto* after = std::get_if<hook::ToolAfterPayload>(payload.get()); after != nullptr) {
-      data_json = after->data_json;
-    }
-    captures_.push_back({.event = event,
-                         .payload_kind = payload_kind(*payload),
-                         .input_json = std::move(input_json),
-                         .data_json = std::move(data_json)});
-    co_return core::Result<void>{};
-  }
-
-  [[nodiscard]] std::span<const Capture> captures() const noexcept {
-    return captures_;
-  }
-
-private:
-  std::string id_;
-  hook::SinkKind kind_{hook::SinkKind::default_};
-  std::vector<Capture> captures_;
-};
-
-class FailingSink final : public hook::Sink {
-public:
-  explicit FailingSink(std::string id, std::string reason) : id_(std::move(id)), reason_(std::move(reason)) {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return id_;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::PayloadPtr /*payload*/) override {
-    co_return std::unexpected(core::Error::internal(reason_).with("sink", id_));
-  }
-
-private:
-  std::string id_;
-  std::string reason_;
-};
-
-class DelayedSink final : public hook::Sink {
-public:
-  DelayedSink(std::string id,
-              std::chrono::milliseconds delay,
-              std::size_t& active,
-              std::size_t& peak_active,
-              std::vector<std::string>& completions)
-      : id_(std::move(id)), delay_(delay), active_(&active), peak_active_(&peak_active), completions_(&completions) {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return id_;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::PayloadPtr /*payload*/) override {
-    ++(*active_);
-    *peak_active_ = std::max(*peak_active_, *active_);
-    const auto executor = co_await asio::this_coro::executor;
-    auto slept = co_await async::sleep_for(executor, delay_);
-    --(*active_);
-    if (!slept) {
-      co_return std::unexpected(std::move(slept).error());
-    }
-    completions_->push_back(id_);
-    co_return core::Result<void>{};
-  }
-
-private:
-  std::string id_;
-  std::chrono::milliseconds delay_;
-  std::size_t* active_;
-  std::size_t* peak_active_;
-  std::vector<std::string>* completions_;
-};
-
-class CancellationAwareAdvisorySink final : public hook::Sink {
-public:
-  CancellationAwareAdvisorySink(bool& active, bool& finished, bool& cancellation_seen)
-      : active_(&active), finished_(&finished), cancellation_seen_(&cancellation_seen) {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return "cancellation-aware";
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::PayloadPtr /*payload*/) override {
-    *active_ = true;
-    const auto executor = co_await asio::this_coro::executor;
-    auto slept = co_await async::sleep_for(executor, 5s);
-    *active_ = false;
-    *finished_ = true;
-    if (!slept) {
-      *cancellation_seen_ = slept.error().kind() == core::ErrorKind::cancelled;
-      co_return std::unexpected(std::move(slept).error());
-    }
-    co_return core::Result<void>{};
-  }
-
-private:
-  bool* active_;
-  bool* finished_;
-  bool* cancellation_seen_;
-};
-
-/// Sink that disables cancellation and sleeps well past any test deadline.
-/// Exercises the advisory hard bound: `publish_advisory` must abandon it at
-/// `BusOptions::advisory_timeout` instead of waiting for it forever.
-class CancellationIgnoringAdvisorySink final : public hook::Sink {
-public:
-  CancellationIgnoringAdvisorySink(bool& active, bool& finished) : active_(&active), finished_(&finished) {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return "cancellation-ignoring";
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::PayloadPtr /*payload*/) override {
-    *active_ = true;
-    const auto executor = co_await asio::this_coro::executor;
-    co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-    auto slept = co_await async::sleep_for(executor, 1s);
-    if (!slept) {
-      *finished_ = true;
-      co_return std::unexpected(std::move(slept).error());
-    }
-    *finished_ = true;
-    co_return core::Result<void>{};
-  }
-
-private:
-  bool* active_;
-  bool* finished_;
-};
-
-/// Sink that throws from its awaitable. Required to verify the advisory
-/// contract that one badly-behaved sink (one that propagates an exception
-/// rather than returning std::unexpected) does not abort the publish for
-/// later sinks and does not propagate the exception out of publish_advisory.
-class ThrowingSink final : public hook::Sink {
-public:
-  explicit ThrowingSink(std::string id, std::string reason) : id_(std::move(id)), reason_(std::move(reason)) {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return id_;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/,
-                                                             hook::PayloadPtr /*payload*/) override {
-    throw std::runtime_error{reason_};
-    co_return core::Result<void>{};
-  }
-
-private:
-  std::string id_;
-  std::string reason_;
-};
-
-class PayloadPointerSink final : public hook::Sink {
-public:
-  PayloadPointerSink(std::string id,
-                     std::vector<const hook::Payload*>& payloads,
-                     std::vector<std::string>& inputs,
-                     hook::SinkKind kind = hook::SinkKind::default_)
-      : id_(std::move(id)), payloads_(&payloads), inputs_(&inputs), kind_(kind) {}
-
-  [[nodiscard]] std::string_view id() const noexcept override {
-    return id_;
-  }
-
-  [[nodiscard]] hook::SinkKind kind() const noexcept override {
-    return kind_;
-  }
-
-  [[nodiscard]] async::Awaitable<core::Result<void>> receive(hook::Event /*event*/, hook::PayloadPtr payload) override {
-    payloads_->push_back(payload.get());
-    std::visit(
-        [&](const auto& alt) {
-          if constexpr (requires { alt.input_json; }) {
-            inputs_->push_back(alt.input_json);
-          }
-        },
-        *payload);
-    co_return core::Result<void>{};
-  }
-
-private:
-  std::string id_;
-  std::vector<const hook::Payload*>* payloads_;
-  std::vector<std::string>* inputs_;
-  hook::SinkKind kind_{hook::SinkKind::default_};
-};
+[[nodiscard]] std::vector<std::string> sink_ids(const std::vector<Capture>& captures) {
+  auto ids = std::vector<std::string>{};
+  std::ranges::transform(captures, std::back_inserter(ids), &Capture::sink);
+  return ids;
+}
 
 hook::ToolBeforePayload sample_before() {
   return hook::ToolBeforePayload{
@@ -380,465 +163,256 @@ hook::MemoryReadPayload sample_memory_read() {
   };
 }
 
+/// Spawn `publish_advisory`, wait until `started` is set, cancel it and return
+/// once the publish has completed.
+async::Awaitable<void> publish_then_cancel(asio::io_context& io, hook::Bus& bus, const bool& started) {
+  asio::cancellation_signal cancellation;
+  async::Channel<std::monostate> completed{io.get_executor(), 1};
+  std::exception_ptr failure;
+  asio::co_spawn(io,
+                 bus.publish_advisory(hook::Event::tool_before, sample_before()),
+                 asio::bind_cancellation_slot(cancellation.slot(), [&](std::exception_ptr error) {
+                   failure = error;
+                   [[maybe_unused]] auto signaled = completed.try_send(std::monostate{});
+                 }));
+  while (!started) {
+    auto yielded = co_await async::sleep_for(io.get_executor(), 1ms);
+    REQUIRE(yielded.has_value());
+  }
+  cancellation.emit(asio::cancellation_type::all);
+  auto signaled = co_await completed.receive();
+  REQUIRE(signaled.has_value());
+  if (failure) {
+    std::rethrow_exception(failure);
+  }
+}
+
 }  // namespace
 
-TEST_CASE("Bus is empty by default", "[hook][bus]") {
-  hook::Bus bus;
-  REQUIRE(bus.binding_count() == 0);
-  REQUIRE(bus.sink_count(hook::Event::tool_before) == 0);
-  REQUIRE(bus.sink_count(hook::Event::tool_after) == 0);
-}
-
-TEST_CASE("publish_advisory on empty bus succeeds with empty outcome", "[hook][bus]") {
+TEST_CASE("publish_advisory on an empty bus completes", "[hook][bus]") {
   hook::Bus bus;
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto outcome = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
-    REQUIRE(outcome.sinks.empty());
-    REQUIRE(outcome.all_succeeded());
-    REQUIRE(outcome.failure_count() == 0);
-    co_return;
+    co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
   });
 }
 
-TEST_CASE("bind connects sink to event, publish_advisory drives it", "[hook][bus]") {
+TEST_CASE("subscribe delivers only the subscribed events", "[hook][bus]") {
   hook::Bus bus;
-  RecordingSink sink{"recorder-1"};
-  bus.bind(sink, {hook::Event::tool_before});
-
-  REQUIRE(bus.binding_count() == 1);
-  REQUIRE(bus.sink_count(hook::Event::tool_before) == 1);
-  REQUIRE(bus.sink_count(hook::Event::tool_after) == 0);
+  std::vector<Capture> captures;
+  bus.subscribe(recording_sink("recorder", captures), {hook::Event::tool_before, hook::Event::tool_after});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto outcome = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
-    REQUIRE(outcome.sinks.size() == 1);
-    REQUIRE(outcome.sinks[0].sink_id == "recorder-1");
-    REQUIRE_FALSE(outcome.sinks[0].error.has_value());
-    REQUIRE(outcome.all_succeeded());
-    co_return;
+    co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
+    co_await bus.publish_advisory(hook::Event::memory_forget, hook::MemoryForgetPayload{});
+    co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_data());
   });
 
-  REQUIRE(sink.captures().size() == 1);
-  REQUIRE(sink.captures()[0].event == hook::Event::tool_before);
-  REQUIRE(sink.captures()[0].payload_kind == "before");
+  REQUIRE(captures.size() == 2);
+  REQUIRE(captures[0].event == hook::Event::tool_before);
+  REQUIRE(std::holds_alternative<hook::ToolBeforePayload>(captures[0].payload));
+  REQUIRE(captures[1].event == hook::Event::tool_after);
 }
 
-TEST_CASE("bind to multiple events delivers each separately", "[hook][bus]") {
+TEST_CASE("every observer receives one callback per publish", "[hook][bus]") {
   hook::Bus bus;
-  RecordingSink sink{"recorder-2"};
-  bus.bind(sink, {hook::Event::tool_before, hook::Event::tool_after});
-
-  REQUIRE(bus.binding_count() == 2);
+  std::vector<Capture> captures;
+  bus.subscribe(recording_sink("first", captures), {hook::Event::tool_before});
+  bus.subscribe(hook::Sink{.id = "gate-only"}, {hook::Event::tool_before});
+  bus.subscribe(recording_sink("second", captures), {hook::Event::tool_before});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto before = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
-    REQUIRE(before.all_succeeded());
-    auto after = co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_data());
-    REQUIRE(after.all_succeeded());
-    co_return;
+    co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
   });
 
-  REQUIRE(sink.captures().size() == 2);
-  REQUIRE(sink.captures()[0].event == hook::Event::tool_before);
-  REQUIRE(sink.captures()[0].payload_kind == "before");
-  REQUIRE(sink.captures()[1].event == hook::Event::tool_after);
-  REQUIRE(sink.captures()[1].payload_kind == "after");
+  auto ids = sink_ids(captures);
+  std::ranges::sort(ids);
+  REQUIRE(ids == std::vector<std::string>{"first", "second"});
 }
 
-TEST_CASE("multiple sinks subscribed to same event run in subscription order", "[hook][bus]") {
-  hook::Bus bus;
-  RecordingSink first{"first"};
-  RecordingSink second{"second"};
-  RecordingSink third{"third"};
-  bus.bind(first, {hook::Event::tool_before});
-  bus.bind(second, {hook::Event::tool_before});
-  bus.bind(third, {hook::Event::tool_before});
-
-  REQUIRE(bus.sink_count(hook::Event::tool_before) == 3);
-
-  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto outcome = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
-    REQUIRE(outcome.sinks.size() == 3);
-    REQUIRE(outcome.sinks[0].sink_id == "first");
-    REQUIRE(outcome.sinks[1].sink_id == "second");
-    REQUIRE(outcome.sinks[2].sink_id == "third");
-    co_return;
-  });
-
-  REQUIRE(first.captures().size() == 1);
-  REQUIRE(second.captures().size() == 1);
-  REQUIRE(third.captures().size() == 1);
-}
-
-TEST_CASE("publish_advisory fans out async sinks while preserving outcome order", "[hook][bus]") {
+TEST_CASE("publish_advisory runs observers concurrently", "[hook][bus]") {
   hook::Bus bus;
   std::size_t active = 0;
   std::size_t peak_active = 0;
   std::vector<std::string> completions;
-  DelayedSink first{"first", 40ms, active, peak_active, completions};
-  DelayedSink second{"second", 10ms, active, peak_active, completions};
-  DelayedSink third{"third", 20ms, active, peak_active, completions};
-  bus.bind(first, {hook::Event::tool_before});
-  bus.bind(second, {hook::Event::tool_before});
-  bus.bind(third, {hook::Event::tool_before});
+  const auto delayed = [&](std::string id, std::chrono::milliseconds delay) {
+    return hook::Sink{
+        .id = id,
+        .observe = [&, id, delay](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> {
+          ++active;
+          peak_active = std::max(peak_active, active);
+          auto slept = co_await async::sleep_for(co_await asio::this_coro::executor, delay);
+          --active;
+          if (slept) {
+            completions.push_back(id);
+          }
+        },
+    };
+  };
+  bus.subscribe(delayed("first", 40ms), {hook::Event::tool_before});
+  bus.subscribe(delayed("second", 10ms), {hook::Event::tool_before});
+  bus.subscribe(delayed("third", 20ms), {hook::Event::tool_before});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto outcome = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
-    REQUIRE(outcome.sinks.size() == 3);
-    REQUIRE(outcome.sinks[0].sink_id == "first");
-    REQUIRE(outcome.sinks[1].sink_id == "second");
-    REQUIRE(outcome.sinks[2].sink_id == "third");
-    REQUIRE(outcome.all_succeeded());
-    co_return;
+    co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
   });
 
   REQUIRE(peak_active == 3);
-  REQUIRE(completions.size() == 3);
-  REQUIRE(completions.front() == "second");
+  REQUIRE(completions == std::vector<std::string>{"second", "third", "first"});
 }
 
-TEST_CASE("publish_advisory joins cancelled sink tasks before returning", "[hook][bus][cancellation]") {
+TEST_CASE("publish_advisory joins cancelled observers before returning", "[hook][bus][cancellation]") {
   hook::Bus bus;
   bool active = false;
   bool finished = false;
   bool cancellation_seen = false;
-  CancellationAwareAdvisorySink sink{active, finished, cancellation_seen};
-  bus.bind(sink, {hook::Event::tool_before});
-
-  test::run_async(
-      [&](asio::io_context& io) -> async::Awaitable<void> {
-        asio::cancellation_signal cancellation;
-        async::Channel<std::monostate> completed{io.get_executor(), 1};
-        std::optional<hook::PublishOutcome> published;
-        std::exception_ptr failure;
-        asio::co_spawn(io,
-                       bus.publish_advisory(hook::Event::tool_before, sample_before()),
-                       asio::bind_cancellation_slot(cancellation.slot(),
-                                                    [&](std::exception_ptr error, hook::PublishOutcome outcome) {
-                                                      failure = error;
-                                                      published = std::move(outcome);
-                                                      [[maybe_unused]] auto signaled =
-                                                          completed.try_send(std::monostate{});
-                                                    }));
-
-        while (!active) {
-          auto yielded = co_await async::sleep_for(io.get_executor(), 1ms);
-          REQUIRE(yielded.has_value());
-        }
-        cancellation.emit(asio::cancellation_type::all);
-
-        auto signaled = co_await completed.receive();
-        REQUIRE(signaled.has_value());
-        if (failure) {
-          std::rethrow_exception(failure);
-        }
-        REQUIRE(published.has_value());
-        REQUIRE_FALSE(active);
-        REQUIRE(finished);
-        REQUIRE(cancellation_seen);
-        REQUIRE(published->sinks.size() == 1);
-        REQUIRE(published->sinks.front().error.has_value());
-        REQUIRE(published->sinks.front().error->kind() == core::ErrorKind::cancelled);
-        co_return;
+  bus.subscribe(
+      hook::Sink{
+          .id = "cancellation-aware",
+          .observe = [&](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> {
+            active = true;
+            auto slept = co_await async::sleep_for(co_await asio::this_coro::executor, 5s);
+            active = false;
+            finished = true;
+            cancellation_seen = !slept && slept.error().kind() == core::ErrorKind::cancelled;
+          },
       },
-      1s);
+      {hook::Event::tool_before});
+
+  test::run_async([&](asio::io_context& io) { return publish_then_cancel(io, bus, active); }, 1s);
+
+  REQUIRE_FALSE(active);
+  REQUIRE(finished);
+  REQUIRE(cancellation_seen);
 }
 
-TEST_CASE("publish_advisory abandons a cancellation-ignoring sink at the advisory deadline",
+TEST_CASE("publish_advisory abandons an observer that ignores cancellation at the deadline",
           "[hook][bus][cancellation]") {
-  hook::Bus bus{hook::BusOptions{.advisory_timeout = 100ms}};
-  bool active = false;
-  bool finished = false;
-  CancellationIgnoringAdvisorySink sink{active, finished};
-  bus.bind(sink, {hook::Event::tool_before});
+  auto bus = std::make_unique<hook::Bus>(hook::BusOptions{.advisory_timeout = 100ms});
+  auto active = std::make_shared<bool>(false);
+  auto finished = std::make_shared<bool>(false);
+  bus->subscribe(
+      hook::Sink{
+          .id = "cancellation-ignoring",
+          .observe = [active, finished](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> {
+            *active = true;
+            co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+            static_cast<void>(co_await async::sleep_for(co_await asio::this_coro::executor, 300ms));
+            *finished = true;
+          },
+      },
+      {hook::Event::tool_before});
 
   test::run_async(
       [&](asio::io_context& io) -> async::Awaitable<void> {
-        asio::cancellation_signal cancellation;
-        async::Channel<std::monostate> completed{io.get_executor(), 1};
-        std::optional<hook::PublishOutcome> published;
-        std::exception_ptr failure;
-        asio::co_spawn(io,
-                       bus.publish_advisory(hook::Event::tool_before, sample_before()),
-                       asio::bind_cancellation_slot(cancellation.slot(),
-                                                    [&](std::exception_ptr error, hook::PublishOutcome outcome) {
-                                                      failure = error;
-                                                      published = std::move(outcome);
-                                                      [[maybe_unused]] auto signaled =
-                                                          completed.try_send(std::monostate{});
-                                                    }));
-
-        while (!active) {
-          auto yielded = co_await async::sleep_for(io.get_executor(), 1ms);
+        co_await publish_then_cancel(io, *bus, *active);
+        // The publish resumed at the 100 ms deadline while the sink still runs.
+        REQUIRE_FALSE(*finished);
+        // The bus is not poisoned: a later publish is bounded the same way.
+        co_await bus->publish_advisory(hook::Event::tool_before, sample_before());
+        REQUIRE_FALSE(*finished);
+        // The abandoned observer shares ownership of its sink, so it may
+        // outlive the bus.
+        bus.reset();
+        while (!*finished) {
+          auto yielded = co_await async::sleep_for(io.get_executor(), 5ms);
           REQUIRE(yielded.has_value());
         }
-        cancellation.emit(asio::cancellation_type::all);
-
-        auto signaled = co_await completed.receive();
-        REQUIRE(signaled.has_value());
-        if (failure) {
-          std::rethrow_exception(failure);
-        }
-        REQUIRE(published.has_value());
-        // The sink ignored the cancellation; the publish still resumed within
-        // the 100ms advisory deadline while the sink's 1s sleep is in flight.
-        REQUIRE(active);
-        REQUIRE_FALSE(finished);
-        REQUIRE(published->sinks.size() == 1);
-        REQUIRE(published->sinks.front().sink_id == "cancellation-ignoring");
-        REQUIRE(published->sinks.front().error.has_value());
-        REQUIRE(published->sinks.front().error->kind() == core::ErrorKind::internal);
-        REQUIRE(published->sinks.front().error->message().contains("abandoned"));
-        // A second publish on the same bus must still return within the
-        // deadline after the timed-out join (the group is one-shot; the bus
-        // builds a fresh group per publish). The same sink ignores
-        // cancellation again, so it is abandoned a second time — the point
-        // is the bus is not poisoned by the first abandonment.
-        auto second = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
-        REQUIRE(second.sinks.size() == 1);
-        REQUIRE(second.sinks.front().error.has_value());
-        REQUIRE(second.sinks.front().error->message().contains("abandoned"));
-        co_return;
       },
       2s);
 }
 
-TEST_CASE("publish_advisory redacts tool_after data_json unless sink is trusted-local", "[hook][bus][redaction]") {
+TEST_CASE("observer failures do not reach the publisher or siblings", "[hook][bus]") {
   hook::Bus bus;
-  RecordingSink default_sink{"default"};
-  RecordingSink trusted_sink{"trusted", hook::SinkKind::trusted_local};
-  bus.bind(default_sink, {hook::Event::tool_after});
-  bus.bind(trusted_sink, {hook::Event::tool_after});
+  std::vector<Capture> captures;
+  bus.subscribe(hook::Sink{.id = "throws",
+                           .observe = [](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> {
+                             throw std::runtime_error{"boom"};
+                             co_return;
+                           }},
+                {hook::Event::tool_before});
+  bus.subscribe(recording_sink("kept", captures), {hook::Event::tool_before});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto outcome = co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_data());
-    REQUIRE(outcome.sinks.size() == 2);
-    REQUIRE(outcome.all_succeeded());
-    co_return;
+    co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
   });
 
-  REQUIRE(default_sink.captures().size() == 1);
-  REQUIRE(default_sink.captures()[0].payload_kind == "after");
-  REQUIRE_FALSE(default_sink.captures()[0].data_json.has_value());
-
-  REQUIRE(trusted_sink.captures().size() == 1);
-  REQUIRE(trusted_sink.captures()[0].payload_kind == "after");
-  REQUIRE(trusted_sink.captures()[0].data_json == R"({"kind":"sample","raw":true})");
+  REQUIRE(sink_ids(captures) == std::vector<std::string>{"kept"});
 }
 
-TEST_CASE("publish_advisory redacts input_json when a sanitized view is present", "[hook][bus][redaction]") {
+TEST_CASE("publish_advisory redacts tool output and input for untrusted sinks", "[hook][bus][redaction]") {
   hook::Bus bus;
-  RecordingSink default_sink{"default"};
-  RecordingSink trusted_sink{"trusted", hook::SinkKind::trusted_local};
-  bus.bind(default_sink, {hook::Event::tool_after});
-  bus.bind(trusted_sink, {hook::Event::tool_after});
+  std::vector<Capture> captures;
+  bus.subscribe(recording_sink("default", captures), {hook::Event::tool_after});
+  bus.subscribe(recording_sink("trusted", captures, true), {hook::Event::tool_after});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto outcome = co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_redacted_input());
-    REQUIRE(outcome.sinks.size() == 2);
-    REQUIRE(outcome.all_succeeded());
-    co_return;
+    co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_data());
+    co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_redacted_input());
   });
 
-  REQUIRE(default_sink.captures().size() == 1);
-  REQUIRE(default_sink.captures()[0].input_json ==
-          R"({"kind":"redacted_tool_input","input_hash":"abc","content_bytes":6})");
-
-  REQUIRE(trusted_sink.captures().size() == 1);
-  REQUIRE(trusted_sink.captures()[0].input_json == R"({"path":"notes.md","content":"secret"})");
+  const auto of = [&](std::string_view sink, std::size_t publish) {
+    auto matches = captures | std::views::filter([&](const Capture& c) { return c.sink == sink; });
+    return *std::ranges::next(matches.begin(), static_cast<std::ptrdiff_t>(publish));
+  };
+  REQUIRE_FALSE(of("default", 0).data_json.has_value());
+  REQUIRE(of("trusted", 0).data_json == R"({"kind":"sample","raw":true})");
+  REQUIRE(of("default", 1).input_json == R"({"kind":"redacted_tool_input","input_hash":"abc","content_bytes":6})");
+  REQUIRE(of("trusted", 1).input_json == R"({"path":"notes.md","content":"secret"})");
 }
 
-TEST_CASE("publish_advisory redacts memory read query and records for default sinks",
+TEST_CASE("publish_advisory redacts memory read query and records for untrusted sinks",
           "[hook][bus][redaction][memory]") {
   hook::Bus bus;
-  hook::MemoryReadPayload default_payload;
-  hook::MemoryReadPayload trusted_payload;
-  hook::InProcessSink default_sink{
-      "default",
-      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
-        const auto* read = std::get_if<hook::MemoryReadPayload>(payload.get());
-        REQUIRE(read != nullptr);
-        default_payload = *read;
-        co_return core::Result<void>{};
-      }};
-  hook::InProcessSink trusted_sink{
-      "trusted",
-      [&](hook::Event /*event*/, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
-        const auto* read = std::get_if<hook::MemoryReadPayload>(payload.get());
-        REQUIRE(read != nullptr);
-        trusted_payload = *read;
-        co_return core::Result<void>{};
-      },
-      hook::SinkKind::trusted_local};
-  bus.bind(default_sink, {hook::Event::memory_read_after});
-  bus.bind(trusted_sink, {hook::Event::memory_read_after});
+  std::vector<Capture> captures;
+  bus.subscribe(recording_sink("default", captures), {hook::Event::memory_read_after});
+  bus.subscribe(recording_sink("trusted", captures, true), {hook::Event::memory_read_after});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto outcome = co_await bus.publish_advisory(hook::Event::memory_read_after, sample_memory_read());
-    REQUIRE(outcome.sinks.size() == 2);
-    REQUIRE(outcome.all_succeeded());
-    co_return;
+    co_await bus.publish_advisory(hook::Event::memory_read_after, sample_memory_read());
   });
 
-  REQUIRE(default_payload.source == "MemoryRecall");
-  REQUIRE(default_payload.query.empty());
-  REQUIRE(default_payload.redacted_query_bytes == std::string_view{"sensitive query"}.size());
-  REQUIRE(default_payload.match_count == 1);
-  REQUIRE(default_payload.hits.size() == 1);
-  REQUIRE(default_payload.hits[0].record.id == "memory-1");
-  REQUIRE(default_payload.hits[0].record.title.empty());
-  REQUIRE(default_payload.hits[0].record.body.empty());
-  REQUIRE(default_payload.hits[0].record.tags.empty());
-  REQUIRE(default_payload.hits[0].record.linked_record_ids.empty());
-  REQUIRE(default_payload.hits[0].redacted_record.has_value());
-  REQUIRE(default_payload.hits[0].redacted_record->body_bytes == std::string_view{"Sensitive body"}.size());
+  REQUIRE(captures.size() == 2);
+  const auto& redacted =
+      std::get<hook::MemoryReadPayload>(std::ranges::find(captures, std::string{"default"}, &Capture::sink)->payload);
+  const auto& original =
+      std::get<hook::MemoryReadPayload>(std::ranges::find(captures, std::string{"trusted"}, &Capture::sink)->payload);
 
-  REQUIRE(trusted_payload.query == "sensitive query");
-  REQUIRE(trusted_payload.hits.size() == 1);
-  REQUIRE(trusted_payload.hits[0].record.title == "Sensitive title");
-  REQUIRE(trusted_payload.hits[0].record.body == "Sensitive body");
-  REQUIRE(trusted_payload.hits[0].record.tags == std::vector<std::string>{"secret", "project"});
-  REQUIRE(trusted_payload.hits[0].record.linked_record_ids == std::vector<std::string>{"linked-1"});
+  REQUIRE(redacted.source == "MemoryRecall");
+  REQUIRE(redacted.query.empty());
+  REQUIRE(redacted.redacted_query_bytes == std::string_view{"sensitive query"}.size());
+  REQUIRE(redacted.hits.size() == 1);
+  REQUIRE(redacted.hits[0].record.id == "memory-1");
+  REQUIRE(redacted.hits[0].record.title.empty());
+  REQUIRE(redacted.hits[0].record.body.empty());
+  REQUIRE(redacted.hits[0].record.tags.empty());
+  REQUIRE(redacted.hits[0].record.linked_record_ids.empty());
+  REQUIRE(redacted.hits[0].redacted_record->body_bytes == std::string_view{"Sensitive body"}.size());
+
+  REQUIRE(original.query == "sensitive query");
+  REQUIRE(original.hits[0].record.title == "Sensitive title");
+  REQUIRE(original.hits[0].record.body == "Sensitive body");
+  REQUIRE(original.hits[0].record.tags == std::vector<std::string>{"secret", "project"});
+  REQUIRE(original.hits[0].record.linked_record_ids == std::vector<std::string>{"linked-1"});
 }
 
-TEST_CASE("publish_advisory shares redacted payload snapshots across default sinks", "[hook][bus][redaction]") {
+TEST_CASE("publish_advisory shares one snapshot per trust level", "[hook][bus][redaction]") {
   hook::Bus bus;
-  std::vector<const hook::Payload*> default_payloads;
-  std::vector<const hook::Payload*> trusted_payloads;
-  std::vector<std::string> default_inputs;
-  std::vector<std::string> trusted_inputs;
-  PayloadPointerSink first_default{"default-1", default_payloads, default_inputs};
-  PayloadPointerSink second_default{"default-2", default_payloads, default_inputs};
-  PayloadPointerSink trusted{"trusted", trusted_payloads, trusted_inputs, hook::SinkKind::trusted_local};
-  bus.bind(first_default, {hook::Event::tool_after});
-  bus.bind(second_default, {hook::Event::tool_after});
-  bus.bind(trusted, {hook::Event::tool_after});
+  std::vector<Capture> captures;
+  bus.subscribe(recording_sink("default-1", captures), {hook::Event::tool_after});
+  bus.subscribe(recording_sink("default-2", captures), {hook::Event::tool_after});
+  bus.subscribe(recording_sink("trusted", captures, true), {hook::Event::tool_after});
 
   test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto outcome = co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_redacted_input());
-    REQUIRE(outcome.sinks.size() == 3);
-    REQUIRE(outcome.all_succeeded());
-    co_return;
+    co_await bus.publish_advisory(hook::Event::tool_after, sample_after_with_redacted_input());
   });
 
-  REQUIRE(default_payloads.size() == 2);
-  REQUIRE(default_payloads[0] == default_payloads[1]);
-  REQUIRE(trusted_payloads.size() == 1);
-  REQUIRE(default_payloads[0] != trusted_payloads[0]);
-  REQUIRE(default_inputs.size() == 2);
-  REQUIRE(default_inputs[0] == R"({"kind":"redacted_tool_input","input_hash":"abc","content_bytes":6})");
-  REQUIRE(default_inputs[1] == default_inputs[0]);
-  REQUIRE(trusted_inputs.size() == 1);
-  REQUIRE(trusted_inputs[0] == R"({"path":"notes.md","content":"secret"})");
-}
-
-TEST_CASE("bind is idempotent — duplicate pair does not double-fire", "[hook][bus]") {
-  hook::Bus bus;
-  RecordingSink sink{"once"};
-  bus.bind(sink, {hook::Event::tool_before});
-  bus.bind(sink, {hook::Event::tool_before});                           // duplicate
-  bus.bind(sink, {hook::Event::tool_before, hook::Event::tool_after});  // partial duplicate
-
-  REQUIRE(bus.sink_count(hook::Event::tool_before) == 1);
-  REQUIRE(bus.sink_count(hook::Event::tool_after) == 1);
-  REQUIRE(bus.binding_count() == 2);
-}
-
-TEST_CASE("unbind removes every subscription a sink holds", "[hook][bus]") {
-  hook::Bus bus;
-  RecordingSink kept{"kept"};
-  RecordingSink removed{"removed"};
-  bus.bind(kept, {hook::Event::tool_before, hook::Event::tool_after});
-  bus.bind(removed, {hook::Event::tool_before, hook::Event::tool_after});
-
-  REQUIRE(bus.binding_count() == 4);
-  REQUIRE(bus.unbind(removed) == 2);
-  REQUIRE(bus.binding_count() == 2);
-  REQUIRE(bus.sink_count(hook::Event::tool_before) == 1);
-  REQUIRE(bus.sink_count(hook::Event::tool_after) == 1);
-
-  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    (void)co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
-    co_return;
-  });
-
-  REQUIRE(kept.captures().size() == 1);
-  REQUIRE(removed.captures().empty());
-}
-
-TEST_CASE("unbind of unsubscribed sink reports zero removed", "[hook][bus]") {
-  hook::Bus bus;
-  RecordingSink lurker{"lurker"};
-  REQUIRE(bus.unbind(lurker) == 0);
-}
-
-TEST_CASE("sink errors are captured in outcome but do not abort the publish", "[hook][bus]") {
-  hook::Bus bus;
-  FailingSink first{"first", "boom"};
-  RecordingSink second{"second"};
-  FailingSink third{"third", "kaboom"};
-  bus.bind(first, {hook::Event::tool_before});
-  bus.bind(second, {hook::Event::tool_before});
-  bus.bind(third, {hook::Event::tool_before});
-
-  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto outcome = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
-    REQUIRE(outcome.sinks.size() == 3);
-    REQUIRE_FALSE(outcome.all_succeeded());
-    REQUIRE(outcome.failure_count() == 2);
-
-    REQUIRE(outcome.sinks[0].sink_id == "first");
-    REQUIRE(outcome.sinks[0].error.has_value());
-    REQUIRE(outcome.sinks[0].error->message() == "boom");
-
-    REQUIRE(outcome.sinks[1].sink_id == "second");
-    REQUIRE_FALSE(outcome.sinks[1].error.has_value());
-
-    REQUIRE(outcome.sinks[2].sink_id == "third");
-    REQUIRE(outcome.sinks[2].error.has_value());
-    REQUIRE(outcome.sinks[2].error->message() == "kaboom");
-    co_return;
-  });
-
-  // The middle sink ran despite both neighbours erroring.
-  REQUIRE(second.captures().size() == 1);
-}
-
-TEST_CASE("throwing sink does not abort publish — exception captured as Error::internal", "[hook][bus]") {
-  hook::Bus bus;
-  ThrowingSink first{"first", "stdexcept-boom"};
-  RecordingSink second{"second"};
-  ThrowingSink third{"third", "another-boom"};
-  bus.bind(first, {hook::Event::tool_before});
-  bus.bind(second, {hook::Event::tool_before});
-  bus.bind(third, {hook::Event::tool_before});
-
-  test::run_async([&](asio::io_context& /*io*/) -> async::Awaitable<void> {
-    auto outcome = co_await bus.publish_advisory(hook::Event::tool_before, sample_before());
-    REQUIRE(outcome.sinks.size() == 3);
-    REQUIRE_FALSE(outcome.all_succeeded());
-    REQUIRE(outcome.failure_count() == 2);
-
-    REQUIRE(outcome.sinks[0].sink_id == "first");
-    REQUIRE(outcome.sinks[0].error.has_value());
-    REQUIRE(outcome.sinks[0].error->kind() == core::ErrorKind::internal);
-    REQUIRE(outcome.sinks[0].error->message() == "stdexcept-boom");
-    // The catch handler attaches the sink id as structured context so the
-    // operator can tell which extension threw without re-parsing message.
-    REQUIRE(outcome.sinks[0].error->context().size() == 1);
-    REQUIRE(outcome.sinks[0].error->context()[0].first == "sink");
-    REQUIRE(outcome.sinks[0].error->context()[0].second == "first");
-
-    REQUIRE(outcome.sinks[1].sink_id == "second");
-    REQUIRE_FALSE(outcome.sinks[1].error.has_value());
-
-    REQUIRE(outcome.sinks[2].sink_id == "third");
-    REQUIRE(outcome.sinks[2].error.has_value());
-    REQUIRE(outcome.sinks[2].error->kind() == core::ErrorKind::internal);
-    REQUIRE(outcome.sinks[2].error->message() == "another-boom");
-    co_return;
-  });
-
-  // One sink failure must not prevent delivery to other subscribers.
-  REQUIRE(second.captures().size() == 1);
+  REQUIRE(captures.size() == 3);
+  const auto snapshot = [&](std::string_view sink) {
+    return std::ranges::find(captures, sink, &Capture::sink)->snapshot;
+  };
+  const auto* default_1 = snapshot("default-1");
+  const auto* default_2 = snapshot("default-2");
+  const auto* trusted = snapshot("trusted");
+  REQUIRE(default_1 == default_2);
+  REQUIRE(default_1 != trusted);
 }

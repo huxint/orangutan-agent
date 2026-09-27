@@ -6,8 +6,6 @@
 #include <string>
 #include <vector>
 
-#include <oran/core/time.hpp>
-
 namespace orangutan::hook {
 
 /// Decision a blocking sink returns to the producer's effect gate.
@@ -25,9 +23,7 @@ enum class HookDecisionKind : std::uint8_t {
   /// `rewritten_input_hash`.
   rewrite,
   /// Route the dispatch through the approval broker even when the
-  /// permission engine would otherwise have returned `allow`. The
-  /// optional `approval_expires_at` overrides the rule-level TTL when
-  /// set.
+  /// permission engine would otherwise have returned `allow`.
   require_approval,
 };
 
@@ -48,26 +44,22 @@ struct HookDecisionTrace {
 /// Returned by every blocking publish. The `kind` carries the
 /// short-circuit semantics; `reason` is free-form text that travels to
 /// the audit row; `rewritten_input_json` is required when `kind ==
-/// rewrite` and ignored otherwise; `approval_expires_at` is optional
-/// metadata for `require_approval`.
+/// rewrite` and ignored otherwise.
 ///
 /// The bus initialises every decision with `kind = proceed` and an empty
 /// `reason`. A sink that does nothing (or has no blocking handler bound)
 /// therefore yields a proceed decision and the next subscribed sink runs.
 struct HookDecision {
   HookDecisionKind kind{HookDecisionKind::proceed};
-  std::string reason;
+  std::string reason{};
   /// Serialised JSON bytes — same envelope as
   /// `ToolBeforePayload::input_json`. Stored as a string so the public
   /// header does not need to drag in `<nlohmann/json.hpp>`.
-  std::optional<std::string> rewritten_input_json;
-  /// Optional override for the broker TTL when `kind == require_approval`.
-  /// Ignored for every other kind.
-  std::optional<core::Time> approval_expires_at;
+  std::optional<std::string> rewritten_input_json{};
   /// Per-sink decisions the bus actually evaluated, in subscription order.
   /// If the first sink vetoes, the trace contains one row; if all sinks
-  /// proceed, it contains every consulted sink.
-  std::vector<HookDecisionTrace> trace;
+  /// proceed, it contains every sink with a `decide` callback.
+  std::vector<HookDecisionTrace> trace{};
 };
 
 }  // namespace orangutan::hook

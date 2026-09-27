@@ -763,14 +763,15 @@ TEST_CASE("ToolScheduler: a batch records exactly N audit rows and N tool_after 
 
         // Count `tool_after` publishes through an advisory in-process sink.
         auto after_publishes = std::make_shared<std::atomic<int>>(0);
-        hook::InProcessSink after_sink{
-            "after-counter",
-            [after_publishes](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<void>> {
+        hook::Sink after_sink{
+            .id = "after-counter",
+            .observe = [after_publishes](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> {
               after_publishes->fetch_add(1, std::memory_order_relaxed);
-              co_return core::Result<void>{};
-            }};
+              co_return;
+            },
+        };
         hook::Bus bus;
-        bus.bind(after_sink, {hook::Event::tool_after});
+        bus.subscribe(after_sink, {hook::Event::tool_after});
 
         auto prototype = make_prototype(io, rules, audit);
         prototype.bus = &bus;
@@ -1236,22 +1237,23 @@ TEST_CASE("ToolScheduler: timeout includes final-path admission and joins only t
 
   std::vector<hook::ToolAfterPayload> observations;
   hook::Bus bus;
-  hook::InProcessSink sink{
-      "rewrite-waiter",
-      [&observations](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<void>> {
+  hook::Sink sink{
+      .id = "rewrite-waiter",
+      .observe = [&observations](hook::Event event, hook::PayloadPtr payload) -> async::Awaitable<void> {
         if (event == hook::Event::tool_after) {
           observations.push_back(std::get<hook::ToolAfterPayload>(*payload));
         }
-        co_return core::Result<void>{};
+        co_return;
       },
-      hook::SinkKind::trusted_local};
-  sink.set_blocking_handler([](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<hook::HookDecision>> {
-    hook::HookDecision decision;
-    decision.kind = hook::HookDecisionKind::rewrite;
-    decision.rewritten_input_json = R"({"path":"held.txt","content":"recovered"})";
-    co_return decision;
-  });
-  bus.bind(sink, {hook::Event::tool_before, hook::Event::tool_after});
+      .decide = [](hook::Event, hook::PayloadPtr) -> async::Awaitable<core::Result<hook::HookDecision>> {
+        hook::HookDecision decision;
+        decision.kind = hook::HookDecisionKind::rewrite;
+        decision.rewritten_input_json = R"({"path":"held.txt","content":"recovered"})";
+        co_return decision;
+      },
+      .trusted_local = true,
+  };
+  bus.subscribe(sink, {hook::Event::tool_before, hook::Event::tool_after});
   waiter_context.bus = &bus;
 
   agent::ToolScheduler scheduler{io.get_executor(), registry, {.max_parallel_tools = 1, .per_call_timeout = 40ms}};
