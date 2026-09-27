@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <concepts>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -13,10 +14,12 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 #include <re2/re2.h>
@@ -32,68 +35,7 @@ using json = ::nlohmann::ordered_json;
 using ::orangutan::core::Error;
 using ::orangutan::core::Result;
 
-constexpr auto kRecognizedRootFields = std::array<std::string_view, 9>{
-    "strict_config",
-    "runtime",
-    "trace",
-    "permissions",
-    "profiles",
-    "routes",
-    "agents",
-    "hooks",
-    "memory",
-};
-
-constexpr auto kRecognizedAgentFields = std::array<std::string_view, 2>{
-    "permissions",
-    "prompt_overlay",
-};
-
-constexpr auto kRecognizedHookFields = std::array<std::string_view, 1>{
-    "timeout_ms",
-};
-
-constexpr auto kRecognizedMemoryFields = std::array<std::string_view, 1>{
-    "longterm",
-};
-
-constexpr auto kRecognizedLongtermMemoryFields = std::array<std::string_view, 1>{
-    "recall",
-};
-
-constexpr auto kRecognizedLongtermRecallFields = std::array<std::string_view, 3>{
-    "enabled",
-    "limit",
-    "kinds",
-};
-
-constexpr auto kRecognizedProfileFields = std::array<std::string_view, 8>{
-    "provider",
-    "protocol",
-    "model",
-    "base_url",
-    "api_key_env",
-    "pricing",
-    "thinking_budget",
-    "cache",
-};
-
-constexpr auto kRecognizedPromptCacheFields = std::array<std::string_view, 2>{
-    "enabled",
-    "min_prefix_bytes",
-};
-
-constexpr auto kRecognizedProviderPricingFields = std::array<std::string_view, 4>{
-    "input_per_million_usd",
-    "output_per_million_usd",
-    "cache_creation_per_million_usd",
-    "cache_read_per_million_usd",
-};
-
-constexpr auto kRecognizedRouteFields = std::array<std::string_view, 2>{
-    "primary",
-    "fallbacks",
-};
+constexpr auto kMaxInteger = std::numeric_limits<std::int64_t>::max();
 
 [[nodiscard]] Error config_error(std::string message, std::string path) {
   return Error::config(std::move(message)).with("path", std::move(path));
@@ -108,37 +50,6 @@ constexpr auto kRecognizedRouteFields = std::array<std::string_view, 2>{
 
 [[nodiscard]] std::string element_path(std::string_view base, std::size_t index) {
   return std::format("{}[{}]", base, index);
-}
-
-[[nodiscard]] bool is_recognized_root(std::string_view name) {
-  return std::ranges::contains(kRecognizedRootFields, name);
-}
-
-[[nodiscard]] bool is_recognized_agent_field(std::string_view name) {
-  return std::ranges::contains(kRecognizedAgentFields, name);
-}
-
-template <std::size_t N>
-[[nodiscard]] Result<void> collect_unknown_object_fields(const json& object,
-                                                         std::string_view path,
-                                                         const std::array<std::string_view, N>& known_keys,
-                                                         std::string_view message,
-                                                         bool strict,
-                                                         std::vector<ConfigWarning>& warnings) {
-  for (const auto& [key, _] : object.items()) {
-    if (std::ranges::contains(known_keys, key)) {
-      continue;
-    }
-    const auto field_path = child_path(path, key);
-    if (strict) {
-      return std::unexpected(config_error(std::string{message}, field_path));
-    }
-    warnings.push_back(ConfigWarning{
-        .path = field_path,
-        .message = std::string{message},
-    });
-  }
-  return {};
 }
 
 [[nodiscard]] bool valid_env_name(std::string_view name) {
@@ -189,1136 +100,452 @@ template <std::size_t N>
   return output;
 }
 
-[[nodiscard]] Result<void> substitute_env(json& value, std::string_view path) {
-  if (value.is_string()) {
-    auto expanded = expand_env_string(value.get_ref<const std::string&>(), path);
-    if (!expanded) {
-      return std::unexpected(std::move(expanded.error()));
-    }
-    value = std::move(*expanded);
-    return {};
-  }
-
-  if (value.is_object()) {
-    for (auto it = value.begin(); it != value.end(); ++it) {
-      auto result = substitute_env(it.value(), child_path(path, it.key()));
-      if (!result) {
-        return std::unexpected(std::move(result.error()));
-      }
-    }
-    return {};
-  }
-
-  if (value.is_array()) {
-    auto index = std::size_t{0};
-    for (auto& item : value) {
-      auto result = substitute_env(item, element_path(path, index));
-      if (!result) {
-        return std::unexpected(std::move(result.error()));
-      }
-      ++index;
-    }
-  }
-
-  return {};
-}
-
-[[nodiscard]] Result<void> substitute_env_recognized_roots(json& root) {
-  for (auto it = root.begin(); it != root.end(); ++it) {
-    if (!is_recognized_root(it.key())) {
-      continue;
-    }
-
-    auto result = substitute_env(it.value(), child_path("$", it.key()));
-    if (!result) {
-      return std::unexpected(std::move(result.error()));
-    }
-  }
-  return {};
-}
-
-[[nodiscard]] Result<void> require_object(const json& value, std::string_view path) {
-  if (!value.is_object()) {
-    return std::unexpected(config_error("expected object", std::string{path}));
-  }
-  return {};
-}
-
-[[nodiscard]] Result<std::string> required_string(const json& object, std::string_view key, std::string_view path) {
-  const auto it = object.find(key);
-  if (it == object.end()) {
-    return std::unexpected(config_error("missing required string field", child_path(path, key)));
-  }
-  if (!it->is_string()) {
-    return std::unexpected(config_error("expected string", child_path(path, key)));
-  }
-  return it->get<std::string>();
-}
-
-[[nodiscard]] Result<std::vector<std::string>> string_array(const json& value, std::string_view path) {
-  if (!value.is_array()) {
-    return std::unexpected(config_error("expected array", std::string{path}));
-  }
-
-  auto out = std::vector<std::string>{};
-  out.reserve(value.size());
-  auto index = std::size_t{0};
-  for (const auto& item : value) {
-    if (!item.is_string()) {
-      return std::unexpected(config_error("expected string", element_path(path, index)));
-    }
-    out.push_back(item.get<std::string>());
-    ++index;
-  }
-  return out;
-}
-
-[[nodiscard]] Result<std::int64_t> integer_value(const json& value, std::string_view path) {
+[[nodiscard]] Result<std::int64_t>
+integer_value(const json& value, const std::string& path, std::int64_t min, std::int64_t max) {
   if (!value.is_number_integer()) {
-    return std::unexpected(config_error("expected integer", std::string{path}));
+    return std::unexpected(config_error("expected integer", path));
   }
-  if (value.is_number_unsigned()) {
-    const auto unsigned_value = value.get<std::uint64_t>();
-    if (unsigned_value > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-      return std::unexpected(config_error("integer is out of range", std::string{path}));
-    }
-    return static_cast<std::int64_t>(unsigned_value);
+  if (value.is_number_unsigned() && value.get<std::uint64_t>() > static_cast<std::uint64_t>(kMaxInteger)) {
+    return std::unexpected(config_error("integer is out of range", path));
   }
-  return value.get<std::int64_t>();
-}
-
-[[nodiscard]] Result<std::int64_t> positive_integer_value(const json& value, std::string_view path) {
-  auto parsed = integer_value(value, path);
-  if (!parsed) {
-    return std::unexpected(std::move(parsed.error()));
+  const auto parsed = value.get<std::int64_t>();
+  if (parsed < min) {
+    return std::unexpected(
+        config_error(min == 1 ? "expected positive integer" : "expected non-negative integer", path));
   }
-  if (*parsed <= 0) {
-    return std::unexpected(config_error("expected positive integer", std::string{path}));
+  if (parsed > max) {
+    return std::unexpected(config_error("integer is out of range", path).with("max", std::to_string(max)));
   }
   return parsed;
 }
 
-[[nodiscard]] Result<double> non_negative_number_value(const json& value, std::string_view path) {
-  if (!value.is_number()) {
-    return std::unexpected(config_error("expected number", std::string{path}));
-  }
-  const auto parsed = value.get<double>();
-  if (!std::isfinite(parsed) || parsed < 0.0) {
-    return std::unexpected(config_error("expected non-negative finite number", std::string{path}));
-  }
-  return parsed;
-}
+template <class T>
+struct IntegerOf {
+  using type = T;
+};
+template <class T>
+struct IntegerOf<std::optional<T>> {
+  using type = T;
+};
 
-[[nodiscard]] Result<bool> parse_strict_config(const json& root) {
-  const auto it = root.find("strict_config");
-  if (it == root.end()) {
-    return false;
-  }
-  if (!it->is_boolean()) {
-    return std::unexpected(config_error("expected boolean", "$.strict_config"));
-  }
-  return it->get<bool>();
-}
+struct ParseState {
+  bool strict{false};
+  std::vector<ConfigWarning> warnings{};
+};
 
-[[nodiscard]] Result<ToolOutputRuntimeConfig> parse_tool_output_runtime(const json& runtime) {
-  auto config = ToolOutputRuntimeConfig{};
-  const auto it = runtime.find("tool_output");
-  if (it == runtime.end()) {
-    return config;
-  }
-  auto object = require_object(*it, "$.runtime.tool_output");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  if (const auto max_text = it->find("max_text_bytes"); max_text != it->end()) {
-    auto parsed = positive_integer_value(*max_text, "$.runtime.tool_output.max_text_bytes");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    config.max_text_bytes = *parsed;
-  }
-
-  if (const auto max_data = it->find("max_data_bytes"); max_data != it->end()) {
-    auto parsed = positive_integer_value(*max_data, "$.runtime.tool_output.max_data_bytes");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    config.max_data_bytes = *parsed;
-  }
-
-  return config;
-}
-
-[[nodiscard]] Result<ToolSchedulerRuntimeConfig> parse_tool_scheduler_runtime(const json& runtime) {
-  auto config = ToolSchedulerRuntimeConfig{};
-  const auto it = runtime.find("tool_scheduler");
-  if (it == runtime.end()) {
-    return config;
-  }
-  auto object = require_object(*it, "$.runtime.tool_scheduler");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  if (const auto max_parallel = it->find("max_parallel_tools"); max_parallel != it->end()) {
-    auto parsed = positive_integer_value(*max_parallel, "$.runtime.tool_scheduler.max_parallel_tools");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    config.max_parallel_tools = *parsed;
-  }
-
-  if (const auto per_call = it->find("per_call_timeout_ms"); per_call != it->end()) {
-    auto parsed = positive_integer_value(*per_call, "$.runtime.tool_scheduler.per_call_timeout_ms");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    config.per_call_timeout_ms = *parsed;
-  }
-
-  return config;
-}
-
-[[nodiscard]] Result<PromptActiveToolsConfig> parse_prompt_active_tools(const json& value, std::string_view path) {
-  auto config = PromptActiveToolsConfig{};
-  if (value.is_string()) {
-    const auto& text = value.get_ref<const std::string&>();
-    if (text != "defaults") {
-      return std::unexpected(
-          config_error("expected \"defaults\" or array of tool names", std::string{path}).with("value", text));
-    }
-    return config;
-  }
-
-  auto parsed = string_array(value, path);
-  if (!parsed) {
-    return std::unexpected(std::move(parsed.error()));
-  }
-
-  auto index = std::size_t{0};
-  for (const auto& name : *parsed) {
-    if (name.empty()) {
-      return std::unexpected(config_error("tool name must be non-empty", element_path(path, index)));
-    }
-    ++index;
-  }
-
-  config.use_defaults = false;
-  config.tool_names = std::move(*parsed);
-  return config;
-}
-
-[[nodiscard]] Result<std::vector<std::string>>
-parse_non_empty_string_array(const json& value, std::string_view path, std::string_view item_name) {
-  auto parsed = string_array(value, path);
-  if (!parsed) {
-    return std::unexpected(std::move(parsed.error()));
-  }
-
-  auto index = std::size_t{0};
-  for (const auto& name : *parsed) {
-    if (name.empty()) {
-      return std::unexpected(
-          config_error(std::string{item_name}.append(" must be non-empty"), element_path(path, index)));
-    }
-    ++index;
-  }
-  return parsed;
-}
-
-[[nodiscard]] Result<PromptRuntimeConfig> parse_prompt_runtime(const json& runtime) {
-  auto prompt = PromptRuntimeConfig{};
-  const auto it = runtime.find("prompt");
-  if (it == runtime.end()) {
-    return prompt;
-  }
-  auto object = require_object(*it, "$.runtime.prompt");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  if (const auto active_tools = it->find("active_tools"); active_tools != it->end()) {
-    auto parsed = parse_prompt_active_tools(*active_tools, "$.runtime.prompt.active_tools");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    prompt.active_tools = std::move(*parsed);
-  }
-
-  return prompt;
-}
-
-[[nodiscard]] Result<StreamRuntimeConfig> parse_stream_runtime(const json& runtime) {
-  auto config = StreamRuntimeConfig{};
-  const auto it = runtime.find("stream");
-  if (it == runtime.end()) {
-    return config;
-  }
-  auto object = require_object(*it, "$.runtime.stream");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  if (const auto max_bytes = it->find("max_bytes"); max_bytes != it->end()) {
-    auto parsed = positive_integer_value(*max_bytes, "$.runtime.stream.max_bytes");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    config.max_bytes = *parsed;
-  }
-  return config;
-}
-
-[[nodiscard]] Result<RuntimeConfig> parse_runtime(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
-  auto runtime = RuntimeConfig{};
-  const auto it = root.find("runtime");
-  if (it == root.end()) {
-    return runtime;
-  }
-  auto object = require_object(*it, "$.runtime");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  if (const auto workers = it->find("workers"); workers != it->end()) {
-    auto parsed = integer_value(*workers, "$.runtime.workers");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    runtime.workers = *parsed;
-    if (runtime.workers <= 0) {
-      return std::unexpected(config_error("expected positive integer", "$.runtime.workers"));
+/// A view of one JSON object. Reads declare its recognized keys; the first
+/// failure is kept and later reads are skipped. `finish` reports keys that no
+/// read claimed, as warnings or, when strict, as the error.
+class Fields {
+public:
+  Fields(const json& value, std::string path, ParseState& state) : value_{&value}, path_{std::move(path)}, state_{&state} {
+    if (!value.is_object()) {
+      fail(config_error("expected object", path_));
     }
   }
 
-  if (const auto timeout = it->find("request_timeout_ms"); timeout != it->end()) {
-    auto parsed = integer_value(*timeout, "$.runtime.request_timeout_ms");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
+  [[nodiscard]] bool ok() const noexcept {
+    return !error_.has_value();
+  }
+  [[nodiscard]] const std::string& path() const noexcept {
+    return path_;
+  }
+  [[nodiscard]] std::string path_of(std::string_view key) const {
+    return child_path(path_, key);
+  }
+  [[nodiscard]] ParseState& state() const noexcept {
+    return *state_;
+  }
+  [[nodiscard]] const json& value() const noexcept {
+    return *value_;
+  }
+
+  void fail(Error error) {
+    if (!error_) {
+      error_ = std::move(error);
     }
-    runtime.request_timeout_ms = *parsed;
-    if (runtime.request_timeout_ms <= 0) {
-      return std::unexpected(config_error("expected positive integer", "$.runtime.request_timeout_ms"));
+  }
+
+  /// Claim a key and return its value, or null when absent or after a failure.
+  [[nodiscard]] const json* take(std::string_view key) {
+    if (!ok()) {
+      return nullptr;
     }
+    known_.push_back(key);
+    const auto it = value_->find(key);
+    return it == value_->end() ? nullptr : &*it;
   }
 
-  if (auto tool_output = parse_tool_output_runtime(*it); !tool_output) {
-    return std::unexpected(std::move(tool_output.error()));
-  } else {
-    runtime.tool_output = *tool_output;
-  }
-
-  if (auto tool_scheduler = parse_tool_scheduler_runtime(*it); !tool_scheduler) {
-    return std::unexpected(std::move(tool_scheduler.error()));
-  } else {
-    runtime.tool_scheduler = *tool_scheduler;
-  }
-
-  if (auto prompt = parse_prompt_runtime(*it); !prompt) {
-    return std::unexpected(std::move(prompt.error()));
-  } else {
-    runtime.prompt = std::move(*prompt);
-  }
-
-  if (auto stream = parse_stream_runtime(*it); !stream) {
-    return std::unexpected(std::move(stream.error()));
-  } else {
-    runtime.stream = *stream;
-  }
-  constexpr auto fields = std::array<std::string_view, 6>{"workers",
-                                                          "request_timeout_ms",
-                                                          "tool_output",
-                                                          "tool_scheduler",
-                                                          "prompt",
-                                                          "stream"};
-  auto unknowns = collect_unknown_object_fields(*it, "$.runtime", fields, "unknown runtime field", strict, warnings);
-  if (!unknowns)
-    return std::unexpected(std::move(unknowns).error());
-  return runtime;
-}
-
-[[nodiscard]] Result<TraceConfig> parse_trace(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
-  auto trace = TraceConfig{};
-  const auto it = root.find("trace");
-  if (it == root.end()) {
-    return trace;
-  }
-  auto object = require_object(*it, "$.trace");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  if (const auto enabled = it->find("enabled"); enabled != it->end()) {
-    if (!enabled->is_boolean()) {
-      return std::unexpected(config_error("expected boolean", "$.trace.enabled"));
-    }
-    trace.enabled = enabled->get<bool>();
-  }
-  constexpr auto fields = std::array<std::string_view, 1>{"enabled"};
-  auto unknowns = collect_unknown_object_fields(*it, "$.trace", fields, "unknown trace field", strict, warnings);
-  if (!unknowns)
-    return std::unexpected(std::move(unknowns).error());
-  return trace;
-}
-
-[[nodiscard]] Result<HooksConfig> parse_hooks(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
-  auto hooks = HooksConfig{};
-  const auto it = root.find("hooks");
-  if (it == root.end()) {
-    return hooks;
-  }
-  auto object = require_object(*it, "$.hooks");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  if (const auto timeout = it->find("timeout_ms"); timeout != it->end()) {
-    auto parsed = positive_integer_value(*timeout, "$.hooks.timeout_ms");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    hooks.timeout_ms = *parsed;
-  }
-
-  auto unknowns =
-      collect_unknown_object_fields(*it, "$.hooks", kRecognizedHookFields, "unknown hook field", strict, warnings);
-  if (!unknowns) {
-    return std::unexpected(std::move(unknowns.error()));
-  }
-
-  return hooks;
-}
-
-[[nodiscard]] Result<LongtermMemoryRecallConfig>
-parse_longterm_recall(const json& longterm, bool strict, std::vector<ConfigWarning>& warnings) {
-  auto recall = LongtermMemoryRecallConfig{};
-  const auto it = longterm.find("recall");
-  if (it == longterm.end()) {
-    return recall;
-  }
-  auto object = require_object(*it, "$.memory.longterm.recall");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  if (const auto enabled = it->find("enabled"); enabled != it->end()) {
-    if (!enabled->is_boolean()) {
-      return std::unexpected(config_error("expected boolean", "$.memory.longterm.recall.enabled"));
-    }
-    recall.enabled = enabled->get<bool>();
-  }
-
-  if (const auto limit = it->find("limit"); limit != it->end()) {
-    auto parsed = positive_integer_value(*limit, "$.memory.longterm.recall.limit");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    if (*parsed > 20) {
-      return std::unexpected(config_error("recall limit must not exceed 20", "$.memory.longterm.recall.limit"));
-    }
-    recall.limit = *parsed;
-  }
-
-  if (const auto kinds = it->find("kinds"); kinds != it->end()) {
-    auto parsed = parse_non_empty_string_array(*kinds, "$.memory.longterm.recall.kinds", "memory kind");
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    if (parsed->empty()) {
-      return std::unexpected(
-          config_error("long-term memory recall kinds must not be empty", "$.memory.longterm.recall.kinds"));
-    }
-    auto seen = std::vector<std::string>{};
-    seen.reserve(parsed->size());
-    for (std::size_t i = 0; i < parsed->size(); ++i) {
-      const auto& name = (*parsed)[i];
-      if (std::ranges::contains(seen, name)) {
-        return std::unexpected(config_error("long-term memory recall kind must be unique",
-                                            element_path("$.memory.longterm.recall.kinds", i)));
+  template <class Parse>
+  void field(std::string_view key, Parse&& parse) {
+    if (const auto* value = take(key)) {
+      if (auto parsed = parse(*value, path_of(key)); !parsed) {
+        fail(std::move(parsed).error());
       }
-      seen.push_back(name);
     }
-    recall.kinds = std::move(*parsed);
   }
 
-  auto unknowns = collect_unknown_object_fields(*it,
-                                                "$.memory.longterm.recall",
-                                                kRecognizedLongtermRecallFields,
-                                                "unknown long-term memory recall field",
-                                                strict,
-                                                warnings);
-  if (!unknowns) {
-    return std::unexpected(std::move(unknowns.error()));
+  void require(std::string_view key) {
+    if (ok() && !value_->contains(key)) {
+      fail(config_error("missing required field", path_of(key)));
+    }
   }
 
-  return recall;
-}
-
-[[nodiscard]] Result<LongtermMemoryConfig>
-parse_longterm_memory(const json& memory, bool strict, std::vector<ConfigWarning>& warnings) {
-  auto longterm = LongtermMemoryConfig{};
-  const auto it = memory.find("longterm");
-  if (it == memory.end()) {
-    return longterm;
-  }
-  auto object = require_object(*it, "$.memory.longterm");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
+  void boolean(std::string_view key, bool& out) {
+    field(key, [&out](const json& value, const std::string& path) -> Result<void> {
+      if (!value.is_boolean()) {
+        return std::unexpected(config_error("expected boolean", path));
+      }
+      out = value.get<bool>();
+      return {};
+    });
   }
 
-  auto recall = parse_longterm_recall(*it, strict, warnings);
-  if (!recall) {
-    return std::unexpected(std::move(recall.error()));
-  }
-  longterm.recall = *recall;
-
-  auto unknowns = collect_unknown_object_fields(*it,
-                                                "$.memory.longterm",
-                                                kRecognizedLongtermMemoryFields,
-                                                "unknown long-term memory field",
-                                                strict,
-                                                warnings);
-  if (!unknowns) {
-    return std::unexpected(std::move(unknowns.error()));
+  template <class T>
+  void integer(std::string_view key, T& out, std::int64_t min = 1, std::int64_t max = kMaxInteger) {
+    field(key, [&](const json& value, const std::string& path) -> Result<void> {
+      auto parsed = integer_value(value, path, min, max);
+      if (!parsed) {
+        return std::unexpected(std::move(parsed).error());
+      }
+      out = static_cast<typename IntegerOf<T>::type>(*parsed);
+      return {};
+    });
   }
 
-  return longterm;
-}
-
-[[nodiscard]] Result<MemoryConfig> parse_memory(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
-  auto memory = MemoryConfig{};
-  const auto it = root.find("memory");
-  if (it == root.end()) {
-    return memory;
-  }
-  auto object = require_object(*it, "$.memory");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  auto longterm = parse_longterm_memory(*it, strict, warnings);
-  if (!longterm) {
-    return std::unexpected(std::move(longterm.error()));
-  }
-  memory.longterm = *longterm;
-
-  auto unknowns =
-      collect_unknown_object_fields(*it, "$.memory", kRecognizedMemoryFields, "unknown memory field", strict, warnings);
-  if (!unknowns) {
-    return std::unexpected(std::move(unknowns.error()));
+  void price(std::string_view key, std::optional<double>& out) {
+    field(key, [&out](const json& value, const std::string& path) -> Result<void> {
+      if (!value.is_number()) {
+        return std::unexpected(config_error("expected number", path));
+      }
+      const auto parsed = value.get<double>();
+      if (!std::isfinite(parsed) || parsed < 0.0) {
+        return std::unexpected(config_error("expected non-negative finite number", path));
+      }
+      out = parsed;
+      return {};
+    });
   }
 
-  return memory;
-}
+  /// Strings expand `${NAME}` and `${NAME:-default}` environment references.
+  template <class T>
+  void string(std::string_view key, T& out, bool non_empty = false) {
+    field(key, [&](const json& value, const std::string& path) -> Result<void> {
+      auto parsed = string_value(value, path, non_empty);
+      if (!parsed) {
+        return std::unexpected(std::move(parsed).error());
+      }
+      out = std::move(*parsed);
+      return {};
+    });
+  }
 
-[[nodiscard]] Result<void>
-parse_optional_price(const json& object, std::string_view key, std::string_view path, std::optional<double>& out) {
-  const auto it = object.find(key);
-  if (it == object.end()) {
+  void required_string(std::string_view key, std::string& out, bool non_empty = false) {
+    require(key);
+    string(key, out, non_empty);
+  }
+
+  void strings(std::string_view key, std::vector<std::string>& out, bool non_empty = false) {
+    field(key, [&](const json& value, const std::string& path) -> Result<void> {
+      auto parsed = string_array(value, path, non_empty);
+      if (!parsed) {
+        return std::unexpected(std::move(parsed).error());
+      }
+      out = std::move(*parsed);
+      return {};
+    });
+  }
+
+  /// Parse a nested object with `parse(Fields&, T&)` and finish it.
+  template <class T, class Parse>
+  void object(std::string_view key, T& out, Parse&& parse) {
+    if (const auto* value = take(key)) {
+      nested(*value, path_of(key), out, parse);
+    }
+  }
+
+  template <class T, class Parse>
+  void nested(const json& value, std::string path, T& out, Parse&& parse) {
+    auto fields = Fields{value, std::move(path), *state_};
+    if (fields.ok()) {
+      parse(fields, out);
+    }
+    if (auto finished = fields.finish(); !finished) {
+      fail(std::move(finished).error());
+    }
+  }
+
+  /// Parse every member of a name-keyed object as `parse(name, Fields&, T&)`.
+  template <class T, class Parse>
+  void entries(std::string_view key, std::vector<T>& out, Parse&& parse) {
+    const auto* map = take(key);
+    if (map == nullptr) {
+      return;
+    }
+    if (!map->is_object()) {
+      fail(config_error("expected object", path_of(key)));
+      return;
+    }
+    out.reserve(map->size());
+    for (const auto& [name, value] : map->items()) {
+      auto entry = T{.name = name};
+      nested(value, child_path(path_of(key), name), entry, parse);
+      if (!ok()) {
+        return;
+      }
+      out.push_back(std::move(entry));
+    }
+  }
+
+  [[nodiscard]] Result<void> finish() {
+    if (!ok()) {
+      return std::unexpected(std::move(*error_));
+    }
+    for (const auto& [key, _] : value_->items()) {
+      if (std::ranges::contains(known_, std::string_view{key})) {
+        continue;
+      }
+      auto path = path_of(key);
+      if (state_->strict) {
+        return std::unexpected(config_error("unknown config field", std::move(path)));
+      }
+      state_->warnings.push_back(ConfigWarning{.path = std::move(path), .message = "unknown config field"});
+    }
     return {};
   }
-  auto parsed = non_negative_number_value(*it, child_path(path, key));
-  if (!parsed) {
-    return std::unexpected(std::move(parsed.error()));
-  }
-  out = *parsed;
-  return {};
-}
 
-[[nodiscard]] Result<std::optional<PromptCacheConfig>> parse_profile_cache(const json& profile,
-                                                                           std::string_view profile_path,
-                                                                           bool strict,
-                                                                           std::vector<ConfigWarning>& warnings) {
-  auto cache = PromptCacheConfig{};
-  const auto it = profile.find("cache");
-  if (it == profile.end()) {
-    return std::optional<PromptCacheConfig>{};
-  }
-  auto object = require_object(*it, child_path(profile_path, "cache"));
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  const auto cache_path = child_path(profile_path, "cache");
-  if (const auto enabled_it = it->find("enabled"); enabled_it != it->end()) {
-    if (!enabled_it->is_boolean()) {
-      return std::unexpected(config_error("expected boolean", child_path(cache_path, "enabled")));
+private:
+  [[nodiscard]] static Result<std::string> string_value(const json& value, const std::string& path, bool non_empty) {
+    if (!value.is_string()) {
+      return std::unexpected(config_error("expected string", path));
     }
-    cache.enabled = enabled_it->get<bool>();
-  }
-  if (const auto floor_it = it->find("min_prefix_bytes"); floor_it != it->end()) {
-    auto parsed = integer_value(*floor_it, child_path(cache_path, "min_prefix_bytes"));
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
+    auto expanded = expand_env_string(value.get_ref<const std::string&>(), path);
+    if (expanded && non_empty && expanded->empty()) {
+      return std::unexpected(config_error("expected non-empty string", path));
     }
-    if (*parsed < 0) {
-      return std::unexpected(config_error("expected non-negative integer", child_path(cache_path, "min_prefix_bytes")));
+    return expanded;
+  }
+
+  [[nodiscard]] static Result<std::vector<std::string>>
+  string_array(const json& value, const std::string& path, bool non_empty) {
+    if (!value.is_array()) {
+      return std::unexpected(config_error("expected array", path));
     }
-    cache.min_prefix_bytes = *parsed;
-  }
-  auto unknowns = collect_unknown_object_fields(*it,
-                                                cache_path,
-                                                kRecognizedPromptCacheFields,
-                                                "unknown provider cache field",
-                                                strict,
-                                                warnings);
-  if (!unknowns) {
-    return std::unexpected(std::move(unknowns.error()));
-  }
-  return cache;
-}
-
-[[nodiscard]] Result<ProviderPricingConfig> parse_profile_pricing(const json& profile,
-                                                                  std::string_view profile_path,
-                                                                  bool strict,
-                                                                  std::vector<ConfigWarning>& warnings) {
-  auto pricing = ProviderPricingConfig{};
-  const auto it = profile.find("pricing");
-  if (it == profile.end()) {
-    return pricing;
-  }
-  auto object = require_object(*it, child_path(profile_path, "pricing"));
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  const auto pricing_path = child_path(profile_path, "pricing");
-  if (auto parsed = parse_optional_price(*it, "input_per_million_usd", pricing_path, pricing.input_per_million_usd);
-      !parsed) {
-    return std::unexpected(std::move(parsed.error()));
-  }
-  if (auto parsed = parse_optional_price(*it, "output_per_million_usd", pricing_path, pricing.output_per_million_usd);
-      !parsed) {
-    return std::unexpected(std::move(parsed.error()));
-  }
-  if (auto parsed = parse_optional_price(*it,
-                                         "cache_creation_per_million_usd",
-                                         pricing_path,
-                                         pricing.cache_creation_per_million_usd);
-      !parsed) {
-    return std::unexpected(std::move(parsed.error()));
-  }
-  if (auto parsed =
-          parse_optional_price(*it, "cache_read_per_million_usd", pricing_path, pricing.cache_read_per_million_usd);
-      !parsed) {
-    return std::unexpected(std::move(parsed.error()));
-  }
-  auto unknowns = collect_unknown_object_fields(*it,
-                                                pricing_path,
-                                                kRecognizedProviderPricingFields,
-                                                "unknown provider pricing field",
-                                                strict,
-                                                warnings);
-  if (!unknowns) {
-    return std::unexpected(std::move(unknowns.error()));
-  }
-  return pricing;
-}
-
-[[nodiscard]] Result<std::vector<ProfileConfig>>
-parse_profiles(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
-  auto profiles = std::vector<ProfileConfig>{};
-  const auto it = root.find("profiles");
-  if (it == root.end()) {
-    return profiles;
-  }
-  auto object = require_object(*it, "$.profiles");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  profiles.reserve(it->size());
-  for (const auto& [name, value] : it->items()) {
-    const auto profile_path = child_path("$.profiles", name);
-    auto profile_object = require_object(value, profile_path);
-    if (!profile_object) {
-      return std::unexpected(std::move(profile_object.error()));
-    }
-
-    auto provider = required_string(value, "provider", profile_path);
-    if (!provider) {
-      return std::unexpected(std::move(provider.error()));
-    }
-    auto protocol = std::optional<std::string>{};
-    if (const auto protocol_it = value.find("protocol"); protocol_it != value.end()) {
-      if (!protocol_it->is_string()) {
-        return std::unexpected(config_error("expected string", child_path(profile_path, "protocol")));
+    auto out = std::vector<std::string>{};
+    out.reserve(value.size());
+    for (std::size_t i = 0; i < value.size(); ++i) {
+      auto item = string_value(value[i], element_path(path, i), non_empty);
+      if (!item) {
+        return std::unexpected(std::move(item).error());
       }
-      protocol = protocol_it->get<std::string>();
-      if (protocol->empty()) {
-        return std::unexpected(config_error("protocol must be non-empty", child_path(profile_path, "protocol")));
-      }
+      out.push_back(std::move(*item));
     }
-    auto model = required_string(value, "model", profile_path);
-    if (!model) {
-      return std::unexpected(std::move(model.error()));
-    }
-    auto base_url = required_string(value, "base_url", profile_path);
-    if (!base_url) {
-      return std::unexpected(std::move(base_url.error()));
-    }
-    auto api_key_env = required_string(value, "api_key_env", profile_path);
-    if (!api_key_env) {
-      return std::unexpected(std::move(api_key_env.error()));
-    }
-    auto pricing = parse_profile_pricing(value, profile_path, strict, warnings);
-    if (!pricing) {
-      return std::unexpected(std::move(pricing.error()));
-    }
-    auto thinking_budget = std::optional<std::uint32_t>{};
-    if (const auto budget_it = value.find("thinking_budget"); budget_it != value.end()) {
-      auto parsed = positive_integer_value(*budget_it, child_path(profile_path, "thinking_budget"));
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      thinking_budget = static_cast<std::uint32_t>(*parsed);
-    }
-    auto cache = parse_profile_cache(value, profile_path, strict, warnings);
-    if (!cache) {
-      return std::unexpected(std::move(cache.error()));
-    }
-    auto parsed_cache = std::move(*cache);
-    auto unknowns = collect_unknown_object_fields(value,
-                                                  profile_path,
-                                                  kRecognizedProfileFields,
-                                                  "unknown provider profile field",
-                                                  strict,
-                                                  warnings);
-    if (!unknowns) {
-      return std::unexpected(std::move(unknowns.error()));
-    }
-
-    profiles.push_back(ProfileConfig{
-        .name = name,
-        .provider = std::move(*provider),
-        .protocol = std::move(protocol),
-        .model = std::move(*model),
-        .base_url = std::move(*base_url),
-        .api_key_env = std::move(*api_key_env),
-        .pricing = *pricing,
-        .thinking_budget = thinking_budget,
-        .cache = std::move(parsed_cache),
-    });
+    return out;
   }
 
-  return profiles;
+  const json* value_;
+  std::string path_;
+  ParseState* state_;
+  std::vector<std::string_view> known_{};
+  std::optional<Error> error_{};
+};
+
+void parse_tool_output(Fields& f, ToolOutputRuntimeConfig& out) {
+  f.integer("max_text_bytes", out.max_text_bytes);
+  f.integer("max_data_bytes", out.max_data_bytes);
 }
 
-[[nodiscard]] Result<std::vector<RouteConfig>>
-parse_routes(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
-  auto routes = std::vector<RouteConfig>{};
-  const auto it = root.find("routes");
-  if (it == root.end()) {
-    return routes;
-  }
-  auto object = require_object(*it, "$.routes");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
+void parse_tool_scheduler(Fields& f, ToolSchedulerRuntimeConfig& out) {
+  f.integer("max_parallel_tools", out.max_parallel_tools);
+  f.integer("per_call_timeout_ms", out.per_call_timeout_ms);
+}
 
-  routes.reserve(it->size());
-  for (const auto& [name, value] : it->items()) {
-    const auto route_path = child_path("$.routes", name);
-    auto route_object = require_object(value, route_path);
-    if (!route_object) {
-      return std::unexpected(std::move(route_object.error()));
-    }
-
-    auto primary = required_string(value, "primary", route_path);
-    if (!primary) {
-      return std::unexpected(std::move(primary.error()));
-    }
-
-    auto fallbacks = std::vector<std::string>{};
-    if (const auto fallback_it = value.find("fallbacks"); fallback_it != value.end()) {
-      auto parsed = string_array(*fallback_it, child_path(route_path, "fallbacks"));
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
+void parse_prompt(Fields& f, PromptRuntimeConfig& out) {
+  f.field("active_tools", [&out](const json& value, const std::string& path) -> Result<void> {
+    if (value.is_string()) {
+      if (value.get_ref<const std::string&>() != "defaults") {
+        return std::unexpected(config_error("expected \"defaults\" or array of tool names", path)
+                                   .with("value", value.get<std::string>()));
       }
-      fallbacks = std::move(*parsed);
+      return {};
     }
-
-    auto unknowns = collect_unknown_object_fields(value,
-                                                  route_path,
-                                                  kRecognizedRouteFields,
-                                                  "unknown route field",
-                                                  strict,
-                                                  warnings);
-    if (!unknowns) {
-      return std::unexpected(std::move(unknowns.error()));
+    if (!value.is_array()) {
+      return std::unexpected(config_error("expected \"defaults\" or array of tool names", path));
     }
-
-    routes.push_back(RouteConfig{
-        .name = name,
-        .primary_profile = std::move(*primary),
-        .fallback_profiles = std::move(fallbacks),
-    });
-  }
-
-  return routes;
+    auto names = std::vector<std::string>{};
+    for (std::size_t i = 0; i < value.size(); ++i) {
+      const auto& item = value[i];
+      if (!item.is_string() || item.get_ref<const std::string&>().empty()) {
+        return std::unexpected(config_error("expected non-empty string", element_path(path, i)));
+      }
+      names.push_back(item.get<std::string>());
+    }
+    out.active_tools = PromptActiveToolsConfig{.use_defaults = false, .tool_names = std::move(names)};
+    return {};
+  });
 }
 
-[[nodiscard]] Result<std::vector<ConfigWarning>> collect_unknown_root_fields(const json& root, bool strict) {
-  auto warnings = std::vector<ConfigWarning>{};
-  for (const auto& [key, value] : root.items()) {
-    static_cast<void>(value);
-    if (is_recognized_root(key)) {
-      continue;
-    }
-    const auto path = child_path("$", key);
-    if (strict) {
-      return std::unexpected(config_error("unknown root config field", path));
-    }
-    warnings.push_back(ConfigWarning{
-        .path = path,
-        .message = "unknown root config field",
-    });
-  }
-  return warnings;
+void parse_stream(Fields& f, StreamRuntimeConfig& out) {
+  f.integer("max_bytes", out.max_bytes);
 }
 
-[[nodiscard]] Result<PermissionRuleConfig> parse_permission_rule(const json& value,
-                                                                 PermissionVerdict verdict,
-                                                                 std::string_view path,
-                                                                 bool strict,
-                                                                 std::vector<ConfigWarning>& warnings) {
-  auto rule_object = require_object(value, path);
-  if (!rule_object) {
-    return std::unexpected(std::move(rule_object.error()));
-  }
+void parse_runtime(Fields& f, RuntimeConfig& out) {
+  f.integer("workers", out.workers);
+  f.integer("request_timeout_ms", out.request_timeout_ms);
+  f.object("tool_output", out.tool_output, parse_tool_output);
+  f.object("tool_scheduler", out.tool_scheduler, parse_tool_scheduler);
+  f.object("prompt", out.prompt, parse_prompt);
+  f.object("stream", out.stream, parse_stream);
+}
 
-  auto tool_pattern = required_string(value, "tool_pattern", path);
-  if (!tool_pattern) {
-    return std::unexpected(std::move(tool_pattern.error()));
-  }
-  if (tool_pattern->empty()) {
-    return std::unexpected(config_error("tool_pattern must be non-empty", child_path(path, "tool_pattern")));
-  }
+void parse_trace(Fields& f, TraceConfig& out) {
+  f.boolean("enabled", out.enabled);
+}
 
-  auto capability = std::optional<core::Capability>{};
-  if (const auto cap_it = value.find("capability"); cap_it != value.end()) {
-    if (!cap_it->is_string()) {
-      return std::unexpected(config_error("expected string", child_path(path, "capability")));
+void parse_hooks(Fields& f, HooksConfig& out) {
+  f.integer("timeout_ms", out.timeout_ms);
+}
+
+void parse_recall(Fields& f, LongtermMemoryRecallConfig& out) {
+  f.boolean("enabled", out.enabled);
+  f.integer("limit", out.limit, 1, 20);
+  f.strings("kinds", out.kinds, true);
+  if (!f.ok() || !f.value().contains("kinds")) {
+    return;
+  }
+  const auto path = f.path_of("kinds");
+  if (out.kinds.empty()) {
+    f.fail(config_error("long-term memory recall kinds must not be empty", path));
+  }
+  for (std::size_t i = 0; i < out.kinds.size(); ++i) {
+    if (std::ranges::contains(std::span{out.kinds}.first(i), out.kinds[i])) {
+      f.fail(config_error("long-term memory recall kind must be unique", element_path(path, i)));
     }
-    const auto& text = cap_it->get_ref<const std::string&>();
+  }
+}
+
+void parse_memory(Fields& f, MemoryConfig& out) {
+  f.object("longterm", out.longterm, [](Fields& longterm, LongtermMemoryConfig& config) {
+    longterm.object("recall", config.recall, parse_recall);
+  });
+}
+
+void parse_cache(Fields& f, std::optional<PromptCacheConfig>& out) {
+  auto& cache = out.emplace();
+  f.boolean("enabled", cache.enabled);
+  f.integer("min_prefix_bytes", cache.min_prefix_bytes, 0);
+}
+
+void parse_pricing(Fields& f, ProviderPricingConfig& out) {
+  f.price("input_per_million_usd", out.input_per_million_usd);
+  f.price("output_per_million_usd", out.output_per_million_usd);
+  f.price("cache_creation_per_million_usd", out.cache_creation_per_million_usd);
+  f.price("cache_read_per_million_usd", out.cache_read_per_million_usd);
+}
+
+void parse_profile(Fields& f, ProfileConfig& out) {
+  f.required_string("provider", out.provider);
+  f.string("protocol", out.protocol, true);
+  f.required_string("model", out.model);
+  f.required_string("base_url", out.base_url);
+  f.required_string("api_key_env", out.api_key_env);
+  f.object("pricing", out.pricing, parse_pricing);
+  f.integer("thinking_budget", out.thinking_budget, 1, std::numeric_limits<std::uint32_t>::max());
+  f.object("cache", out.cache, parse_cache);
+}
+
+void parse_route(Fields& f, RouteConfig& out) {
+  f.required_string("primary", out.primary_profile);
+  f.strings("fallbacks", out.fallback_profiles);
+}
+
+void parse_rule(Fields& f, PermissionRuleConfig& out) {
+  f.required_string("tool_pattern", out.tool_pattern, true);
+  f.field("capability", [&out](const json& value, const std::string& path) -> Result<void> {
+    if (!value.is_string()) {
+      return std::unexpected(config_error("expected string", path));
+    }
+    const auto& text = value.get_ref<const std::string&>();
     auto parsed = core::parse_enum<core::Capability>(text);
     if (!parsed) {
-      return std::unexpected(
-          config_error("unknown capability spelling", child_path(path, "capability")).with("capability", text));
+      return std::unexpected(config_error("unknown capability spelling", path).with("capability", text));
     }
-    capability = *parsed;
-  }
-
-  auto input_pattern = std::optional<std::string>{};
-  if (const auto pat_it = value.find("input_pattern"); pat_it != value.end()) {
-    if (!pat_it->is_string()) {
-      return std::unexpected(config_error("expected string", child_path(path, "input_pattern")));
-    }
-    auto pattern = pat_it->get_ref<const std::string&>();
-    if (pattern.empty()) {
-      return std::unexpected(config_error("input_pattern must be non-empty", child_path(path, "input_pattern")));
-    }
+    out.capability = *parsed;
+    return {};
+  });
+  f.string("input_pattern", out.input_pattern, true);
+  if (f.ok() && out.input_pattern.has_value()) {
     // Keep configuration copyable by retaining only the validated source;
     // bootstrap compiles the owned runtime pattern during rule assembly.
     re2::RE2::Options options{re2::RE2::DefaultOptions};
     options.set_log_errors(false);
-    const auto compiled = re2::RE2{pattern, options};
+    const auto compiled = re2::RE2{*out.input_pattern, options};
     if (!compiled.ok()) {
-      return std::unexpected(config_error("invalid input_pattern regex", child_path(path, "input_pattern"))
-                                 .with("regex_error", compiled.error()));
+      f.fail(config_error("invalid input_pattern regex", f.path_of("input_pattern"))
+                 .with("regex_error", compiled.error()));
     }
-    input_pattern = std::move(pattern);
   }
-
-  auto replay_max = std::optional<std::uint32_t>{};
-  if (const auto it = value.find("replay_max"); it != value.end()) {
-    auto parsed = integer_value(*it, child_path(path, "replay_max"));
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    if (*parsed < 0) {
-      return std::unexpected(config_error("replay_max must be non-negative", child_path(path, "replay_max"))
-                                 .with("value", std::to_string(*parsed)));
-    }
-    if (*parsed > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
-      return std::unexpected(config_error("replay_max exceeds uint32 range", child_path(path, "replay_max"))
-                                 .with("value", std::to_string(*parsed)));
-    }
-    replay_max = static_cast<std::uint32_t>(*parsed);
-  }
-
-  auto approval_ttl_seconds = std::optional<std::int64_t>{};
-  if (const auto it = value.find("approval_ttl_seconds"); it != value.end()) {
-    auto parsed = integer_value(*it, child_path(path, "approval_ttl_seconds"));
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    if (*parsed < 0) {
-      return std::unexpected(
-          config_error("approval_ttl_seconds must be non-negative", child_path(path, "approval_ttl_seconds"))
-              .with("value", std::to_string(*parsed)));
-    }
-    approval_ttl_seconds = *parsed;
-  }
-
-  static constexpr auto kKnownKeys = std::array<std::string_view, 5>{"tool_pattern",
-                                                                     "capability",
-                                                                     "input_pattern",
-                                                                     "replay_max",
-                                                                     "approval_ttl_seconds"};
-  for (const auto& [key, _] : value.items()) {
-    if (std::ranges::contains(kKnownKeys, key)) {
-      continue;
-    }
-    const auto field_path = child_path(path, key);
-    if (strict) {
-      return std::unexpected(config_error("unknown permission rule field", field_path));
-    }
-    warnings.push_back(ConfigWarning{
-        .path = field_path,
-        .message = "unknown permission rule field",
-    });
-  }
-
-  return PermissionRuleConfig{
-      .verdict = verdict,
-      .tool_pattern = std::move(*tool_pattern),
-      .capability = capability,
-      .input_pattern = std::move(input_pattern),
-      .replay_max = replay_max,
-      .approval_ttl_seconds = approval_ttl_seconds,
-  };
+  f.integer("replay_max", out.replay_max, 0, std::numeric_limits<std::uint32_t>::max());
+  f.integer("approval_ttl_seconds", out.approval_ttl_seconds, 0);
 }
 
-[[nodiscard]] Result<WorkspacePermissionsConfig>
-parse_workspace_block(const json& block, std::string_view path, bool strict, std::vector<ConfigWarning>& warnings) {
-  auto block_object = require_object(block, path);
-  if (!block_object) {
-    return std::unexpected(std::move(block_object.error()));
-  }
-
-  auto out = WorkspacePermissionsConfig{};
-  if (const auto it = block.find("extra_read_roots"); it != block.end()) {
-    auto parsed = string_array(*it, child_path(path, "extra_read_roots"));
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    out.extra_read_roots = std::move(*parsed);
-  }
-  if (const auto it = block.find("extra_write_roots"); it != block.end()) {
-    auto parsed = string_array(*it, child_path(path, "extra_write_roots"));
-    if (!parsed) {
-      return std::unexpected(std::move(parsed.error()));
-    }
-    out.extra_write_roots = std::move(*parsed);
-  }
-
-  static constexpr auto kKnownKeys = std::array<std::string_view, 2>{"extra_read_roots", "extra_write_roots"};
-  for (const auto& [key, _] : block.items()) {
-    if (std::ranges::contains(kKnownKeys, key)) {
-      continue;
-    }
-    const auto field_path = child_path(path, key);
-    if (strict) {
-      return std::unexpected(config_error("unknown workspace field", field_path));
-    }
-    warnings.push_back(ConfigWarning{
-        .path = field_path,
-        .message = "unknown workspace field",
-    });
-  }
-
-  return out;
+void parse_workspace(Fields& f, WorkspacePermissionsConfig& out) {
+  f.strings("extra_read_roots", out.extra_read_roots);
+  f.strings("extra_write_roots", out.extra_write_roots);
 }
 
-[[nodiscard]] Result<PermissionsConfig>
-parse_permissions_block(const json& block, std::string_view path, bool strict, std::vector<ConfigWarning>& warnings) {
-  auto block_object = require_object(block, path);
-  if (!block_object) {
-    return std::unexpected(std::move(block_object.error()));
-  }
-
-  auto out = PermissionsConfig{};
-  for (const auto& [key, value] : block.items()) {
-    const auto key_path = child_path(path, key);
-    if (key == "workspace") {
-      auto parsed = parse_workspace_block(value, key_path, strict, warnings);
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      out.workspace = std::move(*parsed);
+void parse_permissions(Fields& f, PermissionsConfig& out) {
+  f.object("workspace", out.workspace, parse_workspace);
+  // Rules keep their document order across verdict keys.
+  for (const auto& [key, _] : f.value().items()) {
+    const auto verdict = core::parse_enum<PermissionVerdict>(key);
+    if (!verdict) {
       continue;
     }
-    const auto known_verdict = core::parse_enum<PermissionVerdict>(key);
-    if (!known_verdict) {
-      if (strict) {
-        return std::unexpected(config_error("unknown verdict key", key_path));
-      }
-      warnings.push_back(ConfigWarning{
-          .path = key_path,
-          .message = "unknown verdict key",
-      });
-      continue;
+    const auto* rules = f.take(key);
+    if (rules == nullptr) {
+      return;
     }
-    if (!value.is_array()) {
-      return std::unexpected(config_error("expected array", key_path));
+    const auto path = f.path_of(key);
+    if (!rules->is_array()) {
+      f.fail(config_error("expected array", path));
+      return;
     }
-    out.rules.reserve(out.rules.size() + value.size());
-    auto index = std::size_t{0};
-    for (const auto& item : value) {
-      auto rule = parse_permission_rule(item, *known_verdict, element_path(key_path, index), strict, warnings);
-      if (!rule) {
-        return std::unexpected(std::move(rule.error()));
-      }
-      out.rules.push_back(std::move(*rule));
-      ++index;
+    for (std::size_t i = 0; i < rules->size() && f.ok(); ++i) {
+      auto rule = PermissionRuleConfig{.verdict = *verdict};
+      f.nested((*rules)[i], element_path(path, i), rule, parse_rule);
+      out.rules.push_back(std::move(rule));
     }
   }
-  return out;
 }
 
-[[nodiscard]] Result<PermissionsConfig>
-parse_root_permissions(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
-  const auto it = root.find("permissions");
-  if (it == root.end()) {
-    return PermissionsConfig{};
-  }
-  return parse_permissions_block(*it, "$.permissions", strict, warnings);
-}
-
-[[nodiscard]] Result<std::vector<AgentConfig>>
-parse_agents(const json& root, bool strict, std::vector<ConfigWarning>& warnings) {
-  auto agents = std::vector<AgentConfig>{};
-  const auto it = root.find("agents");
-  if (it == root.end()) {
-    return agents;
-  }
-  auto object = require_object(*it, "$.agents");
-  if (!object) {
-    return std::unexpected(std::move(object.error()));
-  }
-
-  agents.reserve(it->size());
-  for (const auto& [name, value] : it->items()) {
-    const auto agent_path = child_path("$.agents", name);
-    auto agent_object = require_object(value, agent_path);
-    if (!agent_object) {
-      return std::unexpected(std::move(agent_object.error()));
-    }
-
-    auto permissions = PermissionsConfig{};
-    if (const auto perm_it = value.find("permissions"); perm_it != value.end()) {
-      auto parsed = parse_permissions_block(*perm_it, child_path(agent_path, "permissions"), strict, warnings);
-      if (!parsed) {
-        return std::unexpected(std::move(parsed.error()));
-      }
-      permissions = std::move(*parsed);
-    }
-
-    auto prompt_overlay = std::string{};
-    if (const auto overlay_it = value.find("prompt_overlay"); overlay_it != value.end()) {
-      const auto overlay_path = child_path(agent_path, "prompt_overlay");
-      if (!overlay_it->is_string()) {
-        return std::unexpected(config_error("expected string", overlay_path));
-      }
-      prompt_overlay = overlay_it->get<std::string>();
-    }
-
-    for (const auto& [key, _] : value.items()) {
-      if (is_recognized_agent_field(key)) {
-        continue;
-      }
-      const auto field_path = child_path(agent_path, key);
-      if (strict) {
-        return std::unexpected(config_error("unknown agent field", field_path));
-      }
-      warnings.push_back(ConfigWarning{
-          .path = field_path,
-          .message = "unknown agent field",
-      });
-    }
-
-    agents.push_back(AgentConfig{
-        .name = name,
-        .permissions = std::move(permissions),
-        .prompt_overlay = std::move(prompt_overlay),
-    });
-  }
-
-  return agents;
+void parse_agent(Fields& f, AgentConfig& out) {
+  f.object("permissions", out.permissions, parse_permissions);
+  f.string("prompt_overlay", out.prompt_overlay);
 }
 
 }  // namespace
 
 core::Result<Config> Config::parse(std::string_view contents, LoadOptions options) {
   try {
-    auto root = json::parse(contents.begin(), contents.end());
-
-    if (!root.is_object()) {
-      return std::unexpected(config_error("expected root object", "$"));
-    }
-
-    auto strict = parse_strict_config(root);
-    if (!strict) {
-      return std::unexpected(std::move(strict.error()));
-    }
-    auto unknowns = collect_unknown_root_fields(root, options.strict_unknown_fields || *strict);
-    if (!unknowns) {
-      return std::unexpected(std::move(unknowns.error()));
-    }
-    auto env_result = substitute_env_recognized_roots(root);
-    if (!env_result) {
-      return std::unexpected(std::move(env_result.error()));
-    }
-
-    const auto strict_effective = options.strict_unknown_fields || *strict;
-    auto warnings = std::move(*unknowns);
-
-    auto runtime = parse_runtime(root, strict_effective, warnings);
-    if (!runtime) {
-      return std::unexpected(std::move(runtime.error()));
-    }
-    auto profiles = parse_profiles(root, strict_effective, warnings);
-    if (!profiles) {
-      return std::unexpected(std::move(profiles.error()));
-    }
-    auto routes = parse_routes(root, strict_effective, warnings);
-    if (!routes) {
-      return std::unexpected(std::move(routes.error()));
-    }
-    auto trace = parse_trace(root, strict_effective, warnings);
-    if (!trace) {
-      return std::unexpected(std::move(trace.error()));
-    }
-    auto hooks = parse_hooks(root, strict_effective, warnings);
-    if (!hooks) {
-      return std::unexpected(std::move(hooks.error()));
-    }
-    auto memory = parse_memory(root, strict_effective, warnings);
-    if (!memory) {
-      return std::unexpected(std::move(memory.error()));
-    }
-    auto permissions = parse_root_permissions(root, strict_effective, warnings);
-    if (!permissions) {
-      return std::unexpected(std::move(permissions.error()));
-    }
-    auto agents = parse_agents(root, strict_effective, warnings);
-    if (!agents) {
-      return std::unexpected(std::move(agents.error()));
-    }
-
+    const auto root = json::parse(contents.begin(), contents.end());
+    auto state = ParseState{};
     auto config = Config{};
-    config.strict_config_ = *strict;
-    config.runtime_ = std::move(*runtime);
-    config.profiles_ = std::move(*profiles);
-    config.routes_ = std::move(*routes);
-    config.trace_ = std::move(*trace);
-    config.hooks_ = std::move(*hooks);
-    config.memory_ = *memory;
-    config.permissions_ = std::move(*permissions);
-    config.agents_ = std::move(*agents);
-    config.warnings_ = std::move(warnings);
+    auto fields = Fields{root, "$", state};
+    fields.boolean("strict_config", config.strict_config_);
+    state.strict = options.strict_unknown_fields || config.strict_config_;
+    fields.object("runtime", config.runtime_, parse_runtime);
+    fields.entries("profiles", config.profiles_, parse_profile);
+    fields.entries("routes", config.routes_, parse_route);
+    fields.object("trace", config.trace_, parse_trace);
+    fields.object("hooks", config.hooks_, parse_hooks);
+    fields.object("memory", config.memory_, parse_memory);
+    fields.object("permissions", config.permissions_, parse_permissions);
+    fields.entries("agents", config.agents_, parse_agent);
+    if (auto finished = fields.finish(); !finished) {
+      return std::unexpected(std::move(finished).error());
+    }
+    config.warnings_ = std::move(state.warnings);
     return config;
   } catch (const json::parse_error& e) {
     return std::unexpected(Error::config("failed to parse config JSON").with("detail", e.what()));

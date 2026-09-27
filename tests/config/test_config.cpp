@@ -351,7 +351,7 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     REQUIRE(result.has_value());
     REQUIRE(result->warnings().size() == 1);
     REQUIRE(result->warnings()[0].path == "$.profiles.default.notes");
-    REQUIRE(result->warnings()[0].message == "unknown provider profile field");
+    REQUIRE(result->warnings()[0].message == "unknown config field");
   }
 
   SECTION("unknown pricing field warns in loose mode") {
@@ -373,7 +373,7 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     REQUIRE(result.has_value());
     REQUIRE(result->warnings().size() == 1);
     REQUIRE(result->warnings()[0].path == "$.profiles.default.pricing.discount_code");
-    REQUIRE(result->warnings()[0].message == "unknown provider pricing field");
+    REQUIRE(result->warnings()[0].message == "unknown config field");
   }
 
   SECTION("unknown route field warns in loose mode") {
@@ -390,7 +390,7 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     REQUIRE(result.has_value());
     REQUIRE(result->warnings().size() == 1);
     REQUIRE(result->warnings()[0].path == "$.routes.default.sticky");
-    REQUIRE(result->warnings()[0].message == "unknown route field");
+    REQUIRE(result->warnings()[0].message == "unknown config field");
   }
 
   SECTION("unknown hook field warns in loose mode") {
@@ -404,7 +404,7 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     REQUIRE(result.has_value());
     REQUIRE(result->warnings().size() == 1);
     REQUIRE(result->warnings()[0].path == "$.hooks.sink_scripts");
-    REQUIRE(result->warnings()[0].message == "unknown hook field");
+    REQUIRE(result->warnings()[0].message == "unknown config field");
   }
 
   SECTION("unknown memory recall field warns in loose mode") {
@@ -422,7 +422,7 @@ TEST_CASE("Config::parse warns or fails on unknown nested provider and hook fiel
     REQUIRE(result.has_value());
     REQUIRE(result->warnings().size() == 1);
     REQUIRE(result->warnings()[0].path == "$.memory.longterm.recall.ranking_strategy");
-    REQUIRE(result->warnings()[0].message == "unknown long-term memory recall field");
+    REQUIRE(result->warnings()[0].message == "unknown config field");
   }
 
   SECTION("unknown nested field fails under strict_config") {
@@ -1334,6 +1334,34 @@ TEST_CASE("Config::parse threads workspace blocks through agent overlays", "[uni
 TEST_CASE("prompt recall rejects limits beyond the memory tool boundary", "[unit][config][memory][core_boundary]") {
   const auto result = config::Config::parse(R"({"memory":{"longterm":{"recall":{"limit":21}}}})");
 
+  REQUIRE_FALSE(result.has_value());
+  CHECK(result.error().kind() == core::ErrorKind::config);
+}
+
+TEST_CASE("Config::parse reports unknown fields in every runtime object", "[unit][config]") {
+  auto loose = config::Config::parse(R"json({"runtime": {"tool_output": {"max_text_bytes": 1, "extra": 2}}})json");
+  REQUIRE(loose.has_value());
+  REQUIRE(loose->warnings().size() == 1);
+  CHECK(loose->warnings()[0].path == "$.runtime.tool_output.extra");
+  CHECK(loose->runtime().tool_output.max_text_bytes == 1);
+
+  auto strict = config::Config::parse(R"json({"strict_config": true, "runtime": {"stream": {"limit": 1}}})json");
+  REQUIRE_FALSE(strict.has_value());
+  CHECK(strict.error().kind() == core::ErrorKind::config);
+}
+
+TEST_CASE("Config::parse bounds integers before narrowing", "[unit][config]") {
+  auto result = config::Config::parse(R"json({
+  "profiles": {
+    "default": {
+      "provider": "local",
+      "model": "m",
+      "base_url": "http://127.0.0.1:8080",
+      "api_key_env": "LOCAL_API_KEY",
+      "thinking_budget": 4294967296
+    }
+  }
+})json");
   REQUIRE_FALSE(result.has_value());
   CHECK(result.error().kind() == core::ErrorKind::config);
 }

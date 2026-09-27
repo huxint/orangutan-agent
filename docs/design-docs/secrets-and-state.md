@@ -1,9 +1,12 @@
 # Configuration And State
 
 The host supplies parsed configuration through `Config::parse` or
-`Config::load_file`. Strict loading rejects unknown root, runtime, trace, hook,
-provider, memory, permission and agent fields. `LoadOptions` selects strict
-errors or warnings. Parse configuration before constructing provider services.
+`Config::load_file`. Each object is read through a field view: the fields the
+parser reads are the recognized fields, and any other key in any object is an
+"unknown config field" at its JSON path. Strict loading (`strict_config` or
+`LoadOptions`) makes it an error; otherwise it is a warning. The first invalid
+value fails the parse with its path; integers are range-checked before they are
+narrowed. Parse configuration before constructing provider services.
 
 The config file contains:
 
@@ -63,8 +66,8 @@ index budgeting and correction semantics.
 Profiles store an `api_key_env` name. Credential resolution reads the named
 variable or an explicitly injected `provider::SecretLookup` at the provider
 construction boundary.
-Values are excluded from diagnostics. The parser supports `${NAME}` and
-`${NAME:-fallback}` for configuration substitution; prefer references over
+Values are excluded from diagnostics. String values the parser reads expand
+`${NAME}` and `${NAME:-fallback}`; unread fields are never expanded; prefer references over
 embedding credentials in JSON. No credential encryption/store is implemented.
 
 ## State
