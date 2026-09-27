@@ -82,10 +82,14 @@ public:
   [[nodiscard]] core::Result<void> reset();
 
   [[nodiscard]] core::Result<StepResult> step();
+  /// Step once more and require that the statement has no further rows.
+  [[nodiscard]] core::Result<void> expect_done(std::string_view operation);
 
   [[nodiscard]] core::Result<int> column_count() const;
   [[nodiscard]] core::Result<std::string> column_name(int index) const;
   [[nodiscard]] core::Result<ColumnValue> column_text(int index) const;
+  /// Text that must not be NULL; errors name `field`.
+  [[nodiscard]] core::Result<std::string> required_text(int index, std::string_view field) const;
   [[nodiscard]] core::Result<BlobValue> column_blob(int index) const;
   [[nodiscard]] core::Result<std::int64_t> column_int64(int index) const;
   [[nodiscard]] core::Result<double> column_double(int index) const;

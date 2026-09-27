@@ -477,6 +477,29 @@ core::Result<QueryResult> Connection::query(std::string_view sql) {
   return result;
 }
 
+core::Result<void> Statement::expect_done(std::string_view operation) {
+  auto done = step();
+  if (!done) {
+    return std::unexpected(std::move(done).error());
+  }
+  if (*done != StepResult::done) {
+    return std::unexpected(
+        core::Error::storage("sqlite statement returned extra rows").with("operation", std::string{operation}));
+  }
+  return {};
+}
+
+core::Result<std::string> Statement::required_text(int index, std::string_view field) const {
+  auto value = column_text(index);
+  if (!value) {
+    return std::unexpected(std::move(value).error().with("field", std::string{field}));
+  }
+  if (!*value) {
+    return std::unexpected(core::Error::storage("sqlite row has null required field").with("field", std::string{field}));
+  }
+  return **std::move(value);
+}
+
 core::Result<Transaction> Transaction::begin(Connection& connection) {
   if (auto begun = connection.execute("BEGIN IMMEDIATE"); !begun) {
     return std::unexpected(std::move(begun).error());

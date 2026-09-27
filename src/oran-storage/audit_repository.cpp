@@ -142,29 +142,6 @@ RETURNING id, event_kind, scope_key, agent_key, tool_name, identity, verdict, ou
   return {};
 }
 
-[[nodiscard]] core::Result<std::string> required_text(Statement& statement, int index, std::string_view field) {
-  auto value = statement.column_text(index);
-  if (!value) {
-    return std::unexpected(value.error().with("field", std::string{field}));
-  }
-  if (!*value) {
-    return std::unexpected(
-        core::Error::storage("audit repository row has null required field").with("field", std::string{field}));
-  }
-  return **std::move(value);
-}
-
-[[nodiscard]] core::Result<std::optional<std::string>> optional_text(Statement& statement, int index) {
-  auto value = statement.column_text(index);
-  if (!value) {
-    return std::unexpected(value.error());
-  }
-  if (!*value) {
-    return std::optional<std::string>{};
-  }
-  return std::optional<std::string>{**std::move(value)};
-}
-
 [[nodiscard]] core::Result<std::optional<core::TurnId>>
 optional_turn_id(Statement& statement, int index, std::string_view field) {
   auto value = statement.column_blob(index);
@@ -184,56 +161,44 @@ optional_turn_id(Statement& statement, int index, std::string_view field) {
   return std::optional<core::TurnId>{id};
 }
 
-[[nodiscard]] core::Result<void> expect_done(Statement& statement, std::string_view operation) {
-  auto done = statement.step();
-  if (!done) {
-    return std::unexpected(done.error());
-  }
-  if (*done != StepResult::done) {
-    return std::unexpected(core::Error::storage("audit repository statement returned extra rows")
-                               .with("operation", std::string{operation}));
-  }
-  return {};
-}
-
 [[nodiscard]] core::Result<AuditEventRecord> read_event_row(Statement& statement) {
   auto id = statement.column_int64(0);
   if (!id) {
     return std::unexpected(id.error().with("field", "id"));
   }
-  auto event_kind = required_text(statement, 1, "event_kind");
+  auto event_kind = statement.required_text(1, "event_kind");
   if (!event_kind) {
     return std::unexpected(event_kind.error());
   }
-  auto scope_key = required_text(statement, 2, "scope_key");
+  auto scope_key = statement.required_text(2, "scope_key");
   if (!scope_key) {
     return std::unexpected(scope_key.error());
   }
-  auto agent_key = required_text(statement, 3, "agent_key");
+  auto agent_key = statement.required_text(3, "agent_key");
   if (!agent_key) {
     return std::unexpected(agent_key.error());
   }
-  auto tool_name = required_text(statement, 4, "tool_name");
+  auto tool_name = statement.required_text(4, "tool_name");
   if (!tool_name) {
     return std::unexpected(tool_name.error());
   }
-  auto identity = required_text(statement, 5, "identity");
+  auto identity = statement.required_text(5, "identity");
   if (!identity) {
     return std::unexpected(identity.error());
   }
-  auto verdict = required_text(statement, 6, "verdict");
+  auto verdict = statement.required_text(6, "verdict");
   if (!verdict) {
     return std::unexpected(verdict.error());
   }
-  auto outcome = required_text(statement, 7, "outcome");
+  auto outcome = statement.required_text(7, "outcome");
   if (!outcome) {
     return std::unexpected(outcome.error());
   }
-  auto reason = required_text(statement, 8, "reason");
+  auto reason = statement.required_text(8, "reason");
   if (!reason) {
     return std::unexpected(reason.error());
   }
-  auto input_hash = optional_text(statement, 9);
+  auto input_hash = statement.column_text(9);
   if (!input_hash) {
     return std::unexpected(input_hash.error());
   }
@@ -241,11 +206,11 @@ optional_turn_id(Statement& statement, int index, std::string_view field) {
   if (!parent_turn_id) {
     return std::unexpected(parent_turn_id.error());
   }
-  auto metadata_json = required_text(statement, 11, "metadata_json");
+  auto metadata_json = statement.required_text(11, "metadata_json");
   if (!metadata_json) {
     return std::unexpected(metadata_json.error());
   }
-  auto created_at = required_text(statement, 12, "created_at");
+  auto created_at = statement.required_text(12, "created_at");
   if (!created_at) {
     return std::unexpected(created_at.error());
   }
@@ -354,11 +319,11 @@ async::Awaitable<core::Result<AuditEventRecord>> AuditRepository::append_event(A
   if (!id) {
     co_return std::unexpected(id.error().with("field", "id"));
   }
-  auto created_at = required_text(statement, 1, "created_at");
+  auto created_at = statement.required_text(1, "created_at");
   if (!created_at) {
     co_return std::unexpected(created_at.error());
   }
-  if (auto done = expect_done(statement, "append_event"); !done) {
+  if (auto done = statement.expect_done("append_event"); !done) {
     co_return std::unexpected(done.error());
   }
 
@@ -421,7 +386,7 @@ AuditRepository::update_event_metadata(UpdateAuditEventMetadataRequest request) 
   if (!record) {
     co_return std::unexpected(record.error());
   }
-  if (auto done = expect_done(statement, "update_event_metadata"); !done) {
+  if (auto done = statement.expect_done("update_event_metadata"); !done) {
     co_return std::unexpected(done.error());
   }
   co_return std::move(*record);
@@ -569,7 +534,7 @@ async::Awaitable<core::Result<std::int64_t>> AuditRepository::count_events(std::
   if (!count) {
     co_return std::unexpected(count.error().with("field", "count"));
   }
-  if (auto done = expect_done(statement, "count_events"); !done) {
+  if (auto done = statement.expect_done("count_events"); !done) {
     co_return std::unexpected(done.error());
   }
   co_return *count;

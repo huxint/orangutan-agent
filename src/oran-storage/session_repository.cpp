@@ -80,47 +80,12 @@ GROUP BY s.session_id, s.agent_key, s.title, s.metadata_json, s.created_at, s.up
   return {};
 }
 
-[[nodiscard]] core::Result<std::string> required_text(Statement& statement, int index, std::string_view field) {
-  auto value = statement.column_text(index);
-  if (!value) {
-    return std::unexpected(value.error().with("field", std::string{field}));
-  }
-  if (!*value) {
-    return std::unexpected(
-        core::Error::storage("session repository row has null required field").with("field", std::string{field}));
-  }
-  return **std::move(value);
-}
-
-[[nodiscard]] core::Result<std::optional<std::string>> optional_text(Statement& statement, int index) {
-  auto value = statement.column_text(index);
-  if (!value) {
-    return std::unexpected(value.error());
-  }
-  if (!*value) {
-    return std::optional<std::string>{};
-  }
-  return std::optional<std::string>{**std::move(value)};
-}
-
-[[nodiscard]] core::Result<void> expect_done(Statement& statement, std::string_view operation) {
-  auto done = statement.step();
-  if (!done) {
-    return std::unexpected(done.error());
-  }
-  if (*done != StepResult::done) {
-    return std::unexpected(core::Error::storage("session repository statement returned extra rows")
-                               .with("operation", std::string{operation}));
-  }
-  return {};
-}
-
 [[nodiscard]] core::Result<SessionMessageRecord> read_message_row(Statement& statement) {
-  auto session_id = required_text(statement, 0, "session_id");
+  auto session_id = statement.required_text(0, "session_id");
   if (!session_id) {
     return std::unexpected(session_id.error());
   }
-  auto agent_key = required_text(statement, 1, "agent_key");
+  auto agent_key = statement.required_text(1, "agent_key");
   if (!agent_key) {
     return std::unexpected(agent_key.error());
   }
@@ -128,7 +93,7 @@ GROUP BY s.session_id, s.agent_key, s.title, s.metadata_json, s.created_at, s.up
   if (!sequence) {
     return std::unexpected(sequence.error().with("field", "sequence"));
   }
-  auto role_text = required_text(statement, 3, "role");
+  auto role_text = statement.required_text(3, "role");
   if (!role_text) {
     return std::unexpected(role_text.error());
   }
@@ -137,15 +102,15 @@ GROUP BY s.session_id, s.agent_key, s.title, s.metadata_json, s.created_at, s.up
     return std::unexpected(
         core::Error::storage("session repository row has unknown role").with("role", std::move(*role_text)));
   }
-  auto content_json = required_text(statement, 4, "content_json");
+  auto content_json = statement.required_text(4, "content_json");
   if (!content_json) {
     return std::unexpected(content_json.error());
   }
-  auto metadata_json = required_text(statement, 5, "metadata_json");
+  auto metadata_json = statement.required_text(5, "metadata_json");
   if (!metadata_json) {
     return std::unexpected(metadata_json.error());
   }
-  auto created_at = required_text(statement, 6, "created_at");
+  auto created_at = statement.required_text(6, "created_at");
   if (!created_at) {
     return std::unexpected(created_at.error());
   }
@@ -162,27 +127,27 @@ GROUP BY s.session_id, s.agent_key, s.title, s.metadata_json, s.created_at, s.up
 }
 
 [[nodiscard]] core::Result<SessionRecord> read_session_row(Statement& statement) {
-  auto session_id = required_text(statement, 0, "session_id");
+  auto session_id = statement.required_text(0, "session_id");
   if (!session_id) {
     return std::unexpected(session_id.error());
   }
-  auto agent_key = required_text(statement, 1, "agent_key");
+  auto agent_key = statement.required_text(1, "agent_key");
   if (!agent_key) {
     return std::unexpected(agent_key.error());
   }
-  auto title = optional_text(statement, 2);
+  auto title = statement.column_text(2);
   if (!title) {
     return std::unexpected(title.error());
   }
-  auto metadata_json = required_text(statement, 3, "metadata_json");
+  auto metadata_json = statement.required_text(3, "metadata_json");
   if (!metadata_json) {
     return std::unexpected(metadata_json.error());
   }
-  auto created_at = required_text(statement, 4, "created_at");
+  auto created_at = statement.required_text(4, "created_at");
   if (!created_at) {
     return std::unexpected(created_at.error());
   }
-  auto updated_at = required_text(statement, 5, "updated_at");
+  auto updated_at = statement.required_text(5, "updated_at");
   if (!updated_at) {
     return std::unexpected(updated_at.error());
   }
@@ -227,11 +192,11 @@ insert_message(Statement& statement, const SessionKey& key, SessionMessageInput 
   if (!sequence) {
     return std::unexpected(sequence.error().with("field", "sequence"));
   }
-  auto created_at = required_text(statement, 1, "created_at");
+  auto created_at = statement.required_text(1, "created_at");
   if (!created_at) {
     return std::unexpected(created_at.error());
   }
-  if (auto done = expect_done(statement, "append_message"); !done) {
+  if (auto done = statement.expect_done("append_message"); !done) {
     return std::unexpected(done.error());
   }
 
@@ -447,7 +412,7 @@ async::Awaitable<core::Result<std::optional<SessionRecord>>> SessionRepository::
   if (!session) {
     co_return std::unexpected(session.error());
   }
-  if (auto done = expect_done(statement, "get_session"); !done) {
+  if (auto done = statement.expect_done("get_session"); !done) {
     co_return std::unexpected(done.error());
   }
   co_return std::optional<SessionRecord>{std::move(*session)};

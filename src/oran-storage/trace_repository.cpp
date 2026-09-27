@@ -147,29 +147,6 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
   return static_cast<std::int64_t>(limit);
 }
 
-[[nodiscard]] core::Result<std::string> required_text(Statement& statement, int index, std::string_view field) {
-  auto value = statement.column_text(index);
-  if (!value) {
-    return std::unexpected(value.error().with("field", std::string{field}));
-  }
-  if (!*value) {
-    return std::unexpected(
-        core::Error::storage("trace repository row has null required field").with("field", std::string{field}));
-  }
-  return **std::move(value);
-}
-
-[[nodiscard]] core::Result<std::optional<std::string>> optional_text(Statement& statement, int index) {
-  auto value = statement.column_text(index);
-  if (!value) {
-    return std::unexpected(value.error());
-  }
-  if (!*value) {
-    return std::optional<std::string>{};
-  }
-  return std::optional<std::string>{**std::move(value)};
-}
-
 [[nodiscard]] core::Result<TraceId> required_trace_id(Statement& statement, int index, std::string_view field) {
   auto value = statement.column_blob(index);
   if (!value) {
@@ -219,18 +196,6 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
   return std::string{reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 
-[[nodiscard]] core::Result<void> expect_done(Statement& statement, std::string_view operation) {
-  auto done = statement.step();
-  if (!done) {
-    return std::unexpected(done.error());
-  }
-  if (*done != StepResult::done) {
-    return std::unexpected(core::Error::storage("trace repository statement returned extra rows")
-                               .with("operation", std::string{operation}));
-  }
-  return {};
-}
-
 [[nodiscard]] core::Result<TraceTurnRecord> read_turn_row(Statement& statement) {
   auto turn_id = required_trace_id(statement, 0, "turn_id");
   if (!turn_id) {
@@ -244,19 +209,19 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
   if (!session_id) {
     return std::unexpected(session_id.error());
   }
-  auto agent_key = required_text(statement, 3, "agent_key");
+  auto agent_key = statement.required_text(3, "agent_key");
   if (!agent_key) {
     return std::unexpected(agent_key.error());
   }
-  auto origin = required_text(statement, 4, "origin");
+  auto origin = statement.required_text(4, "origin");
   if (!origin) {
     return std::unexpected(origin.error());
   }
-  auto route_profile = required_text(statement, 5, "route_profile");
+  auto route_profile = statement.required_text(5, "route_profile");
   if (!route_profile) {
     return std::unexpected(route_profile.error());
   }
-  auto route_model = required_text(statement, 6, "route_model");
+  auto route_model = statement.required_text(6, "route_model");
   if (!route_model) {
     return std::unexpected(route_model.error());
   }
@@ -268,7 +233,7 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
   if (!finished_at_ns) {
     return std::unexpected(finished_at_ns.error().with("field", "finished_at_ns"));
   }
-  auto stop_reason = required_text(statement, 9, "stop_reason");
+  auto stop_reason = statement.required_text(9, "stop_reason");
   if (!stop_reason) {
     return std::unexpected(stop_reason.error());
   }
@@ -312,7 +277,7 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
   if (!cost_estimate_usd) {
     return std::unexpected(cost_estimate_usd.error().with("field", "cost_estimate_usd"));
   }
-  auto cancellation_phase = optional_text(statement, 20);
+  auto cancellation_phase = statement.column_text(20);
   if (!cancellation_phase) {
     return std::unexpected(cancellation_phase.error());
   }
@@ -436,7 +401,7 @@ async::Awaitable<core::Result<TraceTurnRecord>> TraceRepository::append_turn(App
   if (!record) {
     co_return std::unexpected(record.error());
   }
-  if (auto done = expect_done(statement, "append_turn"); !done) {
+  if (auto done = statement.expect_done("append_turn"); !done) {
     co_return std::unexpected(done.error());
   }
   co_return std::move(*record);
@@ -472,7 +437,7 @@ async::Awaitable<core::Result<std::optional<TraceTurnRecord>>> TraceRepository::
   if (!record) {
     co_return std::unexpected(record.error());
   }
-  if (auto done = expect_done(statement, "get_turn"); !done) {
+  if (auto done = statement.expect_done("get_turn"); !done) {
     co_return std::unexpected(done.error());
   }
   co_return std::optional<TraceTurnRecord>{std::move(*record)};
@@ -557,7 +522,7 @@ async::Awaitable<core::Result<std::int64_t>> TraceRepository::count_turns() {
   if (!count) {
     co_return std::unexpected(count.error().with("field", "count"));
   }
-  if (auto done = expect_done(statement, "count_turns"); !done) {
+  if (auto done = statement.expect_done("count_turns"); !done) {
     co_return std::unexpected(done.error());
   }
   co_return *count;

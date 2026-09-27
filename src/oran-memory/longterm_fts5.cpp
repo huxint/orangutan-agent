@@ -153,19 +153,6 @@ template <std::size_t N>
   return kMigrations;
 }
 
-[[nodiscard]] core::Result<std::string>
-required_text(storage::Statement& statement, int index, std::string_view field) {
-  auto value = statement.column_text(index);
-  if (!value) {
-    return std::unexpected(std::move(value).error().with("field", std::string{field}));
-  }
-  if (!*value) {
-    return std::unexpected(
-        core::Error::storage("long-term memory row has null required field").with("field", std::string{field}));
-  }
-  return **std::move(value);
-}
-
 [[nodiscard]] core::Result<std::vector<std::string>> string_list_from_json(std::string_view text,
                                                                            std::string_view field) {
   json parsed;
@@ -222,15 +209,15 @@ required_text(storage::Statement& statement, int index, std::string_view field) 
 }
 
 [[nodiscard]] core::Result<Record> read_record_row(storage::Statement& statement, int offset = 0) {
-  auto scope_key = required_text(statement, offset + 0, "scope_key");
+  auto scope_key = statement.required_text(offset + 0, "scope_key");
   if (!scope_key) {
     return std::unexpected(std::move(scope_key).error());
   }
-  auto id = required_text(statement, offset + 1, "id");
+  auto id = statement.required_text(offset + 1, "id");
   if (!id) {
     return std::unexpected(std::move(id).error());
   }
-  auto kind_text = required_text(statement, offset + 2, "kind");
+  auto kind_text = statement.required_text(offset + 2, "kind");
   if (!kind_text) {
     return std::unexpected(std::move(kind_text).error());
   }
@@ -238,15 +225,15 @@ required_text(storage::Statement& statement, int index, std::string_view field) 
   if (!kind) {
     return std::unexpected(std::move(kind).error());
   }
-  auto title = required_text(statement, offset + 3, "title");
+  auto title = statement.required_text(offset + 3, "title");
   if (!title) {
     return std::unexpected(std::move(title).error());
   }
-  auto body = required_text(statement, offset + 4, "body");
+  auto body = statement.required_text(offset + 4, "body");
   if (!body) {
     return std::unexpected(std::move(body).error());
   }
-  auto created_at_text = required_text(statement, offset + 5, "created_at");
+  auto created_at_text = statement.required_text(offset + 5, "created_at");
   if (!created_at_text) {
     return std::unexpected(std::move(created_at_text).error());
   }
@@ -254,7 +241,7 @@ required_text(storage::Statement& statement, int index, std::string_view field) 
   if (!created_at) {
     return std::unexpected(std::move(created_at).error().with("field", "created_at"));
   }
-  auto updated_at_text = required_text(statement, offset + 6, "updated_at");
+  auto updated_at_text = statement.required_text(offset + 6, "updated_at");
   if (!updated_at_text) {
     return std::unexpected(std::move(updated_at_text).error());
   }
@@ -262,7 +249,7 @@ required_text(storage::Statement& statement, int index, std::string_view field) 
   if (!updated_at) {
     return std::unexpected(std::move(updated_at).error().with("field", "updated_at"));
   }
-  auto last_read_at_text = required_text(statement, offset + 7, "last_read_at");
+  auto last_read_at_text = statement.required_text(offset + 7, "last_read_at");
   if (!last_read_at_text) {
     return std::unexpected(std::move(last_read_at_text).error());
   }
@@ -274,7 +261,7 @@ required_text(storage::Statement& statement, int index, std::string_view field) 
   if (!importance) {
     return std::unexpected(std::move(importance).error().with("field", "importance"));
   }
-  auto tags_json = required_text(statement, offset + 9, "tags_json");
+  auto tags_json = statement.required_text(offset + 9, "tags_json");
   if (!tags_json) {
     return std::unexpected(std::move(tags_json).error());
   }
@@ -282,7 +269,7 @@ required_text(storage::Statement& statement, int index, std::string_view field) 
   if (!tags) {
     return std::unexpected(std::move(tags).error());
   }
-  auto linked_json = required_text(statement, offset + 10, "linked_record_ids_json");
+  auto linked_json = statement.required_text(offset + 10, "linked_record_ids_json");
   if (!linked_json) {
     return std::unexpected(std::move(linked_json).error());
   }
@@ -314,18 +301,6 @@ required_text(storage::Statement& statement, int index, std::string_view field) 
   };
 }
 
-[[nodiscard]] core::Result<void> step_done(storage::Statement& statement, std::string_view operation) {
-  auto step = statement.step();
-  if (!step) {
-    return std::unexpected(std::move(step).error());
-  }
-  if (*step != storage::StepResult::done) {
-    return std::unexpected(
-        core::Error::storage("long-term memory statement returned a row").with("operation", std::string{operation}));
-  }
-  return {};
-}
-
 [[nodiscard]] core::Result<void>
 delete_fts_row(storage::Connection& connection, storage::StatementCache& cache, const RecordKey& key) {
   auto cached = cache.acquire(connection, kDeleteFtsSql);
@@ -336,7 +311,7 @@ delete_fts_row(storage::Connection& connection, storage::StatementCache& cache, 
   if (auto bound = statement.bind_all(key.scope_key, key.id); !bound) {
     return bound;
   }
-  return step_done(statement, "delete_fts");
+  return statement.expect_done("delete_fts");
 }
 
 [[nodiscard]] std::string quote_fts_token(std::string_view token) {
@@ -455,7 +430,7 @@ async::Awaitable<core::Result<Record>> Fts5Backend::get(RecordKey key) {
   if (!record) {
     co_return std::unexpected(std::move(record).error());
   }
-  if (auto done = step_done(statement, "get_record"); !done) {
+  if (auto done = statement.expect_done("get_record"); !done) {
     co_return std::unexpected(std::move(done).error());
   }
   co_return std::move(*record);
@@ -576,7 +551,7 @@ async::Awaitable<core::Result<Record>> Fts5Backend::upsert(Record record) {
       co_return std::unexpected(std::move(row).error());
     }
     stored = std::move(*row);
-    if (auto done = step_done(statement, "upsert_record"); !done) {
+    if (auto done = statement.expect_done("upsert_record"); !done) {
       co_return std::unexpected(std::move(done).error());
     }
   }
@@ -600,7 +575,7 @@ async::Awaitable<core::Result<Record>> Fts5Backend::upsert(Record record) {
         !bound) {
       co_return std::unexpected(std::move(bound).error());
     }
-    if (auto inserted = step_done(statement, "insert_fts"); !inserted) {
+    if (auto inserted = statement.expect_done("insert_fts"); !inserted) {
       co_return std::unexpected(std::move(inserted).error());
     }
   }
@@ -643,7 +618,7 @@ async::Awaitable<core::Result<void>> Fts5Backend::touch(std::vector<RecordKey> k
     if (auto bound = statement.bind_all(read_at_text, key.scope_key, key.id, read_at_text); !bound) {
       co_return std::unexpected(std::move(bound).error());
     }
-    if (auto done = step_done(statement, "touch_record"); !done) {
+    if (auto done = statement.expect_done("touch_record"); !done) {
       co_return std::unexpected(std::move(done).error());
     }
   }
@@ -681,7 +656,7 @@ async::Awaitable<core::Result<void>> Fts5Backend::remove(RecordKey key) {
     if (auto bound = statement.bind_all(key.scope_key, key.id); !bound) {
       co_return std::unexpected(std::move(bound).error());
     }
-    if (auto deleted = step_done(statement, "delete_record"); !deleted) {
+    if (auto deleted = statement.expect_done("delete_record"); !deleted) {
       co_return std::unexpected(std::move(deleted).error());
     }
   }
