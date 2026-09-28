@@ -323,8 +323,6 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
   std::string_view effective_input = input_json;
   hook::HookDecision hook_decision{};
   bool hook_blocked = false;
-  bool hook_rewrote = false;
-  bool hook_requires_approval = false;
   std::string hook_reason;
   std::optional<core::Error> blocking_publish_error;
 
@@ -350,16 +348,26 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
           } else {
             rewritten_input = std::move(*hook_decision.rewritten_input_json);
             effective_input = *rewritten_input;
-            hook_rewrote = true;
           }
           break;
         case hook::HookDecisionKind::require_approval:
-          hook_requires_approval = true;
           hook_reason = hook_decision_reason(hook_decision, "hook require_approval");
           break;
       }
     }
   }
+
+  const bool hook_rewrote = rewritten_input.has_value();
+  const auto with_hook_facts = [&](std::string metadata) {
+    if (!hook_blocked && !hook_rewrote && hook_decision.trace.empty()) {
+      return metadata;
+    }
+    return detail::with_hook_decision_metadata(
+        metadata,
+        hook_decision.trace,
+        hook_blocked || hook_rewrote ? std::optional{input_hash_hex(input_json)} : std::nullopt,
+        hook_rewrote ? std::optional{input_hash_hex(effective_input)} : std::nullopt);
+  };
 
   core::Result<PreparedCall> prepared;
   if (!blocking_publish_error && !hook_blocked) {
@@ -392,9 +400,7 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
   } else if (blocking_publish_error.has_value()) {
     result = std::unexpected(std::move(*blocking_publish_error).with("tool", std::string{name}));
   } else if (hook_blocked) {
-    const auto metadata_json =
-        detail::with_hook_decision_metadata("{}", hook_decision.trace, input_hash_hex(input_json), std::nullopt);
-    auto event = build_event(name, effective_input, hook_blocked_decision(hook_reason), ctx, metadata_json);
+    auto event = build_event(name, effective_input, hook_blocked_decision(hook_reason), ctx, with_hook_facts("{}"));
     event.outcome = permission::AuditOutcome::blocked_by_hook;
 
     if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
@@ -405,19 +411,12 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
                                                                                 : hook_veto_error(name, hook_reason));
     }
   } else if (!prepared) {
-    std::string metadata{"{}"};
-    if (hook_rewrote) {
-      metadata = detail::with_hook_decision_metadata(
-          metadata, hook_decision.trace, input_hash_hex(input_json), input_hash_hex(effective_input));
-    } else if (!hook_decision.trace.empty()) {
-      metadata = detail::with_hook_decision_metadata(metadata, hook_decision.trace);
-    }
     auto event = build_event(
         name, effective_input,
         permission::Decision{.verdict = permission::Verdict::deny,
                              .reason = prepared.error().kind() == core::ErrorKind::invalid_argument
                                            ? "invalid_tool_input" : "tool_preparation_failed"},
-        ctx, std::move(metadata));
+        ctx, with_hook_facts("{}"));
     if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
       result = std::unexpected(std::move(recorded).error());
     } else {
@@ -437,24 +436,15 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
                                          ctx.parent_policy->mode);
       decision = permission::intersect(std::move(parent), std::move(decision));
     }
-    if (hook_requires_approval) {
+    if (hook_decision.kind == hook::HookDecisionKind::require_approval) {
       decision = require_approval_decision(std::move(decision), hook_decision);
     }
     if (path_resolution.requires_approval) {
       decision = require_workspace_override_approval(std::move(decision));
     }
 
-    auto metadata_json = std::move(path_resolution.metadata_json);
-    if (hook_rewrote) {
-      metadata_json = detail::with_hook_decision_metadata(metadata_json,
-                                                          hook_decision.trace,
-                                                          input_hash_hex(input_json),
-                                                          input_hash_hex(effective_input));
-    } else if (!hook_decision.trace.empty()) {
-      metadata_json = detail::with_hook_decision_metadata(metadata_json, hook_decision.trace);
-    }
-
-    auto event = build_event(name, effective_input, decision, ctx, std::move(metadata_json));
+    auto event =
+        build_event(name, effective_input, decision, ctx, with_hook_facts(std::move(path_resolution.metadata_json)));
     if (hook_rewrote && decision.verdict == permission::Verdict::allow) {
       event.outcome = permission::AuditOutcome::rewritten;
     }

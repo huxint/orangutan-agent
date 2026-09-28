@@ -13,8 +13,8 @@ namespace orangutan::tool::detail {
 
 [[nodiscard]] std::string with_hook_decision_metadata(std::string_view metadata_json,
                                                       std::span<const hook::HookDecisionTrace> trace,
-                                                      std::optional<std::string> original_input_hash = std::nullopt,
-                                                      std::optional<std::string> rewritten_input_hash = std::nullopt);
+                                                      std::optional<std::string> original_input_hash,
+                                                      std::optional<std::string> rewritten_input_hash);
 
 [[nodiscard]] std::string with_permission_ask_metadata(std::string_view metadata_json,
                                                        std::span<const hook::HookDecisionTrace> trace);

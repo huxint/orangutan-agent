@@ -2,8 +2,8 @@
 
 #include "_impl/audit_metadata.hpp"
 
-#include <exception>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -16,26 +16,26 @@ namespace orangutan::tool::detail {
 
 namespace {
 
+// Metadata here is always produced by dispatch itself, so a non-object is a
+// bug upstream; start from an empty object rather than throwing mid-dispatch.
 [[nodiscard]] nlohmann::json parse_metadata_object(std::string_view metadata_json) {
-  try {
-    auto parsed = nlohmann::json::parse(metadata_json);
-    if (parsed.is_object()) {
-      return parsed;
-    }
-  } catch (const nlohmann::json::parse_error&) {
-  } catch (const std::exception&) {}
-  return nlohmann::json::object();
+  auto parsed = nlohmann::json::parse(metadata_json, nullptr, false);
+  return parsed.is_object() ? parsed : nlohmann::json::object();
 }
 
-[[nodiscard]] nlohmann::json hook_decision_trace_to_json(const hook::HookDecisionTrace& decision) {
-  auto row = nlohmann::json::object();
-  row["sink_id"] = decision.sink_id;
-  row["kind"] = std::string{core::enum_name(decision.kind)};
-  row["reason"] = decision.reason;
-  if (decision.elapsed.has_value()) {
-    row["elapsed_ms"] = decision.elapsed->count();
+[[nodiscard]] nlohmann::json hook_decision_trace_to_json(std::span<const hook::HookDecisionTrace> trace) {
+  auto rows = nlohmann::json::array();
+  for (const auto& decision : trace) {
+    auto row = nlohmann::json::object();
+    row["sink_id"] = decision.sink_id;
+    row["kind"] = std::string{core::enum_name(decision.kind)};
+    row["reason"] = decision.reason;
+    if (decision.elapsed.has_value()) {
+      row["elapsed_ms"] = decision.elapsed->count();
+    }
+    rows.push_back(std::move(row));
   }
-  return row;
+  return rows;
 }
 
 }  // namespace
@@ -45,11 +45,7 @@ std::string with_hook_decision_metadata(std::string_view metadata_json,
                                         std::optional<std::string> original_input_hash,
                                         std::optional<std::string> rewritten_input_hash) {
   auto metadata = parse_metadata_object(metadata_json);
-  auto rows = nlohmann::json::array();
-  for (const auto& decision : trace) {
-    rows.push_back(hook_decision_trace_to_json(decision));
-  }
-  metadata["hook_decisions"] = std::move(rows);
+  metadata["hook_decisions"] = hook_decision_trace_to_json(trace);
   if (original_input_hash.has_value()) {
     metadata["original_input_hash"] = std::move(*original_input_hash);
   }
@@ -62,11 +58,7 @@ std::string with_hook_decision_metadata(std::string_view metadata_json,
 std::string with_permission_ask_metadata(std::string_view metadata_json,
                                          std::span<const hook::HookDecisionTrace> trace) {
   auto metadata = parse_metadata_object(metadata_json);
-  auto rows = nlohmann::json::array();
-  for (const auto& decision : trace) {
-    rows.push_back(hook_decision_trace_to_json(decision));
-  }
-  metadata["permission_ask_decisions"] = std::move(rows);
+  metadata["permission_ask_decisions"] = hook_decision_trace_to_json(trace);
   return metadata.dump();
 }
 
