@@ -7,7 +7,6 @@
 #include <exception>
 #include <expected>
 #include <format>
-#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -65,31 +64,15 @@ constexpr std::chrono::milliseconds kCancellationGrace{100};
 }
 
 struct BatchState {
-  asio::any_io_executor executor;
-  ToolSchedulerOptions options;
-  std::size_t total_calls;
-  /// True only for a single-call batch: with no concurrency the prototype's
-  /// `approval_token_output` slot is safe to thread through so a blocking
-  /// ask-approval can hand the caller its issued token for replay.
-  bool thread_approval_token_output;
-  std::vector<std::optional<ToolBatchResult>> results;
+  std::vector<ToolBatchCall> calls;
+  std::vector<std::optional<core::Result<tool::Output>>> results;
   async::Channel<std::size_t> completion;
-  /// One cancellation signal per spawned child. asio's `cancellation_signal`
-  /// owns a single slot at a time, so multiple coroutines binding to one
-  /// signal's slot would clobber each other's installed handlers
-  /// (the channel's `assign(...)` would overwrite the previous one and the
-  /// awaitable cleanup would dereference freed memory). `std::deque` keeps
-  /// the signals at stable addresses across `emplace_back`, which the bound
-  /// child coroutines and the parent-emitted cancellation both rely on.
+  // Signals cannot move while dispatches borrow their cancellation slots.
   std::deque<asio::cancellation_signal> child_cancels;
 
-  BatchState(asio::any_io_executor exec, std::size_t n, ToolSchedulerOptions opts)
-      : executor{std::move(exec)}, options{opts}, total_calls{n}, thread_approval_token_output{n == 1}, results(n),
-        completion{executor, n} {
-    for (std::size_t i = 0; i < n; ++i) {
-      child_cancels.emplace_back();
-    }
-  }
+  BatchState(asio::any_io_executor executor, std::vector<ToolBatchCall> batch)
+      : calls{std::move(batch)}, results(calls.size()), completion{executor, calls.size()},
+        child_cancels(calls.size()) {}
 };
 
 }  // namespace
@@ -104,7 +87,6 @@ public:
     tool::Registry* registry;
     ToolSchedulerOptions options;
     tool::PathLocks locks;
-    std::size_t active_calls{0};
     std::map<const tool::DispatchContext*, std::size_t> active_contexts;
     std::vector<std::weak_ptr<asio::steady_timer>> idle_waiters;
   };
@@ -120,7 +102,7 @@ public:
   async::Awaitable<core::Result<void>> wait_idle(const tool::DispatchContext* context) {
     auto state = state_;
     co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-    while (context ? state->active_contexts.contains(context) : state->active_calls != 0) {
+    while (context ? state->active_contexts.contains(context) : !state->active_contexts.empty()) {
       auto waiter = std::make_shared<asio::steady_timer>(state->executor);
       waiter->expires_at(asio::steady_timer::time_point::max());
       state->idle_waiters.push_back(waiter);
@@ -146,24 +128,20 @@ private:
       co_return std::unexpected(parent_cancelled_error());
     }
 
-    auto state = std::make_shared<BatchState>(shared->executor, batch.size(), shared->options);
+    auto state = std::make_shared<BatchState>(shared->executor, std::move(batch));
 
-    std::vector<std::string> names;
-    names.reserve(batch.size());
-    for (const auto& call : batch)
-      names.push_back(call.name);
     std::size_t admitted = 0;
-    const auto workers = std::min(batch.size(), shared->options.max_parallel_tools);
+    const auto workers = std::min(state->calls.size(), shared->options.max_parallel_tools);
     for (; admitted < workers; ++admitted)
-      start_call(state, shared, std::move(batch[admitted]), admitted, prototype);
+      start_call(state, shared, admitted, prototype);
 
-    std::vector<bool> reported(state->total_calls, false);
+    std::vector<bool> reported(state->calls.size(), false);
     std::size_t completed = 0;
     bool parent_cancelled = false;
 
     // Phase 1 — cancel-sensitive drain. A cancelled `receive()` means the
     // parent token fired; otherwise every call reports its completion index.
-    while (completed < state->total_calls) {
+    while (completed < state->calls.size()) {
       auto next = co_await state->completion.receive();
       if (!next) {
         parent_cancelled = true;
@@ -176,17 +154,18 @@ private:
         parent_cancelled = true;
         break;
       }
-      if (admitted < batch.size()) {
-        start_call(state, shared, std::move(batch[admitted]), admitted, prototype);
+      if (admitted < state->calls.size()) {
+        start_call(state, shared, admitted, prototype);
         ++admitted;
       }
     }
 
     if (!parent_cancelled) {
       std::vector<ToolBatchResult> ordered;
-      ordered.reserve(state->total_calls);
-      for (auto& slot : state->results) {
-        ordered.emplace_back(std::move(*slot));
+      ordered.reserve(state->calls.size());
+      for (std::size_t i = 0; i < state->calls.size(); ++i) {
+        auto& call = state->calls[i];
+        ordered.emplace_back(std::move(call.tool_use_id), std::move(call.name), std::move(*state->results[i]));
       }
       co_return ordered;
     }
@@ -195,7 +174,8 @@ private:
     // in-flight dispatch sees its own cancellation contract, then stop
     // honouring the parent token so the bounded drain below can still await.
     // Queued values have no borrowed dispatch frame and cannot lag cleanup.
-    for (std::size_t i = admitted; i < state->total_calls; ++i) {
+    for (std::size_t i = admitted; i < state->calls.size(); ++i) {
+      state->calls[i] = {};
       reported[i] = true;
       ++completed;
     }
@@ -209,7 +189,7 @@ private:
     // cannot resolve until the handler returns, because asio cancellation is
     // cooperative — so we race the drain against `kCancellationGrace` and stop
     // awaiting at the deadline instead of stalling the whole batch.
-    if (completed < state->total_calls) {
+    if (completed < state->calls.size()) {
       using namespace asio::experimental::awaitable_operators;
       co_await (drain_remaining(state, reported, completed) || async::sleep_for(shared->executor, kCancellationGrace));
     }
@@ -218,10 +198,10 @@ private:
     // (it holds the shared `BatchState` alive) and will wind down on its own;
     // the audit row records `error_kind=cancellation_lag` against the tool so
     // the offending handler is identifiable.
-    for (std::size_t i = 0; i < state->total_calls; ++i) {
+    for (std::size_t i = 0; i < state->calls.size(); ++i) {
       if (!reported[i]) {
         [[maybe_unused]] auto recorded =
-            co_await record_cancellation_lag(prototype, names[i], shared->options.per_call_timeout);
+            co_await record_cancellation_lag(prototype, state->calls[i].name, shared->options.per_call_timeout);
       }
     }
 
@@ -230,23 +210,18 @@ private:
 
   static void start_call(const std::shared_ptr<BatchState>& state,
                          const std::shared_ptr<SharedState>& shared,
-                         ToolBatchCall call,
                          std::size_t index,
                          tool::DispatchContext& prototype) {
-    const auto id = call.tool_use_id;
-    const auto name = call.name;
-    ++shared->active_calls;
     ++shared->active_contexts[&prototype];
     asio::co_spawn(shared->executor,
-                   run_call(state, shared, std::move(call), std::ref(prototype)),
+                   run_call(state, shared, index, prototype),
                    asio::bind_cancellation_slot(
                        state->child_cancels[index].slot(),
-                       [shared, state, index, context = &prototype, id, name](std::exception_ptr exception,
-                                                                              core::Result<tool::Output> output) {
+                       [shared, state, index, context = &prototype](std::exception_ptr exception,
+                                                                  core::Result<tool::Output> output) {
                          if (exception)
                            output = std::unexpected(core::Error::internal("tool dispatch failed unexpectedly"));
-                         state->results[index] = ToolBatchResult{id, name, std::move(output)};
-                         --shared->active_calls;
+                         state->results[index] = std::move(output);
                          if (--shared->active_contexts[context] == 0)
                            shared->active_contexts.erase(context);
                          for (auto& weak : shared->idle_waiters)
@@ -259,9 +234,9 @@ private:
   }
 
   [[nodiscard]] static async::Awaitable<core::Result<tool::Output>>
-  dispatch(tool::Registry& registry, const ToolBatchCall& call, tool::DispatchContext& context) {
+  dispatch(tool::Registry& registry, std::string_view name, std::string_view input, tool::DispatchContext& context) {
     try {
-      co_return co_await registry.dispatch(call.name, call.input_json, context);
+      co_return co_await registry.dispatch(name, input, context);
     } catch (...) {
       // A thrown branch is not a completed Result in Asio's || race: translate
       // here so a failed effect cannot wait for the timeout or strand the queue.
@@ -275,31 +250,23 @@ private:
   [[nodiscard]] static async::Awaitable<core::Result<tool::Output>>
   run_call(std::shared_ptr<BatchState> state,
            std::shared_ptr<SharedState> shared,
-           ToolBatchCall call,
-           std::reference_wrapper<tool::DispatchContext> prototype_ref) {
-    auto per_call_ctx = tool::DispatchContext::for_now(prototype_ref.get(), state->thread_approval_token_output);
+           std::size_t index,
+           tool::DispatchContext& prototype) {
+    const auto& call = state->calls[index];
+    // Release the input with this dispatch, even while other calls still run.
+    auto input = std::move(state->calls[index].input_json);
+    // Only a single-call batch may write the prototype's approval-token slot.
+    auto per_call_ctx = tool::DispatchContext::for_now(prototype, state->calls.size() == 1);
     per_call_ctx.path_locks = &shared->locks;
 
-    core::Result<tool::Output> output =
-        std::unexpected(core::Error::internal("scheduler: race did not produce a result"));
-    {
-      using namespace asio::experimental::awaitable_operators;
-      auto raced = co_await (dispatch(*shared->registry, call, per_call_ctx) ||
-                             async::sleep_for(state->executor, state->options.per_call_timeout));
-      if (auto* dispatched = std::get_if<core::Result<tool::Output>>(&raced); dispatched != nullptr) {
-        output = std::move(*dispatched);
-      } else if (auto* timer = std::get_if<core::Result<void>>(&raced); timer != nullptr) {
-        if (!*timer) {
-          // The timer was cancelled (parent cancellation) before it expired.
-          output = std::unexpected(parent_cancelled_error());
-        } else {
-          // The timer expired naturally — per-call timeout wins.
-          output = std::unexpected(timeout_error(call.name, state->options.per_call_timeout));
-        }
-      }
-    }
-
-    co_return output;
+    using namespace asio::experimental::awaitable_operators;
+    auto raced = co_await (dispatch(*shared->registry, call.name, input, per_call_ctx) ||
+                           async::sleep_for(shared->executor, shared->options.per_call_timeout));
+    if (auto* dispatched = std::get_if<core::Result<tool::Output>>(&raced))
+      co_return std::move(*dispatched);
+    if (!std::get<core::Result<void>>(raced))
+      co_return std::unexpected(parent_cancelled_error());
+    co_return std::unexpected(timeout_error(call.name, shared->options.per_call_timeout));
   }
 
   /// Drain pending completions until every call has reported. Used inside the
@@ -310,7 +277,7 @@ private:
   /// across the race.
   [[nodiscard]] static async::Awaitable<void>
   drain_remaining(std::shared_ptr<BatchState> state, std::vector<bool>& reported, std::size_t& completed) {
-    while (completed < state->total_calls) {
+    while (completed < state->calls.size()) {
       auto next = co_await state->completion.receive();
       if (!next) {
         co_return;

@@ -27,6 +27,20 @@ Error safe_error(const Error& error) {
     safe.with_retry_after(*error.retry_after());
   return safe;
 }
+struct ConversationLease {
+  std::unordered_set<std::string>& busy;
+  const std::string& key;
+
+  ConversationLease(std::unordered_set<std::string>& conversations, const std::string& conversation)
+      : busy{conversations}, key{conversation} {
+    busy.insert(key);
+  }
+  ~ConversationLease() {
+    busy.erase(key);
+  }
+  ConversationLease(const ConversationLease&) = delete;
+  ConversationLease& operator=(const ConversationLease&) = delete;
+};
 struct Entry {
   Message message;
   PendingReply reply{};
@@ -247,14 +261,7 @@ async::Awaitable<Result<Delivery>> Dispatcher::handle_impl(Message message) {
   if (impl_->busy.size() >= impl_->options.capacity)
     co_return std::unexpected(Error{core::ErrorKind::mailbox_overflowed, "channel admission is full"});
   // Admission and duplicate lookup must not interleave while permission hooks await.
-  impl_->busy.insert(conversation);
-  struct Release {
-    std::unordered_set<std::string>& busy;
-    const std::string& key;
-    ~Release() {
-      busy.erase(key);
-    }
-  } release{impl_->busy, conversation};
+  ConversationLease lease{impl_->busy, conversation};
   auto allowed = co_await impl_->authorize(message, "ChannelReceive", nullptr);
   if (!allowed)
     co_return std::unexpected(allowed.error());
@@ -304,14 +311,7 @@ async::Awaitable<Result<Delivery>> Dispatcher::resume_impl(Message message, std:
   auto& entry = found->second;
   if (next_part < entry.reply.next_part || next_part > entry.reply.parts.size())
     co_return std::unexpected(Error::invalid_argument("invalid delivery recovery position"));
-  impl_->busy.insert(conversation);
-  struct Release {
-    std::unordered_set<std::string>& busy;
-    const std::string& key;
-    ~Release() {
-      busy.erase(key);
-    }
-  } release{impl_->busy, conversation};
+  ConversationLease lease{impl_->busy, conversation};
   auto allowed = co_await impl_->authorize(entry.message, "ChannelReceive", nullptr);
   if (!allowed)
     co_return std::unexpected(allowed.error());

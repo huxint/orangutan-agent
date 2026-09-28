@@ -441,13 +441,16 @@ TEST_CASE("ToolScheduler: results are returned in original tool_use order", "[un
 
         agent::ToolScheduler scheduler{io.get_executor(),
                                        registry,
-                                       agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 5s}};
+                                       agent::ToolSchedulerOptions{.max_parallel_tools = 2, .per_call_timeout = 5s}};
 
+        const std::vector<std::string> inputs{
+            R"({"value":"short"})", "{\"value\":\"" + std::string(4096, 'a') + "\"}",
+            R"({"value":"queued"})", "{\"value\":\"" + std::string(8192, 'b') + "\"}"};
         std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "FakeSlow"));
-        batch.push_back(call(1, "FakeFast"));
-        batch.push_back(call(2, "FakeSlow"));
-        batch.push_back(call(3, "FakeFast"));
+        batch.push_back(call(0, "FakeSlow", inputs[0]));
+        batch.push_back(call(1, "FakeFast", inputs[1]));
+        batch.push_back(call(2, "FakeSlow", inputs[2]));
+        batch.push_back(call(3, "FakeFast", inputs[3]));
 
         auto result = co_await scheduler.run_batch(std::move(batch), prototype);
         REQUIRE(result.has_value());
@@ -460,11 +463,11 @@ TEST_CASE("ToolScheduler: results are returned in original tool_use order", "[un
         REQUIRE((*result)[2].name == "FakeSlow");
         REQUIRE((*result)[3].tool_use_id == "call-3");
         REQUIRE((*result)[3].name == "FakeFast");
-        // All four returned the canned `done:<input>` payload regardless of
-        // the order in which they actually finished.
-        for (const auto& row : *result) {
-          REQUIRE(row.output.has_value());
-          REQUIRE(row.output->text == "done:{}");
+        // Queued and active inputs survive suspension and remain paired with
+        // their call identities despite out-of-order completion.
+        for (std::size_t i = 0; i < result->size(); ++i) {
+          REQUIRE((*result)[i].output.has_value());
+          REQUIRE((*result)[i].output->text == "done:" + inputs[i]);
         }
       },
       2s);
