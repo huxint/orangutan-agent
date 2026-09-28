@@ -295,3 +295,12 @@ TEST_CASE("protocol request validates provider-specific controls", "[unit][provi
     REQUIRE(encoded.error().message() == "openai responses requests do not accept token-budget thinking controls");
   }
 }
+
+TEST_CASE("Anthropic requests explicitly disable unbudgeted thinking", "[unit][provider][protocol]") {
+  auto request = tool_request();
+  request.thinking_budget.reset();
+  auto encoded = provider::make_protocol_request(request, target(provider::ProtocolKind::anthropic_messages));
+  REQUIRE(encoded);
+  const auto body = json::parse(encoded->body_json);
+  REQUIRE(body.at("thinking") == json{{"type", "disabled"}});
+}

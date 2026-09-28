@@ -12,6 +12,9 @@ local function oran_test(name, deps, extra_packages)
         set_default(false)
         add_includedirs(path.join(root, "include"), { public = false })
         add_files(path.join(root, "tests", name, "**.cpp"))
+        if name == "bootstrap" then
+            add_files(path.join(root, "eval/context/scenarios.cpp"), path.join(root, "eval/context/runner.cpp"))
+        end
         add_deps(table.unpack(deps))
         add_packages("catch2")
         if extra_packages then

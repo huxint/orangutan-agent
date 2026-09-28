@@ -48,6 +48,9 @@ The filesystem tools are FileRead, FileWrite and FileEdit. `AgentRun` selects a
 child from `agents` and requires `spawn_agent` authority; it admits up to four
 child runs per prompt and one generation of delegation.
 
+Working-context retention can be measured with the opt-in `eval-context` runner.
+See [evaluation commands and interpretation](docs/rules/testing-and-bench.md#working-context-evaluation).
+
 ## Development
 
 Read [CLAUDE.md](CLAUDE.md) and [STATUS.md](docs/STATUS.md). Run `make ci` alongside

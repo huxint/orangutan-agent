@@ -20,7 +20,10 @@ xmake test -j4
 
 The default build produces the runtime libraries. Tests and benchmarks are
 separate targets: `test-<lib>` and `bench-<lib>`.
-`xmake test` builds test targets before running them. For a single Catch2 case,
+`xmake test` builds test targets before running them.
+The opt-in `eval-context` target runs controlled or explicitly configured live
+working-context evaluations; [testing](rules/testing-and-bench.md#working-context-evaluation)
+owns its options, output and interpretation. For a single Catch2 case,
 invoke `build/linux/x86_64/release/test-<lib> "case name"` after building it.
 Use the debug path when configured in debug mode.
 
@@ -40,6 +43,7 @@ and environment as described in [testing-and-bench](rules/testing-and-bench.md).
 | `xmake/build-policy.lua` | Shared project flags, reflection, LTO, sanitizers and analysis. |
 | `xmake/options.lua` | Supported configure options. |
 | `xmake/tests.lua`, `xmake/bench.lua` | Test and benchmark buckets. |
+| `xmake/evals.lua` | Opt-in deployment-model evaluation executables. |
 
 The root selects `oran-gcc` and the `oran.build` rule for every runtime library,
 test and benchmark. Tool discovery prefers `gcc-16`/`g++-16`, then `gcc`/`g++`;

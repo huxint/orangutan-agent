@@ -58,7 +58,11 @@ profiles or recalculate prices.
 Implemented protocols are `anthropic_messages` and `openai_responses`.
 `HttpProviderBackend` owns the transport, system and resolved route.
 Adapters translate roles, content, tool calls/results, stop reasons and usage,
-and classify malformed responses and provider errors.
+and classify malformed responses and provider errors. Anthropic-format requests
+send `thinking.type=disabled` when no thinking budget is configured; omission is
+not equivalent on endpoints such as DeepSeek, which enable thinking by default.
+An explicit budget sends `thinking.type=enabled` with `budget_tokens`. This keeps
+bounded summary requests from spending their output allowance on reasoning.
 
 HTTP/SSE transport enforces deadlines and byte caps. Decoders assemble text/tool
 input incrementally and reject inconsistent or incomplete terminal events.

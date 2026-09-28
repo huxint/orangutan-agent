@@ -66,8 +66,15 @@ runtime behavior, not spontaneous memory use or service-side cache hits.
 [Live debt](exec-plans/tech-debt-tracker.md) tracks broader memory import mappings,
 durable-note provenance, shell execution, real-model memory/context evaluation,
 hosted quality jobs and reference-hardware compile budgets. SQLite snapshots and
-explicit session imports support recovery without rewriting original records. Real-model evaluation uses explicitly
-supplied credentials.
+explicit session imports support recovery without rewriting original records.
+
+The opt-in `eval-context` runner compares full-history and compacted sessions
+using synthetic retention tasks, reopening and fixed tool output. Controlled
+checks cover grading and execution. Live DeepSeek Flash runs exercise both paths;
+strict field failures expose task-label paraphrasing and inspection logs entering
+task-state fields. These synthetic results do not establish general task success.
+[Testing](rules/testing-and-bench.md#working-context-evaluation) owns the runner
+contract; [live debt](exec-plans/tech-debt-tracker.md) scopes the follow-up.
 
 Run the normal release gate from the repository root:
 

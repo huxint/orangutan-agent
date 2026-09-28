@@ -1,0 +1,12 @@
+-- Opt-in deployment-model evaluation; never part of xmake test.
+local root = os.projectdir()
+target("eval-context")
+    set_kind("binary")
+    set_group("oran-evals")
+    set_default(false)
+    add_includedirs(path.join(root, "include"))
+    add_files(path.join(root, "eval/context/*.cpp"))
+    add_deps("oran-bootstrap")
+    add_packages("nlohmann_json")
+    set_pcxxheader(path.join(root, "include/oran/_pch.hpp"))
+target_end()

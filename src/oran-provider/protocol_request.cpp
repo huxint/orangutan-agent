@@ -229,15 +229,18 @@ append_anthropic_system_text(json& body, const core::Message& message, const Mod
   const bool has_system_prefix = request.system_prompt.has_value() && !request.system_prompt->empty();
   if (has_system_prefix) {
     if (cache) {
-      body["system"] = json::array({json{{"type", "text"},
-                                        {"text", *request.system_prompt},
-                                        {"cache_control", json{{"type", "ephemeral"}}}}});
+      body["system"] = json::array(
+          {json{{"type", "text"}, {"text", *request.system_prompt}, {"cache_control", json{{"type", "ephemeral"}}}}});
     } else {
       body["system"] = *request.system_prompt;
     }
   }
   if (request.thinking_budget.has_value()) {
     body["thinking"] = json{{"type", "enabled"}, {"budget_tokens", *request.thinking_budget}};
+  } else {
+    // Compatible endpoints may enable thinking by default. Absence of a local
+    // budget explicitly disables it, including bounded summary requests.
+    body["thinking"] = json{{"type", "disabled"}};
   }
   if (request.tool_choice.has_value()) {
     body["tool_choice"] = anthropic_tool_choice(*request.tool_choice);
