@@ -36,24 +36,9 @@ struct AppendAuditEventRequest {
   std::string metadata_json{"{}"};
 };
 
-/// Replaces the newest matching row. Identity, parent turn, input hash and prior
-/// metadata bind enrichment to the decision recorded before the tool effect.
-struct UpdateAuditEventMetadataRequest {
-  std::string event_kind{"permission_decision"};
-  std::string scope_key;
-  std::string agent_key;
-  std::string tool_name;
-  std::string identity;
-
-  // Empty means the target row must have SQL NULL in input_hash_hex.
-  std::string input_hash_hex{};
-  std::optional<core::TurnId> parent_turn_id{};
-  std::string previous_metadata_json{"{}"};
-  std::string metadata_json{"{}"};
-};
-
 struct AuditEventRecord {
   std::int64_t id{};
+  /// Older databases may also hold `hook_publish` rows.
   std::string event_kind;
   std::string scope_key;
   std::string agent_key;
@@ -92,19 +77,9 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<AuditEventRecord>> append_event(AppendAuditEventRequest request);
 
-  [[nodiscard]] async::Awaitable<core::Result<AuditEventRecord>>
-  update_event_metadata(UpdateAuditEventMetadataRequest request);
-
   /// Returns scoped records in descending id order.
   [[nodiscard]] async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
   list_events(ListAuditEventsOptions options);
-
-  /// Operator readback across scopes, in ascending id order. The turn id must
-  /// be nonzero and the limit positive.
-  [[nodiscard]] async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
-  list_events_for_turn(core::TurnId parent_turn_id, std::size_t limit = 200);
-
-  [[nodiscard]] async::Awaitable<core::Result<std::int64_t>> count_events(std::string scope_key);
 
 private:
   Pool* pool_{};

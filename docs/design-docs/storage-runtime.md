@@ -36,12 +36,14 @@ from their current directory. Callers may supply an explicit migration directory
 The long-term memory schema belongs to `oran-memory`.
 
 Backups before schema changes and explicit ownership/scope import mappings are
-required before a data-format migration is introduced. The current runtime
-reduction leaves schema versions and persisted user rows intact. Complete
+required before a data-format migration is introduced. Runtime reductions may
+drop derived views and indexes but leave persisted user rows intact. Complete
 import/backup tooling is tracked in [live debt](../exec-plans/tech-debt-tracker.md).
 
-The session skill table (`session_skill_activations`) and audit reporting view
-(`audit_tool_call_rollups`) remain accessible through SQLite for compatibility.
+The session skill table (`session_skill_activations`) remains accessible through
+SQLite for compatibility. Audit migration 6 drops the derived
+`audit_tool_call_rollups` view and its event-kind index; stored rows, including
+older `hook_publish` rows, are untouched.
 Reopening a database and appending runtime records preserves saved session
 metadata, skill rows, audit decisions and traces. Migration history is retained.
 
@@ -58,11 +60,11 @@ metadata, skill rows, audit decisions and traces. Migration history is retained.
 - `load_tail` reads a contiguous newest suffix bounded by row count and UTF-8
   encoded content/metadata bytes, then returns ascending sequence order. Defaults
   are 128 rows/512 KiB. The API never prunes stored messages.
-- `AuditRepository` records permission/tool outcomes, enriches the matching
-  decision's metadata and reads records by scope or parent turn.
+- `AuditRepository` appends decision rows and lists them by scope, newest first,
+  with agent, tool, event-kind and outcome filters. Rows are never updated.
   `StorageAuditSink` adapts this repository to dispatch. Decision writes must
-  complete before the handler can run; metadata enrichment is awaited after the
-  result. Storage failure or cancellation cannot grant an effect.
+  complete before the handler can run. Storage failure or cancellation cannot
+  grant an effect.
 - `TraceRepository` records redacted turn metadata: IDs, origin, model/route,
   prompt hashes/byte counts, usage, timing and stop/cancellation classification.
   Records can be read by turn ID or listed with session/agent filters and a

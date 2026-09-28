@@ -40,10 +40,8 @@ INSERT INTO trace_turns(
   context_json, schema_version
 )
 VALUES (?, NULL, ?, ?, 'cli', 'fake-main', 'fake-model', ?, ?, 'end_turn', 1,
-  ?, 1024, ?, ?, 2, 3, 1500, 200, 0.012, NULL, X'7b7d', 1)
+  ?, 1024, ?, 0, 2, 3, 1500, 200, 0.012, NULL, X'7b7d', 1)
 )sql";
-
-constexpr std::string_view kRawCountSql = "SELECT COUNT(*) FROM trace_turns";
 
 std::string make_temp_path(std::string_view tag) {
   auto path = std::filesystem::temp_directory_path() /
@@ -133,34 +131,16 @@ void migrate(asio::io_context& io, storage::TraceRepository& repo) {
                 !cached->statement().bind_text(3, std::format("bench-agent-{}", batch_id)) ||
                 !cached->statement().bind_int64(4, started) || !cached->statement().bind_int64(5, started + 10) ||
                 !cached->statement().bind_int64(6, static_cast<std::int64_t>(0x1000U + batch_id)) ||
-                !cached->statement().bind_int64(7, static_cast<std::int64_t>(0x2000U + batch_id)) ||
-                !cached->statement().bind_int64(8, static_cast<std::int64_t>(0x3000U + batch_id))) {
+                !cached->statement().bind_int64(7, static_cast<std::int64_t>(0x2000U + batch_id))) {
               std::abort();
             }
             auto step = cached->statement().step();
             if (!step || *step != storage::StepResult::done) {
               std::abort();
             }
+            ++rows;
           }
         }
-
-        auto reader = co_await pool.acquire_reader();
-        if (!reader) {
-          std::abort();
-        }
-        auto cached = reader->statement_cache().acquire(reader->connection(), kRawCountSql);
-        if (!cached) {
-          std::abort();
-        }
-        auto step = cached->statement().step();
-        if (!step || *step != storage::StepResult::row) {
-          std::abort();
-        }
-        auto count = cached->statement().column_int64(0);
-        if (!count) {
-          std::abort();
-        }
-        rows = static_cast<int>(*count);
         co_return;
       },
       asio::detached);
@@ -194,7 +174,6 @@ run_repository_insert(asio::io_context& io, storage::TraceRepository& repo, std:
               .prompt_prefix_hash = 0x1000U + batch_id,
               .prompt_prefix_bytes = 1024,
               .active_catalog_hash = 0x2000U + batch_id,
-              .deferred_catalog_hash = 0x3000U + batch_id,
               .cache_creation_tokens = 2,
               .cache_read_tokens = 3,
               .input_tokens = 1500,
@@ -204,12 +183,8 @@ run_repository_insert(asio::io_context& io, storage::TraceRepository& repo, std:
           if (!appended) {
             std::abort();
           }
+          ++rows;
         }
-        auto count = co_await repo.count_turns();
-        if (!count) {
-          std::abort();
-        }
-        rows = static_cast<int>(*count);
         co_return;
       },
       asio::detached);

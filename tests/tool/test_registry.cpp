@@ -2435,9 +2435,9 @@ TEST_CASE("blocking tool_before veto skips the handler and records blocked_by_ho
   });
 }
 
-TEST_CASE("blocking tool_before writes a joinable hook_publish row for traced dispatch",
+TEST_CASE("blocking tool_before veto persists one decision row for traced dispatch",
           "[unit][tool][hook][blocking][trace]") {
-  TempDb db{"oran-tool-hook-publish"};
+  TempDb db{"oran-tool-hook-veto-row"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
     std::size_t handler_calls = 0;
     tool::Registry registry;
@@ -2479,26 +2479,20 @@ TEST_CASE("blocking tool_before writes a joinable hook_publish row for traced di
     REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
     REQUIRE(handler_calls == 0);
 
-    auto joined = co_await repo.list_events_for_turn(*ctx.parent_turn_id);
-    REQUIRE(joined.has_value());
-    REQUIRE(joined->size() == 2);
-    REQUIRE((*joined)[0].event_kind == "hook_publish");
-    REQUIRE((*joined)[0].parent_turn_id == ctx.parent_turn_id);
-    REQUIRE((*joined)[0].reason == "policy");
-    auto hook_metadata = nlohmann::json::parse((*joined)[0].metadata_json);
-    REQUIRE(hook_metadata["event"] == "tool_before");
-    REQUIRE(hook_metadata["sink_id"] == "blocker");
-    REQUIRE(hook_metadata["decision_kind"] == "veto");
-    REQUIRE(hook_metadata["reason"] == "policy");
-    REQUIRE(hook_metadata["hook_decisions"].size() == 2);
-    REQUIRE(hook_metadata["hook_decisions"][0]["sink_id"] == "first");
-    REQUIRE(hook_metadata["hook_decisions"][0]["kind"] == "proceed");
-    REQUIRE(hook_metadata["hook_decisions"][1]["sink_id"] == "blocker");
-    REQUIRE(hook_metadata["hook_decisions"][1]["kind"] == "veto");
-
-    REQUIRE((*joined)[1].event_kind == "permission_decision");
-    REQUIRE((*joined)[1].outcome == "blocked_by_hook");
-    REQUIRE((*joined)[1].reason == "policy");
+    auto rows = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = ctx.scope_key});
+    REQUIRE(rows.has_value());
+    REQUIRE(rows->size() == 1);
+    const auto& row = rows->front();
+    REQUIRE(row.event_kind == "permission_decision");
+    REQUIRE(row.parent_turn_id == ctx.parent_turn_id);
+    REQUIRE(row.outcome == "blocked_by_hook");
+    REQUIRE(row.reason == "policy");
+    auto metadata = nlohmann::json::parse(row.metadata_json);
+    REQUIRE(metadata["hook_decisions"].size() == 2);
+    REQUIRE(metadata["hook_decisions"][0]["sink_id"] == "first");
+    REQUIRE(metadata["hook_decisions"][0]["kind"] == "proceed");
+    REQUIRE(metadata["hook_decisions"][1]["sink_id"] == "blocker");
+    REQUIRE(metadata["hook_decisions"][1]["kind"] == "veto");
   });
 }
 
@@ -2733,7 +2727,6 @@ TEST_CASE("blocking tool_before sink error is recorded as blocked_by_hook", "[un
     bus.subscribe(late.sink(), {orangutan::hook::Event::tool_before});
 
     auto ctx = make_hooked_ctx(io, rules, audit, &bus);
-    ctx.parent_turn_id = turn_id_with(0x73);
     auto result = co_await registry.dispatch("noop", R"({})", ctx);
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::permission_denied);
@@ -2743,16 +2736,8 @@ TEST_CASE("blocking tool_before sink error is recorded as blocked_by_hook", "[un
     REQUIRE(first.captures().size() == 1);
     REQUIRE(late.captures().empty());
 
-    REQUIRE(audit.events().size() == 2);
-    REQUIRE(audit.events()[0].event_kind == "hook_publish");
-    REQUIRE(audit.events()[0].parent_turn_id == ctx.parent_turn_id);
-    auto hook_publish_metadata = nlohmann::json::parse(audit.events()[0].metadata_json);
-    REQUIRE(hook_publish_metadata["event"] == "tool_before");
-    REQUIRE(hook_publish_metadata["sink_id"] == "failing");
-    REQUIRE(hook_publish_metadata["decision_kind"] == "veto");
-    REQUIRE(hook_publish_metadata["error"].get<std::string>().contains("blocking sink failed"));
-
-    const auto& event = audit.events()[1];
+    REQUIRE(audit.events().size() == 1);
+    const auto& event = audit.events()[0];
     REQUIRE(event.outcome == permission::AuditOutcome::blocked_by_hook);
     REQUIRE(event.reason.starts_with("hook_error"));
     REQUIRE(event.reason.contains("blocking sink failed"));
@@ -2844,15 +2829,6 @@ TEST_CASE("dispatch copies output usage into tool_after payload", "[unit][tool][
     REQUIRE_FALSE(sink.captures()[0].usage.data_dropped);
 
     REQUIRE(audit.events().size() == 1);
-    auto metadata = nlohmann::json::parse(audit.events()[0].metadata_json);
-    REQUIRE(metadata.contains("usage"));
-    REQUIRE(metadata["usage"]["bytes_read"] == 4096);
-    REQUIRE(metadata["usage"]["files_touched"] == 1);
-    REQUIRE(metadata["usage"]["match_count"] == 3);
-    REQUIRE(metadata["usage"]["truncated"] == true);
-    const auto wall_time_ms = metadata["usage"]["wall_time_ms"].get<double>();
-    REQUIRE(wall_time_ms > 0.0);
-    REQUIRE(wall_time_ms < 0.001);
   });
 }
 
@@ -3102,9 +3078,6 @@ TEST_CASE("dispatch applies output caps before returning and publishing tool_aft
     REQUIRE(trusted_sink.captures()[0].usage.data_dropped);
 
     REQUIRE(audit.events().size() == 1);
-    auto metadata = nlohmann::json::parse(audit.events()[0].metadata_json);
-    REQUIRE(metadata["usage"]["truncated"] == true);
-    REQUIRE(metadata["usage"]["data_dropped"] == true);
   });
 }
 

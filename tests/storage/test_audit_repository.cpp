@@ -128,21 +128,14 @@ TEST_CASE("AuditRepository::migrate applies the audit schema once", "[unit][stor
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 5);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5});
+    REQUIRE(first->current_version == 6);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 5);
-    REQUIRE(second->current_version == 5);
+    REQUIRE(second->previous_version == 6);
+    REQUIRE(second->current_version == 6);
     REQUIRE(second->applied_versions.empty());
-
-    auto reader = co_await pool.acquire_reader();
-    REQUIRE(reader.has_value());
-    auto view = reader->connection().query(
-        "SELECT name FROM sqlite_master WHERE type = 'view' AND name = 'audit_tool_call_rollups'");
-    REQUIRE(view.has_value());
-    REQUIRE(view->rows.size() == 1);
   });
 }
 
@@ -172,13 +165,13 @@ TEST_CASE("AuditRepository::migrate accepts an explicit migration directory", "[
   });
 }
 
-TEST_CASE("AuditRepository reopening preserves saved audits traces and views",
+TEST_CASE("AuditRepository upgrade preserves saved audits and traces",
           "[unit][storage][audit_repository][preservation]") {
   TempDb db{"oran-audit-repo-preservation"};
   {
     auto connection = storage::Connection::open({.path = db.string()});
     REQUIRE(connection.has_value());
-    auto migrated = storage::run_migrations(*connection, storage::built_in_audit_migrations());
+    auto migrated = storage::run_migrations(*connection, storage::built_in_audit_migrations().first(5));
     REQUIRE(migrated.has_value());
     auto seeded = connection->execute(R"sql(
       INSERT INTO trace_turns VALUES (
@@ -194,6 +187,10 @@ TEST_CASE("AuditRepository reopening preserves saved audits traces and views",
         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         '{"usage":{"wall_time_ms":5.5}}', '2000-01-01T00:00:00Z',
         X'101112131415161718191A1B1C1D1E1F', 'permission_decision'
+      ), (
+        16, 'scope-A', 'coder', 'FileWrite', 'saved-operator', 'allow', 'allow', 'proceed',
+        NULL, '{"event":"tool_before"}', '2000-01-01T00:00:00Z',
+        X'101112131415161718191A1B1C1D1E1F', 'hook_publish'
       );
     )sql");
     REQUIRE(seeded.has_value());
@@ -206,8 +203,8 @@ TEST_CASE("AuditRepository reopening preserves saved audits traces and views",
     auto migrated = co_await audits.migrate();
     REQUIRE(migrated.has_value());
     REQUIRE(migrated->previous_version == 5);
-    REQUIRE(migrated->current_version == 5);
-    REQUIRE(migrated->applied_versions.empty());
+    REQUIRE(migrated->current_version == 6);
+    REQUIRE(migrated->applied_versions == std::vector<std::int64_t>{6});
     auto trace_migrated = co_await traces.migrate();
     REQUIRE(trace_migrated.has_value());
     REQUIRE(trace_migrated->applied_versions.empty());
@@ -226,11 +223,14 @@ TEST_CASE("AuditRepository reopening preserves saved audits traces and views",
                                               .stop_reason = "end_turn"});
     REQUIRE(traced.has_value());
 
-    auto events = co_await audits.list_events_for_turn(turn_id_with(0x10));
+    auto events = co_await audits.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A"});
     REQUIRE(events.has_value());
-    REQUIRE(events->size() == 1);
-    const auto& saved = events->front();
+    REQUIRE(events->size() == 3);
+    REQUIRE((*events)[0].id == 18);
+    const auto& saved = (*events)[1];
     REQUIRE(saved.id == 17);
+    REQUIRE(saved.event_kind == "permission_decision");
+    REQUIRE(saved.parent_turn_id == turn_id_with(0x10));
     REQUIRE(saved.identity == "saved-operator");
     REQUIRE(saved.verdict == "ask");
     REQUIRE(saved.outcome == "approved");
@@ -238,6 +238,9 @@ TEST_CASE("AuditRepository reopening preserves saved audits traces and views",
     REQUIRE(saved.input_hash_hex == std::string(64, 'a'));
     REQUIRE(saved.metadata_json == R"({"usage":{"wall_time_ms":5.5}})");
     REQUIRE(saved.created_at == "2000-01-01T00:00:00Z");
+    REQUIRE((*events)[2].id == 16);
+    REQUIRE((*events)[2].event_kind == "hook_publish");
+    REQUIRE((*events)[2].metadata_json == R"({"event":"tool_before"})");
     auto turn = co_await traces.get_turn(turn_id_with(0x10));
     REQUIRE(turn.has_value());
     REQUIRE(turn->has_value());
@@ -249,17 +252,16 @@ TEST_CASE("AuditRepository reopening preserves saved audits traces and views",
     REQUIRE((*turn)->output_tokens == 10);
     REQUIRE((*turn)->cancellation_phase == "tools");
     REQUIRE((*turn)->context_json == R"({"source":"saved"})");
-    auto count = co_await traces.count_turns();
-    REQUIRE(count.has_value());
-    REQUIRE(*count == 2);
+    auto turns = co_await traces.list_turns({});
+    REQUIRE(turns.has_value());
+    REQUIRE(turns->size() == 2);
 
     auto reader = co_await pool.acquire_reader();
     REQUIRE(reader.has_value());
     auto view = reader->connection().query(
-        "SELECT tool_name, decision_count, permitted_count, total_wall_time_ms FROM audit_tool_call_rollups");
+        "SELECT name FROM sqlite_master WHERE name IN ('audit_tool_call_rollups', 'idx_audit_events_kind_parent_turn')");
     REQUIRE(view.has_value());
-    REQUIRE(view->rows.size() == 1);
-    REQUIRE(view->rows.front().values == std::vector<storage::ColumnValue>{"FileWrite", "1", "1", "5.5"});
+    REQUIRE(view->rows.empty());
   });
 }
 
@@ -295,10 +297,6 @@ TEST_CASE("AuditRepository append_event round-trips a typical decision row", "[u
     REQUIRE((*listed)[0].event_kind == "permission_decision");
     REQUIRE((*listed)[0].tool_name == "FileRead");
     REQUIRE_FALSE((*listed)[0].parent_turn_id.has_value());
-
-    auto count = co_await repo.count_events("scope-A");
-    REQUIRE(count.has_value());
-    REQUIRE(*count == 1);
   });
 }
 
@@ -345,83 +343,6 @@ TEST_CASE("AuditRepository stores a null input_hash when the caller omits it", "
   });
 }
 
-TEST_CASE("AuditRepository metadata update is scoped by parent_turn_id", "[unit][storage][audit_repository]") {
-  TempDb db{"oran-audit-repo-update-parent-turn"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-    auto pool = open_pool(io, db);
-    storage::AuditRepository repo{pool};
-    auto migrated = co_await repo.migrate();
-    REQUIRE(migrated.has_value());
-
-    auto first = make_request("scope-A", "FileRead", "allow");
-    first.input_hash_hex = std::string(64, 'd');
-    first.parent_turn_id = turn_id_with(0x10);
-    first.metadata_json = R"json({"dispatch":{"sequence":1}})json";
-    auto appended_first = co_await repo.append_event(first);
-    REQUIRE(appended_first.has_value());
-
-    auto second = first;
-    second.parent_turn_id = turn_id_with(0x40);
-    auto appended_second = co_await repo.append_event(second);
-    REQUIRE(appended_second.has_value());
-
-    auto updated = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
-        .scope_key = "scope-A",
-        .agent_key = "coder",
-        .tool_name = "FileRead",
-        .identity = "operator-1",
-        .input_hash_hex = std::string(64, 'd'),
-        .parent_turn_id = turn_id_with(0x10),
-        .previous_metadata_json = R"json({"dispatch":{"sequence":1}})json",
-        .metadata_json = R"json({"dispatch":{"sequence":1},"usage":{"files_touched":1}})json",
-    });
-    REQUIRE(updated.has_value());
-    REQUIRE(updated->id == appended_first->id);
-
-    auto listed = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .limit = 10});
-    REQUIRE(listed.has_value());
-    REQUIRE(listed->size() == 2);
-    REQUIRE((*listed)[0].id == appended_second->id);
-    REQUIRE((*listed)[0].metadata_json == R"json({"dispatch":{"sequence":1}})json");
-    REQUIRE((*listed)[1].id == appended_first->id);
-    REQUIRE((*listed)[1].metadata_json == R"json({"dispatch":{"sequence":1},"usage":{"files_touched":1}})json");
-  });
-}
-
-TEST_CASE("AuditRepository updates metadata for the matching audit row", "[unit][storage][audit_repository]") {
-  TempDb db{"oran-audit-repo-update-metadata"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-    auto pool = open_pool(io, db);
-    storage::AuditRepository repo{pool};
-    auto migrated = co_await repo.migrate();
-    REQUIRE(migrated.has_value());
-
-    auto request = make_request("scope-A", "FileRead", "allow");
-    request.input_hash_hex = std::string(64, 'b');
-    request.metadata_json = R"json({"dispatch":{"sequence":7}})json";
-    auto appended = co_await repo.append_event(request);
-    REQUIRE(appended.has_value());
-
-    auto updated = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
-        .scope_key = "scope-A",
-        .agent_key = "coder",
-        .tool_name = "FileRead",
-        .identity = "operator-1",
-        .input_hash_hex = std::string(64, 'b'),
-        .previous_metadata_json = R"json({"dispatch":{"sequence":7}})json",
-        .metadata_json = R"json({"dispatch":{"sequence":7},"usage":{"bytes_read":4096}})json",
-    });
-    REQUIRE(updated.has_value());
-    REQUIRE(updated->id == appended->id);
-    REQUIRE(updated->metadata_json == R"json({"dispatch":{"sequence":7},"usage":{"bytes_read":4096}})json");
-
-    auto listed = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A"});
-    REQUIRE(listed.has_value());
-    REQUIRE(listed->size() == 1);
-    REQUIRE((*listed)[0].metadata_json == R"json({"dispatch":{"sequence":7},"usage":{"bytes_read":4096}})json");
-  });
-}
-
 TEST_CASE("AuditRepository list_events orders newest first and applies filters", "[unit][storage][audit_repository]") {
   TempDb db{"oran-audit-repo-filters"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
@@ -438,16 +359,16 @@ TEST_CASE("AuditRepository list_events orders newest first and applies filters",
     REQUIRE(a3.has_value());
     auto a4 = co_await repo.append_event(make_request("scope-B", "FileRead", "allow"));
     REQUIRE(a4.has_value());
-    auto hook_publish = make_request("scope-A", "FileRead", "allow");
-    hook_publish.event_kind = "hook_publish";
-    hook_publish.metadata_json = R"json({"event":"tool_before","sink_id":"policy","decision_kind":"veto"})json";
-    auto a5 = co_await repo.append_event(std::move(hook_publish));
+    auto lag = make_request("scope-A", "FileRead", "allow");
+    lag.event_kind = "cancellation_lag";
+    lag.metadata_json = R"json({"per_call_timeout_ms":50})json";
+    auto a5 = co_await repo.append_event(std::move(lag));
     REQUIRE(a5.has_value());
 
     auto all = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A"});
     REQUIRE(all.has_value());
     REQUIRE(all->size() == 4);
-    REQUIRE((*all)[0].event_kind == "hook_publish");
+    REQUIRE((*all)[0].event_kind == "cancellation_lag");
     REQUIRE((*all)[1].tool_name == "ShellExec");
     REQUIRE((*all)[2].tool_name == "FileWrite");
     REQUIRE((*all)[3].tool_name == "FileRead");
@@ -463,25 +384,22 @@ TEST_CASE("AuditRepository list_events orders newest first and applies filters",
     REQUIRE(only_file_read.has_value());
     REQUIRE(only_file_read->size() == 2);
 
-    auto only_hook_publish = co_await repo.list_events(
-        storage::ListAuditEventsOptions{.scope_key = "scope-A", .event_kind = "hook_publish"});
-    REQUIRE(only_hook_publish.has_value());
-    REQUIRE(only_hook_publish->size() == 1);
-    REQUIRE((*only_hook_publish)[0].id == a5->id);
-    REQUIRE((*only_hook_publish)[0].metadata_json ==
-            R"json({"event":"tool_before","sink_id":"policy","decision_kind":"veto"})json");
+    auto only_lag = co_await repo.list_events(
+        storage::ListAuditEventsOptions{.scope_key = "scope-A", .event_kind = "cancellation_lag"});
+    REQUIRE(only_lag.has_value());
+    REQUIRE(only_lag->size() == 1);
+    REQUIRE((*only_lag)[0].id == a5->id);
+    REQUIRE((*only_lag)[0].metadata_json == R"json({"per_call_timeout_ms":50})json");
 
     auto limited = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .limit = 1});
     REQUIRE(limited.has_value());
     REQUIRE(limited->size() == 1);
-    REQUIRE((*limited)[0].event_kind == "hook_publish");
+    REQUIRE((*limited)[0].event_kind == "cancellation_lag");
 
-    auto count_a = co_await repo.count_events("scope-A");
-    REQUIRE(count_a.has_value());
-    REQUIRE(*count_a == 4);
-    auto count_b = co_await repo.count_events("scope-B");
-    REQUIRE(count_b.has_value());
-    REQUIRE(*count_b == 1);
+    auto scope_b = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-B"});
+    REQUIRE(scope_b.has_value());
+    REQUIRE(scope_b->size() == 1);
+    REQUIRE((*scope_b)[0].id == a4->id);
   });
 }
 
@@ -531,35 +449,11 @@ TEST_CASE("AuditRepository validates required fields", "[unit][storage][audit_re
     REQUIRE_FALSE(list_zero_limit.has_value());
     REQUIRE(list_zero_limit.error().kind() == core::ErrorKind::invalid_argument);
 
-    auto count_no_scope = co_await repo.count_events("");
-    REQUIRE_FALSE(count_no_scope.has_value());
-    REQUIRE(count_no_scope.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto update_missing_metadata = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
-        .scope_key = "scope-A",
-        .agent_key = "coder",
-        .tool_name = "FileRead",
-        .identity = "op",
-        .previous_metadata_json = "",
-    });
-    REQUIRE_FALSE(update_missing_metadata.has_value());
-    REQUIRE(update_missing_metadata.error().kind() == core::ErrorKind::invalid_argument);
-
     auto zero_parent = make_request("scope-A", "FileRead", "allow");
     zero_parent.parent_turn_id = core::TurnId{};
     auto zero_parent_result = co_await repo.append_event(std::move(zero_parent));
     REQUIRE_FALSE(zero_parent_result.has_value());
     REQUIRE(zero_parent_result.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto update_zero_parent = co_await repo.update_event_metadata(storage::UpdateAuditEventMetadataRequest{
-        .scope_key = "scope-A",
-        .agent_key = "coder",
-        .tool_name = "FileRead",
-        .identity = "op",
-        .parent_turn_id = core::TurnId{},
-    });
-    REQUIRE_FALSE(update_zero_parent.has_value());
-    REQUIRE(update_zero_parent.error().kind() == core::ErrorKind::invalid_argument);
   });
 }
 
@@ -625,95 +519,5 @@ TEST_CASE("AuditRepository returns empty results for missing scopes", "[unit][st
     auto listed = co_await repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-empty"});
     REQUIRE(listed.has_value());
     REQUIRE(listed->empty());
-
-    auto count = co_await repo.count_events("scope-empty");
-    REQUIRE(count.has_value());
-    REQUIRE(*count == 0);
-  });
-}
-
-TEST_CASE("AuditRepository::list_events_for_turn preserves dispatch order and ignores scope",
-          "[unit][storage][audit_repository][trace]") {
-  TempDb db{"oran-audit-repo-list-for-turn"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-    auto pool = open_pool(io, db);
-    storage::AuditRepository repo{pool};
-    auto migrated = co_await repo.migrate();
-    REQUIRE(migrated.has_value());
-
-    const auto turn_a = turn_id_with(0x10);
-    const auto turn_b = turn_id_with(0x20);
-
-    // Three rows belong to turn A under two scopes; one belongs to turn B; one
-    // has no parent turn. The trace inspector must surface every turn-A row
-    // regardless of scope and skip the unrelated rows.
-    auto first = make_request("scope-A", "FileRead", "allow");
-    first.parent_turn_id = turn_a;
-    auto first_row = co_await repo.append_event(std::move(first));
-    REQUIRE(first_row.has_value());
-
-    auto second = make_request("scope-A", "FileWrite", "allow");
-    second.event_kind = "hook_publish";
-    second.parent_turn_id = turn_a;
-    second.metadata_json = R"json({"event":"tool_before","sink_id":"policy","decision_kind":"proceed"})json";
-    auto second_row = co_await repo.append_event(std::move(second));
-    REQUIRE(second_row.has_value());
-
-    auto third = make_request("scope-B", "FileEdit", "allow");
-    third.parent_turn_id = turn_a;
-    auto third_row = co_await repo.append_event(std::move(third));
-    REQUIRE(third_row.has_value());
-
-    auto unrelated_turn = make_request("scope-A", "FileRead", "deny");
-    unrelated_turn.parent_turn_id = turn_b;
-    auto unrelated_turn_row = co_await repo.append_event(std::move(unrelated_turn));
-    REQUIRE(unrelated_turn_row.has_value());
-
-    auto no_turn = make_request("scope-A", "FileRead", "allow");
-    auto no_turn_row = co_await repo.append_event(std::move(no_turn));
-    REQUIRE(no_turn_row.has_value());
-
-    auto joined = co_await repo.list_events_for_turn(turn_a);
-    REQUIRE(joined.has_value());
-    REQUIRE(joined->size() == 3);
-    REQUIRE((*joined)[0].id == first_row->id);
-    REQUIRE((*joined)[1].id == second_row->id);
-    REQUIRE((*joined)[2].id == third_row->id);
-    REQUIRE((*joined)[0].event_kind == "permission_decision");
-    REQUIRE((*joined)[1].event_kind == "hook_publish");
-    REQUIRE((*joined)[2].event_kind == "permission_decision");
-    REQUIRE((*joined)[0].tool_name == "FileRead");
-    REQUIRE((*joined)[1].tool_name == "FileWrite");
-    REQUIRE((*joined)[2].tool_name == "FileEdit");
-    REQUIRE((*joined)[2].scope_key == "scope-B");
-
-    auto limited = co_await repo.list_events_for_turn(turn_a, 2);
-    REQUIRE(limited.has_value());
-    REQUIRE(limited->size() == 2);
-    REQUIRE((*limited)[0].id == first_row->id);
-    REQUIRE((*limited)[1].id == second_row->id);
-
-    auto missing = co_await repo.list_events_for_turn(turn_id_with(0x99));
-    REQUIRE(missing.has_value());
-    REQUIRE(missing->empty());
-  });
-}
-
-TEST_CASE("AuditRepository::list_events_for_turn rejects malformed inputs",
-          "[unit][storage][audit_repository][trace]") {
-  TempDb db{"oran-audit-repo-list-for-turn-validate"};
-  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
-    auto pool = open_pool(io, db);
-    storage::AuditRepository repo{pool};
-    auto migrated = co_await repo.migrate();
-    REQUIRE(migrated.has_value());
-
-    auto zero_id = co_await repo.list_events_for_turn(core::TurnId{});
-    REQUIRE_FALSE(zero_id.has_value());
-    REQUIRE(zero_id.error().kind() == core::ErrorKind::invalid_argument);
-
-    auto zero_limit = co_await repo.list_events_for_turn(turn_id_with(0x10), 0);
-    REQUIRE_FALSE(zero_limit.has_value());
-    REQUIRE(zero_limit.error().kind() == core::ErrorKind::invalid_argument);
   });
 }

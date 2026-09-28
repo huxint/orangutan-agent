@@ -1791,7 +1791,6 @@ TEST_CASE("Loop persists one terminal trace row for a text turn", "[unit][agent]
     REQUIRE((*row)->prompt_prefix_hash == result->rendered_prompt.prefix_hash);
     REQUIRE((*row)->prompt_prefix_bytes == static_cast<std::int64_t>(result->rendered_prompt.prefix_bytes));
     REQUIRE((*row)->active_catalog_hash == result->rendered_prompt.tool_catalog_hash);
-    REQUIRE((*row)->deferred_catalog_hash == 0);
     REQUIRE((*row)->cache_creation_tokens == 2);
     REQUIRE((*row)->cache_read_tokens == 7);
     REQUIRE((*row)->input_tokens == 11);
@@ -1879,7 +1878,6 @@ TEST_CASE("Loop persists a terminal trace row and correlates storage audit rows"
     REQUIRE((*row)->prompt_prefix_hash == result->rendered_prompt.prefix_hash);
     REQUIRE((*row)->prompt_prefix_bytes == static_cast<std::int64_t>(result->rendered_prompt.prefix_bytes));
     REQUIRE((*row)->active_catalog_hash == result->rendered_prompt.tool_catalog_hash);
-    REQUIRE((*row)->deferred_catalog_hash == 0);
     REQUIRE((*row)->cache_creation_tokens == 2);
     REQUIRE((*row)->cache_read_tokens == 8);
     REQUIRE((*row)->input_tokens == 14);
@@ -2024,9 +2022,9 @@ TEST_CASE("Loop disables trace rows and audit parent ids when trace is off", "[u
     REQUIRE(result.has_value());
     REQUIRE(result->text == "final");
 
-    auto count = co_await trace.count_turns();
-    REQUIRE(count.has_value());
-    REQUIRE(*count == 0);
+    auto turns = co_await trace.list_turns({});
+    REQUIRE(turns.has_value());
+    REQUIRE(turns->empty());
 
     auto events = co_await audit_repo.list_events(storage::ListAuditEventsOptions{.scope_key = "scope-A", .limit = 10});
     REQUIRE(events.has_value());

@@ -543,9 +543,9 @@ TEST_CASE("RuntimeAssembly::build defaults to a live TraceRepository when audit 
     });
     REQUIRE(appended.has_value());
 
-    auto count = co_await built->trace_repository()->count_turns();
-    REQUIRE(count.has_value());
-    REQUIRE(*count == 1);
+    auto turns = co_await built->trace_repository()->list_turns({});
+    REQUIRE(turns.has_value());
+    REQUIRE(turns->size() == 1);
   });
 }
 

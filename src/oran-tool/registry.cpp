@@ -61,53 +61,6 @@ namespace {
   return permission::to_hex(permission::ApprovalAuthority::input_hash(input_json));
 }
 
-[[nodiscard]] permission::AuditMetadataUpdate build_metadata_update(const permission::AuditEvent& event) {
-  return permission::AuditMetadataUpdate{
-      .event_kind = event.event_kind,
-      .scope_key = event.scope_key,
-      .agent_key = event.agent_key,
-      .tool_name = event.tool_name,
-      .identity = event.identity,
-      .input_hash = event.input_hash,
-      .parent_turn_id = event.parent_turn_id,
-      .previous_metadata_json = event.metadata_json,
-  };
-}
-
-[[nodiscard]] permission::AuditEvent build_hook_publish_event(std::string_view name,
-                                                              hook::Event event,
-                                                              const hook::HookDecision& decision,
-                                                              const DispatchContext& ctx) {
-  auto audit_event = permission::AuditEvent{};
-  const auto winning_sink = decision.trace.empty() ? hook::HookDecisionTrace{} : decision.trace.back();
-  audit_event.event_kind = "hook_publish";
-  audit_event.scope_key = ctx.scope_key;
-  audit_event.agent_key = ctx.agent_key;
-  audit_event.tool_name = std::string{name};
-  audit_event.identity = ctx.identity;
-  audit_event.verdict = permission::Verdict::allow;
-  audit_event.outcome = permission::AuditOutcome::allow;
-  audit_event.reason = decision.reason.empty() ? std::string{core::enum_name(decision.kind)} : decision.reason;
-  audit_event.parent_turn_id = ctx.parent_turn_id;
-  audit_event.metadata_json = detail::hook_publish_metadata_json(event, winning_sink, decision.trace);
-  return audit_event;
-}
-
-[[nodiscard]] async::Awaitable<core::Result<void>> record_hook_publish_event(std::string_view name,
-                                                                             hook::Event event,
-                                                                             const hook::HookDecision& decision,
-                                                                             permission::AuditSink& audit,
-                                                                             const DispatchContext& ctx) {
-  if (!ctx.parent_turn_id.has_value() || decision.trace.empty()) {
-    co_return core::Result<void>{};
-  }
-  auto recorded = co_await audit.record(build_hook_publish_event(name, event, decision, ctx));
-  if (!recorded) {
-    co_return std::unexpected(std::move(recorded).error().with("event_kind", "hook_publish"));
-  }
-  co_return core::Result<void>{};
-}
-
 [[nodiscard]] std::string hook_decision_reason(const hook::HookDecision& decision, std::string_view fallback) {
   return decision.reason.empty() ? std::string{fallback} : decision.reason;
 }
@@ -405,11 +358,6 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
           hook_reason = hook_decision_reason(hook_decision, "hook require_approval");
           break;
       }
-      auto recorded_hook_publish =
-          co_await record_hook_publish_event(name, hook::Event::tool_before, hook_decision, ctx.audit, ctx);
-      if (!recorded_hook_publish) {
-        blocking_publish_error = std::move(recorded_hook_publish).error();
-      }
     }
   }
 
@@ -436,7 +384,6 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
   }
 
   core::Result<Output> result = std::unexpected(core::Error::internal("dispatch did not produce a result"));
-  std::optional<permission::AuditMetadataUpdate> audit_metadata_update;
   if (!path_lock) {
     result = std::unexpected(std::move(path_lock).error().with("tool", std::string{name}));
     // A cancelled lock wait has no authority or approval to release. Finish
@@ -542,16 +489,11 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
       }
     }
 
-    // Keep the decision row durable before the handler runs. If the handler
-    // later returns measured usage, the post-result enrichment updates the
-    // newest matching row's metadata instead of appending a second audit row.
+    // The decision row is durable before the handler runs.
     const bool handler_about_to_run =
         !path_resolution.error.has_value() &&
         (decision.verdict == permission::Verdict::allow ||
          (decision.verdict == permission::Verdict::ask && approval.state == detail::ApprovalState::approved));
-    if (handler_about_to_run) {
-      audit_metadata_update = build_metadata_update(event);
-    }
 
     if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
       result = std::unexpected(std::move(recorded).error());
@@ -579,13 +521,6 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
 
   if (result.has_value()) {
     [[maybe_unused]] const auto cap_report = apply_output_caps(*result, ctx.output_caps);
-    if (audit_metadata_update.has_value()) {
-      auto metadata_json = detail::with_usage_metadata(audit_metadata_update->previous_metadata_json, result->usage);
-      if (metadata_json.has_value()) {
-        audit_metadata_update->metadata_json = std::move(*metadata_json);
-        [[maybe_unused]] auto updated = co_await ctx.audit.update_metadata(std::move(*audit_metadata_update));
-      }
-    }
   }
 
   if (ctx.bus != nullptr) {

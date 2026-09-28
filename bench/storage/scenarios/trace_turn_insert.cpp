@@ -43,7 +43,7 @@ INSERT INTO trace_turns(
   context_json, schema_version
 )
 VALUES (?, NULL, ?, 'bench-agent', 'cli', 'fake-main', 'fake-model',
-  ?, ?, 'end_turn', 1, 4096, 1024, 8192, 16384, 2, 3, 1500, 200, 0.012,
+  ?, ?, 'end_turn', 1, 4096, 1024, 8192, 0, 2, 3, 1500, 200, 0.012,
   NULL, X'7b7d', 1)
 )sql";
 
@@ -172,7 +172,6 @@ run_repository_single_insert(asio::io_context& io, storage::TraceRepository& rep
             .prompt_prefix_hash = 4096,
             .prompt_prefix_bytes = 1024,
             .active_catalog_hash = 8192,
-            .deferred_catalog_hash = 16384,
             .cache_creation_tokens = 2,
             .cache_read_tokens = 3,
             .input_tokens = 1500,

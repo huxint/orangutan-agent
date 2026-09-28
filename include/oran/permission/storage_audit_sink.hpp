@@ -10,15 +10,14 @@ class AuditRepository;
 
 namespace orangutan::permission {
 
-/// Writes decisions and metadata on the supplied blocking executor, then
-/// resumes the caller after storage completes. The caller keeps the borrowed
-/// repository alive until every write finishes, including cancelled writes.
+/// Writes decisions on the supplied blocking executor, then resumes the caller
+/// after storage completes. The caller keeps the borrowed repository alive
+/// until every write finishes, including cancelled writes.
 class StorageAuditSink final : public AuditSink {
 public:
   StorageAuditSink(storage::AuditRepository& repository, asio::any_io_executor blocking_executor) noexcept;
 
   [[nodiscard]] async::Awaitable<core::Result<void>> record(AuditEvent event) override;
-  [[nodiscard]] async::Awaitable<core::Result<void>> update_metadata(AuditMetadataUpdate update) override;
 
 private:
   storage::AuditRepository* repository_{};

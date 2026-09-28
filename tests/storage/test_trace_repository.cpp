@@ -121,7 +121,6 @@ make_request(storage::TraceId turn_id, storage::TraceId session_id, std::int64_t
       .prompt_prefix_hash = 0xfeed'face'1234'5678ULL,
       .prompt_prefix_bytes = 1024,
       .active_catalog_hash = 0x1111'2222'3333'4444ULL,
-      .deferred_catalog_hash = 0x5555'6666'7777'8888ULL,
       .cache_creation_tokens = 2,
       .cache_read_tokens = 3,
       .input_tokens = 1500,
@@ -142,13 +141,13 @@ TEST_CASE("TraceRepository::migrate applies the trace schema once", "[unit][stor
     auto first = co_await repo.migrate();
     REQUIRE(first.has_value());
     REQUIRE(first->previous_version == 0);
-    REQUIRE(first->current_version == 5);
-    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5});
+    REQUIRE(first->current_version == 6);
+    REQUIRE(first->applied_versions == std::vector<std::int64_t>{1, 2, 3, 4, 5, 6});
 
     auto second = co_await repo.migrate();
     REQUIRE(second.has_value());
-    REQUIRE(second->previous_version == 5);
-    REQUIRE(second->current_version == 5);
+    REQUIRE(second->previous_version == 6);
+    REQUIRE(second->current_version == 6);
     REQUIRE(second->applied_versions.empty());
   });
 }
@@ -170,8 +169,8 @@ TEST_CASE("TraceRepository::migrate upgrades an existing audit schema", "[unit][
     auto upgraded = co_await repo.migrate();
     REQUIRE(upgraded.has_value());
     REQUIRE(upgraded->previous_version == 1);
-    REQUIRE(upgraded->current_version == 5);
-    REQUIRE(upgraded->applied_versions == std::vector<std::int64_t>{2, 3, 4, 5});
+    REQUIRE(upgraded->current_version == 6);
+    REQUIRE(upgraded->applied_versions == std::vector<std::int64_t>{2, 3, 4, 5, 6});
 
     auto request = make_request(id_with(0x10), id_with(0x80), 1'000);
     auto appended = co_await repo.append_turn(std::move(request));
@@ -236,7 +235,6 @@ TEST_CASE("TraceRepository append_turn round-trips a redacted turn row", "[unit]
     REQUIRE(appended->prompt_prefix_hash == 0xfeed'face'1234'5678ULL);
     REQUIRE(appended->prompt_prefix_bytes == 1024);
     REQUIRE(appended->active_catalog_hash == 0x1111'2222'3333'4444ULL);
-    REQUIRE(appended->deferred_catalog_hash == 0x5555'6666'7777'8888ULL);
     REQUIRE(appended->cache_creation_tokens == 2);
     REQUIRE(appended->cache_read_tokens == 3);
     REQUIRE(appended->input_tokens == 1500);
@@ -251,10 +249,6 @@ TEST_CASE("TraceRepository append_turn round-trips a redacted turn row", "[unit]
     REQUIRE(loaded->has_value());
     REQUIRE((*loaded)->turn_id == id_with(0x10));
     REQUIRE((*loaded)->context_json == R"json({"source":"test"})json");
-
-    auto count = co_await repo.count_turns();
-    REQUIRE(count.has_value());
-    REQUIRE(*count == 1);
   });
 }
 

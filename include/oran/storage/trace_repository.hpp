@@ -32,7 +32,6 @@ struct AppendTraceTurnRequest {
   std::uint64_t prompt_prefix_hash{};
   std::int64_t prompt_prefix_bytes{};
   std::uint64_t active_catalog_hash{};
-  std::uint64_t deferred_catalog_hash{};
   std::int64_t cache_creation_tokens{};
   std::int64_t cache_read_tokens{};
   std::int64_t input_tokens{};
@@ -58,7 +57,6 @@ struct TraceTurnRecord {
   std::uint64_t prompt_prefix_hash{};
   std::int64_t prompt_prefix_bytes{};
   std::uint64_t active_catalog_hash{};
-  std::uint64_t deferred_catalog_hash{};
   std::int64_t cache_creation_tokens{};
   std::int64_t cache_read_tokens{};
   std::int64_t input_tokens{};
@@ -90,8 +88,6 @@ public:
   [[nodiscard]] async::Awaitable<core::Result<std::optional<TraceTurnRecord>>> get_turn(TraceId turn_id);
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<TraceTurnRecord>>> list_turns(ListTraceTurnsOptions options);
-
-  [[nodiscard]] async::Awaitable<core::Result<std::int64_t>> count_turns();
 
 private:
   Pool* pool_{};

@@ -31,11 +31,11 @@ INSERT INTO trace_turns(
   input_tokens, output_tokens, cost_estimate_usd, cancellation_phase,
   context_json, schema_version
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING turn_id, parent_turn_id, session_id, agent_key, origin, route_profile,
   route_model, started_at_ns, finished_at_ns, stop_reason, iteration_count,
   prompt_prefix_hash, prompt_prefix_bytes, active_catalog_hash,
-  deferred_catalog_hash, cache_creation_tokens, cache_read_tokens,
+  cache_creation_tokens, cache_read_tokens,
   input_tokens, output_tokens, cost_estimate_usd, cancellation_phase,
   context_json, schema_version
 )sql";
@@ -44,14 +44,12 @@ constexpr std::string_view kGetTurnSql = R"sql(
 SELECT turn_id, parent_turn_id, session_id, agent_key, origin, route_profile,
   route_model, started_at_ns, finished_at_ns, stop_reason, iteration_count,
   prompt_prefix_hash, prompt_prefix_bytes, active_catalog_hash,
-  deferred_catalog_hash, cache_creation_tokens, cache_read_tokens,
+  cache_creation_tokens, cache_read_tokens,
   input_tokens, output_tokens, cost_estimate_usd, cancellation_phase,
   context_json, schema_version
 FROM trace_turns
 WHERE turn_id = ?
 )sql";
-
-constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
 
 [[nodiscard]] core::Error invalid_field(std::string field) {
   return core::Error::invalid_argument("trace repository field is invalid").with("field", std::move(field));
@@ -253,39 +251,35 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
   if (!active_catalog_hash) {
     return std::unexpected(active_catalog_hash.error().with("field", "active_catalog_hash"));
   }
-  auto deferred_catalog_hash = statement.column_int64(14);
-  if (!deferred_catalog_hash) {
-    return std::unexpected(deferred_catalog_hash.error().with("field", "deferred_catalog_hash"));
-  }
-  auto cache_creation_tokens = statement.column_int64(15);
+  auto cache_creation_tokens = statement.column_int64(14);
   if (!cache_creation_tokens) {
     return std::unexpected(cache_creation_tokens.error().with("field", "cache_creation_tokens"));
   }
-  auto cache_read_tokens = statement.column_int64(16);
+  auto cache_read_tokens = statement.column_int64(15);
   if (!cache_read_tokens) {
     return std::unexpected(cache_read_tokens.error().with("field", "cache_read_tokens"));
   }
-  auto input_tokens = statement.column_int64(17);
+  auto input_tokens = statement.column_int64(16);
   if (!input_tokens) {
     return std::unexpected(input_tokens.error().with("field", "input_tokens"));
   }
-  auto output_tokens = statement.column_int64(18);
+  auto output_tokens = statement.column_int64(17);
   if (!output_tokens) {
     return std::unexpected(output_tokens.error().with("field", "output_tokens"));
   }
-  auto cost_estimate_usd = statement.column_double(19);
+  auto cost_estimate_usd = statement.column_double(18);
   if (!cost_estimate_usd) {
     return std::unexpected(cost_estimate_usd.error().with("field", "cost_estimate_usd"));
   }
-  auto cancellation_phase = statement.column_text(20);
+  auto cancellation_phase = statement.column_text(19);
   if (!cancellation_phase) {
     return std::unexpected(cancellation_phase.error());
   }
-  auto context_json = required_blob_text(statement, 21, "context_json");
+  auto context_json = required_blob_text(statement, 20, "context_json");
   if (!context_json) {
     return std::unexpected(context_json.error());
   }
-  auto schema_version = statement.column_int64(22);
+  auto schema_version = statement.column_int64(21);
   if (!schema_version) {
     return std::unexpected(schema_version.error().with("field", "schema_version"));
   }
@@ -305,7 +299,6 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
       .prompt_prefix_hash = from_sql_hash(*prompt_prefix_hash),
       .prompt_prefix_bytes = *prompt_prefix_bytes,
       .active_catalog_hash = from_sql_hash(*active_catalog_hash),
-      .deferred_catalog_hash = from_sql_hash(*deferred_catalog_hash),
       .cache_creation_tokens = *cache_creation_tokens,
       .cache_read_tokens = *cache_read_tokens,
       .input_tokens = *input_tokens,
@@ -321,7 +314,7 @@ constexpr std::string_view kCountTurnsSql = "SELECT COUNT(*) FROM trace_turns";
   std::string sql{"SELECT turn_id, parent_turn_id, session_id, agent_key, origin, route_profile, "
                   "route_model, started_at_ns, finished_at_ns, stop_reason, iteration_count, "
                   "prompt_prefix_hash, prompt_prefix_bytes, active_catalog_hash, "
-                  "deferred_catalog_hash, cache_creation_tokens, cache_read_tokens, "
+                  "cache_creation_tokens, cache_read_tokens, "
                   "input_tokens, output_tokens, cost_estimate_usd, cancellation_phase, "
                   "context_json, schema_version FROM trace_turns"};
   bool has_where = false;
@@ -382,8 +375,8 @@ async::Awaitable<core::Result<TraceTurnRecord>> TraceRepository::append_turn(App
           request.turn_id, request.parent_turn_id, request.session_id, request.agent_key, request.origin,
           request.route_profile, request.route_model, request.started_at_ns, request.finished_at_ns,
           request.stop_reason, request.iteration_count, to_sql_hash(request.prompt_prefix_hash),
-          request.prompt_prefix_bytes, to_sql_hash(request.active_catalog_hash),
-          to_sql_hash(request.deferred_catalog_hash), request.cache_creation_tokens, request.cache_read_tokens,
+          request.prompt_prefix_bytes, to_sql_hash(request.active_catalog_hash), request.cache_creation_tokens,
+          request.cache_read_tokens,
           request.input_tokens, request.output_tokens, request.cost_estimate_usd, request.cancellation_phase,
           bytes_of(request.context_json), request.schema_version);
       !bound) {
@@ -497,35 +490,6 @@ TraceRepository::list_turns(ListTraceTurnsOptions options) {
   }
 
   co_return rows;
-}
-
-async::Awaitable<core::Result<std::int64_t>> TraceRepository::count_turns() {
-  auto reader = co_await pool_->acquire_reader();
-  if (!reader) {
-    co_return std::unexpected(reader.error());
-  }
-
-  auto cached = reader->statement_cache().acquire(reader->connection(), kCountTurnsSql);
-  if (!cached) {
-    co_return std::unexpected(cached.error());
-  }
-  auto& statement = cached->statement();
-
-  auto step = statement.step();
-  if (!step) {
-    co_return std::unexpected(step.error());
-  }
-  if (*step != StepResult::row) {
-    co_return std::unexpected(core::Error::storage("trace turn count returned no row"));
-  }
-  auto count = statement.column_int64(0);
-  if (!count) {
-    co_return std::unexpected(count.error().with("field", "count"));
-  }
-  if (auto done = statement.expect_done("count_turns"); !done) {
-    co_return std::unexpected(done.error());
-  }
-  co_return *count;
 }
 
 }  // namespace orangutan::storage

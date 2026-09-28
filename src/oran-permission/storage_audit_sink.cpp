@@ -72,22 +72,4 @@ async::Awaitable<core::Result<void>> StorageAuditSink::record(AuditEvent event) 
   co_return co_await write_audit(blocking_executor_, repository_->append_event(std::move(request)));
 }
 
-async::Awaitable<core::Result<void>> StorageAuditSink::update_metadata(AuditMetadataUpdate update) {
-  storage::UpdateAuditEventMetadataRequest request{
-      .event_kind = std::move(update.event_kind),
-      .scope_key = std::move(update.scope_key),
-      .agent_key = std::move(update.agent_key),
-      .tool_name = std::move(update.tool_name),
-      .identity = std::move(update.identity),
-      .parent_turn_id = update.parent_turn_id,
-      .previous_metadata_json = std::move(update.previous_metadata_json),
-      .metadata_json = std::move(update.metadata_json),
-  };
-  if (update.input_hash.has_value()) {
-    request.input_hash_hex = to_hex(*update.input_hash);
-  }
-
-  co_return co_await write_audit(blocking_executor_, repository_->update_event_metadata(std::move(request)));
-}
-
 }  // namespace orangutan::permission

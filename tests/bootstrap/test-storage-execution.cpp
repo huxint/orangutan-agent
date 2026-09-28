@@ -149,7 +149,7 @@ provider::ScriptedTurn text_turn() {
 
 }  // namespace
 
-TEST_CASE("Audit dispatch awaits worker commits before effects and completion", "[bootstrap][storage][execution]") {
+TEST_CASE("Audit dispatch awaits the worker commit before the effect", "[bootstrap][storage][execution]") {
   StorageExecution runtime;
   tool::Registry registry;
   int effects = 0;
@@ -159,9 +159,7 @@ TEST_CASE("Audit dispatch awaits worker commits before effects and completion", 
                    [&](std::string_view, tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
                      handler_on_caller = runtime.caller.running_in_this_thread();
                      ++effects;
-                     auto output = tool::Output::text_only("effect recorded");
-                     output.usage.bytes_written = 7;
-                     co_return output;
+                     co_return tool::Output::text_only("effect recorded");
                    })
               .has_value());
   permission::RuleSet rules;
@@ -192,10 +190,6 @@ TEST_CASE("Audit dispatch awaits worker commits before effects and completion", 
   StorageExecution::poll(runtime.coordinator);
   CHECK(effects == 1);
   CHECK(handler_on_caller);
-  CHECK_FALSE(runtime.finished);
-  StorageExecution::poll(runtime.worker);
-  CHECK(runtime.cell("SELECT MAX(json_extract(metadata_json, '$.usage.bytes_written')) FROM audit_events") == "7");
-  CHECK_FALSE(runtime.finished);
 
   runtime.finish();
   REQUIRE(output.has_value());

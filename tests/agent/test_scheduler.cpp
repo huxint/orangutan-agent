@@ -131,26 +131,6 @@ void add_failing_tool(tool::Registry& registry, std::string name, std::chrono::m
   REQUIRE(registry.add(tool_def(std::move(name)), std::move(handler)).has_value());
 }
 
-/// Register a handler that sleeps for `latency` and returns text plus a
-/// non-empty `Output::usage`. A successful capped result with measured usage is
-/// what triggers slice-67 same-row audit metadata enrichment.
-void add_usage_tool(tool::Registry& registry,
-                    std::string name,
-                    std::chrono::milliseconds latency,
-                    tool::ToolUsage usage) {
-  auto handler = [latency, usage](std::string_view,
-                                  tool::DispatchContext& ctx) -> async::Awaitable<core::Result<tool::Output>> {
-    auto sleep_result = co_await async::sleep_for(ctx.executor, latency);
-    if (!sleep_result) {
-      co_return std::unexpected(sleep_result.error());
-    }
-    auto output = tool::Output::text_only("done");
-    output.usage = usage;
-    co_return output;
-  };
-  REQUIRE(registry.add(tool_def(std::move(name)), std::move(handler)).has_value());
-}
-
 /// Register a handler that DELIBERATELY ignores its cancellation slot: it
 /// disables cancellation for its own coroutine, then sleeps. Models the "tool
 /// bug" spec 0012 AC5 carves out — a handler that never polls its cancellation
@@ -792,9 +772,7 @@ TEST_CASE("ToolScheduler: a batch records exactly N audit rows and N tool_after 
         REQUIRE(result.has_value());
         REQUIRE(result->size() == 4);
 
-        // Exactly N permission-decision rows. The bus carries no blocking
-        // `tool_before` sink, so the blocking publish consults nobody and no
-        // `hook_publish` row is appended.
+        // Exactly N permission-decision rows, one per dispatch.
         REQUIRE(audit.events().size() == 4);
         for (const auto& event : audit.events()) {
           REQUIRE(event.event_kind == "permission_decision");
@@ -808,61 +786,6 @@ TEST_CASE("ToolScheduler: a batch records exactly N audit rows and N tool_after 
         REQUIRE_FALSE((*result)[1].output.has_value());
         REQUIRE((*result)[2].output.has_value());
         REQUIRE_FALSE((*result)[3].output.has_value());
-      },
-      5s);
-}
-
-TEST_CASE("ToolScheduler: identical concurrent calls each enrich their own audit row (slice 67 under parallelism)",
-          "[unit][agent][scheduler][audit]") {
-  test::run_async(
-      [](asio::io_context& io) -> async::Awaitable<void> {
-        tool::Registry registry;
-        // Non-zero usage so a successful result drives slice-67 enrichment to
-        // write a non-"{}" metadata blob the assertions below can detect.
-        add_usage_tool(registry, "FakeUsage", 30ms, tool::ToolUsage{.bytes_read = 7, .files_touched = 1});
-        auto rules = allow_all_rules();
-        permission::RecordingAuditSink audit;
-
-        auto prototype = make_prototype(io, rules, audit);
-        // A shared trace turn id gives both rows the slice-79 correlation key;
-        // the same-row matcher must still pair each enrichment to a distinct row.
-        core::TurnId turn{};
-        turn[0] = std::byte{0x11};
-        prototype.parent_turn_id = turn;
-
-        agent::ToolScheduler scheduler{io.get_executor(),
-                                       registry,
-                                       agent::ToolSchedulerOptions{.max_parallel_tools = 4, .per_call_timeout = 10s}};
-
-        // Two byte-identical calls: same tool + same input => same input_hash,
-        // same identity/scope/agent/turn, same initial "{}" metadata. The
-        // decision rows are indistinguishable by the slice-67 match key except
-        // for the previous_metadata_json hook that lets each enrichment consume
-        // exactly one not-yet-enriched row. If that hook fails under
-        // parallelism, both updates land on the same row and the other stays
-        // "{}" — which the per-row assertion below would catch.
-        std::vector<agent::ToolBatchCall> batch;
-        batch.push_back(call(0, "FakeUsage", R"({"path":"same"})"));
-        batch.push_back(call(1, "FakeUsage", R"({"path":"same"})"));
-
-        auto result = co_await scheduler.run_batch(std::move(batch), prototype);
-        REQUIRE(result.has_value());
-        REQUIRE(result->size() == 2);
-        REQUIRE((*result)[0].output.has_value());
-        REQUIRE((*result)[1].output.has_value());
-
-        // Exactly two rows: enrichment updates in place and never appends a
-        // second decision row (AC7 holds even when calls collide).
-        REQUIRE(audit.events().size() == 2);
-        // Both rows carry the parent turn id and were enriched with usage — no
-        // row left stale, no cross-talk.
-        for (const auto& event : audit.events()) {
-          REQUIRE(event.event_kind == "permission_decision");
-          REQUIRE(event.parent_turn_id == turn);
-          REQUIRE(event.metadata_json != "{}");
-          REQUIRE(event.metadata_json.contains("\"usage\""));
-          REQUIRE(event.metadata_json.contains("bytes_read"));
-        }
       },
       5s);
 }

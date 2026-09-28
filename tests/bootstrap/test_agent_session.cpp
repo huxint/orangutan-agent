@@ -363,9 +363,9 @@ TEST_CASE("AgentSession drives prompts through the agent loop and trace writer",
     REQUIRE(result.has_value());
     REQUIRE(fake.turns_consumed() == 1);
     REQUIRE(assembly.trace_repository() != nullptr);
-    auto count = co_await assembly.trace_repository()->count_turns();
-    REQUIRE(count.has_value());
-    REQUIRE(*count == 1);
+    auto turns = co_await assembly.trace_repository()->list_turns({});
+    REQUIRE(turns.has_value());
+    REQUIRE(turns->size() == 1);
   });
 }
 

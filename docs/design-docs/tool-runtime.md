@@ -25,9 +25,9 @@ from model tool calls pass through `Registry::dispatch`.
 6. Evaluate rules for the concrete tool, input, declared capabilities and caller.
    Denial stops execution. An ask decision requires a valid approval.
 7. Await the durable decision before invoking the prepared executor at most once.
-   Storage failure or cancellation stops execution. Enforce output limits, await
-   audit metadata enrichment and publish completion/error observations before
-   releasing the lock.
+   Storage failure or cancellation stops execution. Enforce output limits and
+   publish the completion observation before releasing the lock. The audit row
+   is not rewritten after the effect.
 
 `Registry::add_prepared` registers this pure preparation boundary. Each filesystem
 built-in owns its typed arguments and projects path intent from them. Dispatch

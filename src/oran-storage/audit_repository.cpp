@@ -32,37 +32,6 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 RETURNING id, created_at
 )sql";
 
-constexpr std::string_view kCountEventsSql = R"sql(
-SELECT COUNT(*) FROM audit_events WHERE scope_key = ?
-)sql";
-
-constexpr std::string_view kListEventsForTurnSql = R"sql(
-SELECT id, event_kind, scope_key, agent_key, tool_name, identity, verdict, outcome, reason,
-  input_hash_hex, parent_turn_id, metadata_json, created_at
-FROM audit_events WHERE parent_turn_id = ?
-ORDER BY id ASC LIMIT ?
-)sql";
-
-constexpr std::string_view kUpdateEventMetadataSql = R"sql(
-UPDATE audit_events
-SET metadata_json = ?
-WHERE id = (
-  SELECT id FROM audit_events
-  WHERE event_kind = ?
-    AND scope_key = ?
-    AND agent_key = ?
-    AND tool_name = ?
-    AND identity = ?
-    AND metadata_json = ?
-    AND ((? = '' AND input_hash_hex IS NULL) OR input_hash_hex = ?)
-    AND ((? = 1 AND parent_turn_id IS NULL) OR parent_turn_id = ?)
-  ORDER BY id DESC
-  LIMIT 1
-)
-RETURNING id, event_kind, scope_key, agent_key, tool_name, identity, verdict, outcome,
-  reason, input_hash_hex, parent_turn_id, metadata_json, created_at
-)sql";
-
 [[nodiscard]] core::Error invalid_field(std::string field) {
   return core::Error::invalid_argument("audit repository field must not be empty").with("field", std::move(field));
 }
@@ -91,34 +60,6 @@ RETURNING id, event_kind, scope_key, agent_key, tool_name, identity, verdict, ou
   }
   if (request.reason.empty()) {
     return std::unexpected(invalid_field("reason"));
-  }
-  if (request.metadata_json.empty()) {
-    return std::unexpected(invalid_field("metadata_json"));
-  }
-  if (request.parent_turn_id.has_value() && core::is_zero_turn_id(*request.parent_turn_id)) {
-    return std::unexpected(invalid_field("parent_turn_id"));
-  }
-  return {};
-}
-
-[[nodiscard]] core::Result<void> validate_update_request(const UpdateAuditEventMetadataRequest& request) {
-  if (request.event_kind.empty()) {
-    return std::unexpected(invalid_field("event_kind"));
-  }
-  if (request.scope_key.empty()) {
-    return std::unexpected(invalid_field("scope_key"));
-  }
-  if (request.agent_key.empty()) {
-    return std::unexpected(invalid_field("agent_key"));
-  }
-  if (request.tool_name.empty()) {
-    return std::unexpected(invalid_field("tool_name"));
-  }
-  if (request.identity.empty()) {
-    return std::unexpected(invalid_field("identity"));
-  }
-  if (request.previous_metadata_json.empty()) {
-    return std::unexpected(invalid_field("previous_metadata_json"));
   }
   if (request.metadata_json.empty()) {
     return std::unexpected(invalid_field("metadata_json"));
@@ -348,50 +289,6 @@ async::Awaitable<core::Result<AuditEventRecord>> AuditRepository::append_event(A
   co_return record;
 }
 
-async::Awaitable<core::Result<AuditEventRecord>>
-AuditRepository::update_event_metadata(UpdateAuditEventMetadataRequest request) {
-  if (auto valid = validate_update_request(request); !valid) {
-    co_return std::unexpected(valid.error());
-  }
-
-  auto writer = co_await pool_->acquire_writer();
-  if (!writer) {
-    co_return std::unexpected(writer.error());
-  }
-
-  auto cached = writer->statement_cache().acquire(writer->connection(), kUpdateEventMetadataSql);
-  if (!cached) {
-    co_return std::unexpected(cached.error());
-  }
-  auto& statement = cached->statement();
-
-  if (auto bound = statement.bind_all(request.metadata_json, request.event_kind, request.scope_key, request.agent_key,
-                                      request.tool_name, request.identity, request.previous_metadata_json,
-                                      request.input_hash_hex, request.input_hash_hex,
-                                      !request.parent_turn_id.has_value(), request.parent_turn_id);
-      !bound) {
-    co_return std::unexpected(bound.error());
-  }
-
-  auto step = statement.step();
-  if (!step) {
-    co_return std::unexpected(step.error());
-  }
-  if (*step == StepResult::done) {
-    co_return std::unexpected(
-        core::Error::not_found("audit event metadata row was not found").with("tool", std::move(request.tool_name)));
-  }
-
-  auto record = read_event_row(statement);
-  if (!record) {
-    co_return std::unexpected(record.error());
-  }
-  if (auto done = statement.expect_done("update_event_metadata"); !done) {
-    co_return std::unexpected(done.error());
-  }
-  co_return std::move(*record);
-}
-
 async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
 AuditRepository::list_events(ListAuditEventsOptions options) {
   if (auto valid = validate_list_options(options); !valid) {
@@ -455,89 +352,6 @@ AuditRepository::list_events(ListAuditEventsOptions options) {
   }
 
   co_return events;
-}
-
-async::Awaitable<core::Result<std::vector<AuditEventRecord>>>
-AuditRepository::list_events_for_turn(core::TurnId parent_turn_id, std::size_t limit) {
-  if (core::is_zero_turn_id(parent_turn_id)) {
-    co_return std::unexpected(invalid_field("parent_turn_id"));
-  }
-  if (limit == 0) {
-    co_return std::unexpected(core::Error::invalid_argument("audit list limit must be greater than zero"));
-  }
-  if (limit > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
-    co_return std::unexpected(core::Error::invalid_argument("audit list limit is too large"));
-  }
-
-  auto reader = co_await pool_->acquire_reader();
-  if (!reader) {
-    co_return std::unexpected(reader.error());
-  }
-
-  auto cached = reader->statement_cache().acquire(reader->connection(), kListEventsForTurnSql);
-  if (!cached) {
-    co_return std::unexpected(cached.error());
-  }
-  auto& statement = cached->statement();
-
-  if (auto bound = statement.bind_all(parent_turn_id, static_cast<std::int64_t>(limit)); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-
-  std::vector<AuditEventRecord> events;
-  while (true) {
-    auto step = statement.step();
-    if (!step) {
-      co_return std::unexpected(step.error());
-    }
-    if (*step == StepResult::done) {
-      break;
-    }
-    auto event = read_event_row(statement);
-    if (!event) {
-      co_return std::unexpected(event.error());
-    }
-    events.push_back(std::move(*event));
-  }
-
-  co_return events;
-}
-
-async::Awaitable<core::Result<std::int64_t>> AuditRepository::count_events(std::string scope_key) {
-  if (scope_key.empty()) {
-    co_return std::unexpected(invalid_field("scope_key"));
-  }
-
-  auto reader = co_await pool_->acquire_reader();
-  if (!reader) {
-    co_return std::unexpected(reader.error());
-  }
-
-  auto cached = reader->statement_cache().acquire(reader->connection(), kCountEventsSql);
-  if (!cached) {
-    co_return std::unexpected(cached.error());
-  }
-  auto& statement = cached->statement();
-  if (auto bound = statement.bind_all(scope_key); !bound) {
-    co_return std::unexpected(bound.error());
-  }
-
-  auto step = statement.step();
-  if (!step) {
-    co_return std::unexpected(step.error());
-  }
-  if (*step != StepResult::row) {
-    co_return std::unexpected(core::Error::storage("audit event count returned no row"));
-  }
-
-  auto count = statement.column_int64(0);
-  if (!count) {
-    co_return std::unexpected(count.error().with("field", "count"));
-  }
-  if (auto done = statement.expect_done("count_events"); !done) {
-    co_return std::unexpected(done.error());
-  }
-  co_return *count;
 }
 
 }  // namespace orangutan::storage
