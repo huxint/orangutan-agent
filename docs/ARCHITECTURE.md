@@ -53,6 +53,7 @@ flowchart TD
 | `oran-prompt` | Pure text rendering and cache fingerprints over explicit core values. |
 | `oran-provider` | Protocol mapping, credentials, retries, fallback, attribution and pricing. |
 | `oran-agent` | Provider/tool turn execution and bounded scheduling. |
+| `oran-channel` | Messaging protocol strategies, bounded delivery and joined activity lifecycle. |
 | `oran-bootstrap` | Construct resources and drive one session from the application. |
 
 Applications link the runtime libraries and supply configuration, executors and
@@ -69,7 +70,9 @@ Prompt depends only on core; it has no tool-runtime or executor dependency.
 Provider consumes its own stable-prefix values and has no prompt dependency;
 the loop connects those value boundaries. `scripts/check-deps.sh` checks the
 graph and enforces the configuration boundary. The composition root joins
-runtime, memory and transport.
+runtime, memory and transport. Channel depends on core, async, permission and
+hook; bootstrap binds its transport to HTTP. Channel has no session dependency.
+[Messaging channels](design-docs/messaging-channels.md) owns its host ports.
 
 ## Authority And State
 
@@ -92,7 +95,7 @@ and parent cancellation joins borrowed child work.
 ## Public Headers
 
 ```text
-<oran/agent.hpp> <oran/async.hpp> <oran/bootstrap.hpp> <oran/config.hpp>
+<oran/agent.hpp> <oran/async.hpp> <oran/bootstrap.hpp> <oran/channel.hpp> <oran/config.hpp>
 <oran/hook.hpp> <oran/http.hpp> <oran/io.hpp> <oran/memory.hpp>
 <oran/permission.hpp> <oran/prompt.hpp> <oran/provider.hpp>
 <oran/storage.hpp> <oran/tool.hpp>

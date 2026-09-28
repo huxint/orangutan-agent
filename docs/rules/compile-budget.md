@@ -19,7 +19,7 @@ for sanity.
 | `oran-storage`, `oran-config`      | 1.0 s   | 2.0 s   | 2.5 s    |
 | `oran-permission`    | 1.0 s   | 2.0 s   | 2.5 s    |
 | `oran-tool`, `oran-memory`, `oran-hook` | 1.2 s | 2.5 s | 3.0 s    |
-| `oran-provider`, `oran-prompt`     | 1.5 s   | 3.0 s   | 3.5 s    |
+| `oran-provider`, `oran-prompt`, `oran-channel`     | 1.5 s   | 3.0 s   | 3.5 s    |
 | `oran-agent`                       | 1.5 s   | 3.0 s   | 3.5 s    |
 | `oran-bootstrap`                    | 2.0 s   | 4.0 s   | 5.0 s    |
 

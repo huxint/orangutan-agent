@@ -8,6 +8,7 @@
 | [`bootstrap-runtime.md`](bootstrap-runtime.md) | Application composition and session ownership |
 | [`core-beliefs.md`](core-beliefs.md) | Core design principles |
 | [`io-runtime.md`](io-runtime.md) | Filesystem authority and blocking IO |
+| [`messaging-channels.md`](messaging-channels.md) | QQ, Telegram and Feishu adapters, delivery and activity lifecycle |
 | [`memory-system.md`](memory-system.md) | Scoped memory and conversation history |
 | [`module-boundaries.md`](module-boundaries.md) | Public boundaries and dependency direction |
 | [`permissions-and-hooks.md`](permissions-and-hooks.md) | Policy decisions, approval and lifecycle hooks |

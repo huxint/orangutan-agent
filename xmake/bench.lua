@@ -31,3 +31,5 @@ oran_bench("prompt", { "oran-prompt" })
 oran_bench("provider", { "oran-provider" })
 oran_bench("agent", { "oran-agent" })
 oran_bench("bootstrap", { "oran-bootstrap" })
+
+oran_bench("channel", { "oran-channel" })

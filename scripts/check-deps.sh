@@ -47,6 +47,7 @@ declare -A LAYER=(
   [provider]=2
   # agent runtime
   [agent]=3
+  [channel]=3
   # composition root
   [bootstrap]=4
 )

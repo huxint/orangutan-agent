@@ -121,3 +121,11 @@ Host cancellation propagates through the awaiting coroutine. Tool dispatches and
 storage writes finish before their borrowed services are released. The
 [HTTP continuation test](../../tests/bootstrap/test_provider_backend.cpp) composes
 these interfaces with a controlled transport and a reopened persistent session.
+
+## Channel transport
+
+`channel_http_transport` binds the SDK-free channel transport port to the host's
+HTTP client and current credential lookup. The host maps normalized conversation
+keys to retained sessions and owns authenticated ingress and durable delivery.
+[Messaging channels](messaging-channels.md) owns protocols, credentials, activity
+lifecycle and the composition example.

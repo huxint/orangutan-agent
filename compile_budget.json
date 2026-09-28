@@ -34,6 +34,7 @@
     "oran-hook":         { "median_sec": 1.2, "p95_sec": 2.5, "hard_cap_sec": 3.0 },
     "oran-provider":     { "median_sec": 1.5, "p95_sec": 3.0, "hard_cap_sec": 3.5 },
     "oran-prompt":       { "median_sec": 1.5, "p95_sec": 3.0, "hard_cap_sec": 3.5 },
+    "oran-channel":      { "median_sec": 1.5, "p95_sec": 3.0, "hard_cap_sec": 3.5 },
     "oran-agent":        { "median_sec": 1.5, "p95_sec": 3.0, "hard_cap_sec": 3.5 },
     "oran-bootstrap":    { "median_sec": 2.0, "p95_sec": 4.0, "hard_cap_sec": 5.0 }
   },

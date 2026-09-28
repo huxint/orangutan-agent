@@ -25,6 +25,7 @@
 #include <oran/agent.hpp>
 #include <oran/async.hpp>
 #include <oran/bootstrap.hpp>
+#include <oran/channel.hpp>
 #include <oran/config.hpp>
 #include <oran/core/capability.hpp>
 #include <oran/core/content.hpp>
@@ -1851,4 +1852,48 @@ TEST_CASE("Tool iterations compact provisional work and persist it only on succe
       }
     });
   }
+}
+
+TEST_CASE("Channel adapters drive an AgentSession through the injected turn port", "[bootstrap][channel]") {
+  TempDir temp{"oran-channel-session"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, false, false);
+    provider::FakeProvider fake{{provider::ScriptedTurn{.response = text_response("channel answer"),
+                                                        .deltas = {},
+                                                        .error = std::nullopt,
+                                                        .latency = {}}}};
+    auto session = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, fake));
+    REQUIRE(session);
+    hook::Bus bus;
+    orangutan::channel::DispatcherOptions options;
+    options.hooks = &bus;
+    options.mode = permission::Mode::permissive;
+    std::string sent;
+    auto dispatcher = orangutan::channel::Dispatcher::create(
+        orangutan::channel::qq(),
+        [&](orangutan::channel::Conversation,
+            orangutan::channel::Request request) -> async::Awaitable<core::Result<orangutan::channel::Response>> {
+          sent = request.body;
+          co_return orangutan::channel::Response{200, R"({"id":"sent"})", {}};
+        },
+        [&](orangutan::channel::Message message) -> async::Awaitable<core::Result<std::string>> {
+          auto result = co_await (*session)->run_prompt({.prompt = message.text});
+          if (!result)
+            co_return std::unexpected(result.error());
+          co_return result->text;
+        },
+        std::move(options));
+    REQUIRE(dispatcher);
+    auto incoming = orangutan::channel::qq().decode(
+        R"({"op":0,"t":"C2C_MESSAGE_CREATE","d":{"id":"incoming","content":"question","author":{"user_openid":"user"}}})",
+        {"account", "bot"});
+    REQUIRE(incoming);
+    REQUIRE(*incoming);
+    auto delivered = co_await (*dispatcher)->handle(**incoming);
+    REQUIRE(delivered);
+    CHECK(delivered->parts_sent == 1);
+    CHECK(sent.contains("channel answer"));
+    CHECK(fake.turns_consumed() == 1);
+  });
 }

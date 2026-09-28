@@ -85,6 +85,10 @@ tool output and memory text; trusted local sinks may inspect originals.
 
 - **Blocking**: `tool_before`, `permission_ask_rendered`, `memory_write_before`.
 
+`channel_action` observes channel admission and HTTP authorization before the
+effect, with credential-free platform/account/operation metadata. The
+[messaging contract](messaging-channels.md) owns those operations and policies.
+
 The event vocabulary follows the production publishers: the agent loop owns
 provider observations, registry dispatch owns tool observations, memory bindings
 own record observations, and approval resolution owns the prompt gate. Each fact
@@ -95,6 +99,7 @@ route's primary profile. `hook::is_gate` defines the blocking set used by
 
 ```cpp
 enum class Event {
+  channel_action,
   provider_request,
   provider_response,
   provider_error,

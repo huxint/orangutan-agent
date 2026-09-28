@@ -42,6 +42,11 @@ Filesystem, HTTP and SQLite work runs on explicit executors. Durable audit
 decisions precede tool effects; terminal traces and cancellation cleanup finish
 before services are released. Existing user records remain intact.
 
+QQ, Telegram and Feishu text adapters expose injected transport and turn ports.
+The channel dispatcher bounds admission/deduplication, retains failed deliveries
+and joins typing-status cleanup. Hosts own authenticated ingress and durable
+outboxes; [messaging channels](design-docs/messaging-channels.md) owns the contract.
+
 ## Contract Owners
 
 - [Composition](design-docs/bootstrap-runtime.md): resources and host bindings.
@@ -57,7 +62,7 @@ obsolete surfaces and their tests/docs directly, as defined by
 
 ## Verification And Next Work
 
-The release gate covers all 14 test targets and `make ci`. Controlled HTTP
+The release gate covers all 15 test targets and `make ci`. Controlled HTTP
 integration composes transport, assembly and session continuation. Regressions
 cover denied effects, atomic persistence, scoped recall, fallback attribution,
 cost, stable prompt snapshots and joined cancellation. These checks establish

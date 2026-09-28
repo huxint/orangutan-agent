@@ -5,3 +5,5 @@
 #include <oran/bootstrap/provider-profiles.hpp>
 #include <oran/bootstrap/provider_backend.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
+
+#include <oran/bootstrap/channel_http.hpp>

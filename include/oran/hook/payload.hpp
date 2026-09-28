@@ -262,7 +262,16 @@ struct ProviderErrorPayload {
   std::chrono::nanoseconds duration{0};
 };
 
-using Payload = std::variant<ToolBeforePayload,
+/// Credential/body-free observation before a channel admission or HTTP effect.
+struct ChannelActionPayload {
+  std::string platform;
+  std::string account;
+  std::string operation;
+  bool allowed{false};
+};
+
+using Payload = std::variant<ChannelActionPayload,
+                             ToolBeforePayload,
                              ToolAfterPayload,
                              PermissionAskRenderedPayload,
                              MemoryReadPayload,

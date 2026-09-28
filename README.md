@@ -48,6 +48,11 @@ The filesystem tools are FileRead, FileWrite and FileEdit. `AgentRun` selects a
 child from `agents` and requires `spawn_agent` authority; it admits up to four
 child runs per prompt and one generation of delegation.
 
+QQ, Telegram and Feishu text integrations use SDK-free adapters, injected session
+and transport ports, and joined typing-status cleanup. See the
+[channel hosting contract](docs/design-docs/messaging-channels.md) for authenticated
+ingress, credentials, permissions and delivery recovery.
+
 Working-context retention can be measured with the opt-in `eval-context` runner.
 See [evaluation commands and interpretation](docs/rules/testing-and-bench.md#working-context-evaluation).
 

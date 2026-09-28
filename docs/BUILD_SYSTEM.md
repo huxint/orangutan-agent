@@ -69,7 +69,8 @@ Use ordinary configure/build/test targets for verification. When changing build
 policy, inspect compiler and linker arguments with `xmake build -v` as well as
 running tests; the configured option alone is not evidence of instrumentation.
 
-The build uses headers and static libraries. No GUI or messaging SDK is required.
+The build uses headers and static libraries. `oran-channel` provides QQ, Telegram
+and Feishu adapters using existing dependencies. No GUI or messaging SDK is required.
 
 System libcurl development headers and pkg-config must be installed before
 configuration. Xmake supplies Asio, Catch2, libsodium, nanobench, nlohmann_json,

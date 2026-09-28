@@ -5,6 +5,7 @@
 namespace orangutan::hook {
 
 enum class Event : std::uint8_t {
+  channel_action,
   provider_request,
   provider_response,
   provider_error,

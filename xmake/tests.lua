@@ -44,3 +44,5 @@ oran_test("prompt", { "oran-prompt" })
 oran_test("provider", { "oran-provider" }, { "nlohmann_json" })
 oran_test("agent", { "oran-agent" })
 oran_test("bootstrap", { "oran-bootstrap" }, { "nlohmann_json" })
+
+oran_test("channel", { "oran-channel" }, { "nlohmann_json" })
