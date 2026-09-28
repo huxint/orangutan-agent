@@ -11,19 +11,13 @@
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/enum_names.hpp>
 #include <oran/core/result.hpp>
-#include <oran/core/time.hpp>
 #include <oran/core/turn_id.hpp>
 #include <oran/permission/rule_set.hpp>
 
 namespace orangutan::permission {
 
-/// Outcome of a permission decision as it gets recorded in the audit
-/// log. The first three values mirror `Verdict` 1:1; `approved` and
-/// `rejected` capture the post-broker state for an `ask` decision.
-///
-/// Wire spelling and parse use the generic `core::enum_name` /
-/// `core::parse_enum<AuditOutcome>` helpers — no hand-maintained
-/// string table per `docs/rules/code-style.md` "Enums".
+/// Durable outcome of one dispatch decision. The first three values mirror
+/// `Verdict`; the rest record what approval or a blocking hook did to it.
 enum class AuditOutcome : std::uint8_t {
   allow,
   deny,
@@ -36,55 +30,29 @@ enum class AuditOutcome : std::uint8_t {
   rewritten,
 };
 
-/// One row destined for the audit log. The value type matches the
-/// `storage::AppendAuditEventRequest` columns 1:1 so the storage
-/// adapter can build the request without translation.
+/// One audit row. `StorageAuditSink` encodes enums and the input hash into
+/// `storage::AppendAuditEventRequest`.
 struct AuditEvent {
-  /// Row discriminator in `audit_events`: `permission_decision` for dispatch
-  /// decisions, `cancellation_lag` for a tool that outlived batch cancellation.
+  /// `permission_decision` for dispatch, `cancellation_lag` for a tool that
+  /// outlived batch cancellation.
   std::string event_kind{"permission_decision"};
-  /// Optional caller-supplied timestamp. Storage adapters that stamp
-  /// `created_at` from the database ignore this field; the in-memory
-  /// `RecordingAuditSink` keeps it verbatim so tests can pin the
-  /// recorded time deterministically.
-  core::Time recorded_at{};
-  /// Per-process scope per `secrets-and-state.md` "Identity And Scope".
-  /// Required by the storage adapter.
+  /// Required by `StorageAuditSink`; see secrets-and-state "Identity And Scope".
   std::string scope_key;
-  /// Agent making the call.
   std::string agent_key;
-  /// Tool the call targeted.
   std::string tool_name;
-  /// Operator/agent identity bound to the call (matches
-  /// `ApprovalAuthority::verify`'s `identity` parameter).
   std::string identity;
-  /// Raw verdict from `permission::evaluate`. Preserved separately from
-  /// `outcome` so a forensic query can tell whether an `approved`
-  /// row came from an `ask` rule or from a no-rule mode-default.
+  /// Verdict from evaluation, kept apart from `outcome` so an approved row
+  /// still shows whether a rule or the mode default asked.
   Verdict verdict{Verdict::deny};
-  /// Rendered outcome — `verdict` plus whatever happened during
-  /// approval (for `ask` decisions). Allows the audit log to record
-  /// the full lifecycle without joining tables.
   AuditOutcome outcome{AuditOutcome::deny};
-  /// Decision reason from `Decision::reason` or broker error
-  /// `Error::context()["reason"]`.
   std::string reason;
-  /// SHA-256 of the call input. `nullopt` when the callsite did not
-  /// compute it (raw allow/deny path). The storage adapter encodes
-  /// it as 64-char lowercase hex.
+  /// SHA-256 of the input; absent for rows not tied to one call input.
   std::optional<std::array<std::byte, 32>> input_hash{};
-  /// Optional parent agent-turn id. When the loop is running with trace
-  /// correlation enabled, every tool decision row carries this id so it can
-  /// join to `storage::trace_turns.turn_id`.
+  /// Joins to `trace_turns.turn_id` when the loop correlates traces.
   std::optional<core::TurnId> parent_turn_id{};
-  /// Free-form structured metadata. Defaults to `"{}"`.
   std::string metadata_json{"{}"};
 };
 
-/// Abstract audit sink. Implementations: `NullAuditSink` (no-op),
-/// `RecordingAuditSink` (in-memory capture, for tests), and (in a
-/// separate header) `StorageAuditSink` (writes to
-/// `storage::AuditRepository`).
 class AuditSink {
 public:
   AuditSink() = default;
@@ -95,24 +63,18 @@ public:
   AuditSink(AuditSink&&) = delete;
   AuditSink& operator=(AuditSink&&) = delete;
 
-  /// Record `event` to the underlying sink. The contract is "by the
-  /// time the awaitable resolves, the event is durable enough for
-  /// the implementer's semantics" — for the storage backend that
-  /// means the SQLite WAL commit completed; for the recording sink
-  /// it means the in-memory vector has been appended.
+  /// Resolves once `event` is as durable as the sink promises: committed for
+  /// `StorageAuditSink`, appended in memory for `RecordingAuditSink`.
   [[nodiscard]] virtual async::Awaitable<core::Result<void>> record(AuditEvent event) = 0;
 };
 
-/// No-op sink. Returns success immediately and discards every event.
-/// The default for runtimes that disable auditing.
+/// Discards every event; used when auditing is disabled.
 class NullAuditSink final : public AuditSink {
 public:
   [[nodiscard]] async::Awaitable<core::Result<void>> record(AuditEvent event) override;
 };
 
-/// In-memory sink. Captures every recorded event in insertion order.
-/// Used by tests and by runtime modes where audit lives in memory only
-/// (`audit.db` disabled).
+/// Keeps every event in memory, in insertion order.
 class RecordingAuditSink final : public AuditSink {
 public:
   [[nodiscard]] async::Awaitable<core::Result<void>> record(AuditEvent event) override;
@@ -128,25 +90,15 @@ private:
   std::vector<AuditEvent> events_;
 };
 
-/// Translate a `Verdict` into the matching `AuditOutcome` (used by the
-/// rule-engine emit path). `Verdict::allow` -> `AuditOutcome::allow`;
-/// `Verdict::deny` -> `AuditOutcome::deny`; `Verdict::ask` ->
-/// `AuditOutcome::ask`. Approval-flow callsites overwrite `outcome` to
-/// `approved` or `rejected` after the broker finishes.
+/// Maps a verdict to its outcome before approval changes it.
 [[nodiscard]] constexpr AuditOutcome verdict_to_outcome(Verdict verdict) noexcept {
   return core::parse_enum<AuditOutcome>(core::enum_name(verdict)).value_or(AuditOutcome::deny);
 }
 
-/// Build a partial `AuditEvent` from a `Decision`. Fills `verdict`,
-/// `outcome`, and `reason`; the caller fills tool/identity/scope/
-/// input_hash/metadata. Useful so callsites can write the boilerplate
-/// in one line instead of mirroring `Decision`'s fields manually.
+/// Fills verdict, outcome and reason; callers supply the remaining fields.
 [[nodiscard]] AuditEvent make_audit_event_from_decision(const Decision& decision);
 
-/// Encode a 32-byte SHA-256 digest as 64-char lowercase hex — the
-/// wire spelling the storage adapter ingests. Exposed so callsites
-/// (and tests) can produce the same encoding without rolling their
-/// own hex encoder.
+/// Encodes a SHA-256 digest as the lowercase hex stored in audit rows.
 [[nodiscard]] std::string to_hex(std::span<const std::byte, 32> input_hash);
 
 }  // namespace orangutan::permission
