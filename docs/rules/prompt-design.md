@@ -27,6 +27,10 @@ The loop selects one owned, sorted catalogue through `tool::select_tools`.
 Both protocols receive descriptions and schemas through
 `provider::Request::tools`. System text contains no duplicate native definitions.
 The [tool contract](../design-docs/tool-runtime.md) owns selection and authority.
+Session handoffs enter typed conversation as derived historical context. Their
+separate tool-free summarization requests have their own system instructions and
+no stable-prefix cache hint. They never mutate the main turn's prefix or catalogue;
+[agent execution](../design-docs/agent-platform.md) owns their shape and budget.
 
 `RenderedPrompt` holds `system_prompt`, `tool_catalog_hash`, `prefix_hash` and
 `prefix_bytes`. The native fingerprint includes ordered names, descriptions and

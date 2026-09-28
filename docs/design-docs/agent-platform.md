@@ -7,9 +7,9 @@ composes persisted context, scoped memory recall and explicit permission policy.
 ## Turn Contract
 
 1. Resolve the agent/session identity and permission policy before execution.
-2. Load bounded history, retain complete exchanges and load the scoped memory index.
+2. Load a checkpoint and forward history pages; prepare bounded context and the scoped memory index.
 3. Select native tools and render one deterministic system prefix for the turn.
-4. Request a provider response. Tool-use responses dispatch through one scheduler
+4. Check the context budget before each provider request. Tool-use responses dispatch through one scheduler
    and registry; append their ordered results and request the next response.
 5. Return terminal text and typed content. Persist only the successful transcript
    suffix. Provider/tool/cancellation failures are explicit errors.
@@ -42,9 +42,11 @@ publishes provider hooks and writes the single terminal trace for every exit.
 A cancelled exit shields cleanup and records its cancellation phase; a failed
 trace write annotates the turn error without replacing it.
 
-Persisted history loads at most 128 rows and 512 KiB of encoded content/metadata.
-An incomplete leading exchange is removed before model submission. Stored rows
-remain intact.
+The provider view is separate from the authoritative transcript. Persisted history
+loads forward from the checkpoint in pages of at most 64 rows/512 KiB. Sequence
+gaps and an oversized first row fail explicitly; the runtime never skips data.
+Each page feeds a bounded view before the next page is loaded. Within a turn,
+original user, assistant and tool messages remain intact for persistence.
 
 `RunTurnInputs` supplies an available tool catalogue and optional active names.
 The loop selects and owns a sorted native catalogue once, before provider
@@ -62,11 +64,48 @@ New trace rows store the native definition fingerprint in `active_catalog_hash`
 and zero in the retired `deferred_catalog_hash` column. Existing trace rows and
 schema versions remain intact.
 
-[`prepare_conversation`](../../include/oran/agent/conversation.hpp) takes owned
-history and prompt values, removes the incomplete leading exchange and returns
-`PreparedConversation`. Its `history_size` marks the first message to persist after
-success. It requires no services or clock. Provider, tool and storage coordination
-stays in the session runner. Automatic memory orientation uses the same
+`RunTurnInputs` accepts a checkpoint, fixed history end and borrowed forward
+reader. `RunTurnResult::transcript` contains the supplied new conversation and
+original generated messages, never synthetic summaries or loaded history. Its
+checkpoint is provisional until session persistence succeeds.
+
+## Context Compaction
+
+`ContextOptions` defaults to a 131072-token total budget and an 8192-byte summary.
+The host must select a budget that fits every configured route target. Input
+counting accepts a host tokenizer; the dependency-free default conservatively
+counts UTF-8 bytes plus message/block/tool framing allowances. It is an estimate,
+not an exact protocol tokenizer. Output and thinking reserves count toward the
+budget, reserving the largest thinking allowance across the route. Compaction
+starts above 75% and selects an older complete prefix aiming for 50%, retaining
+the newest group verbatim. Tool calls and all matching results
+stay together, including groups crossing history pages.
+
+A separate tool-free, non-streaming provider request produces six bounded sections:
+Objective, Constraints, Decisions, Completed, Pending and References. Source
+sequence labels support artifact/evidence references. The request uses the existing
+execution route, retries, lifecycle hooks and usage accounting, with thinking
+disabled for summarization. Structural validation checks complete termination,
+UTF-8, required nonempty sections, the byte cap and absence of tool calls.
+
+The handoff enters conversation as explicitly derived historical context, not
+system instructions or authority. Native tools and the system prefix remain fixed
+for the turn. New instructions and evidence supersede the handoff. Compaction does
+not write cross-session notes. A soft failure retains the original view and defers
+retry until hard pressure; hard failure or an indivisible oversized exchange
+returns `reason=context_budget`. Cancellation propagates, and all original stored
+rows survive. Provider failures retain their original error kind.
+
+This adopts log/view separation and complete-group cuts from
+[OpenHands](https://github.com/OpenHands/software-agent-sdk/tree/main/openhands-sdk/openhands/sdk/context/condenser),
+incremental coverage from
+[LangMem](https://github.com/langchain-ai/langmem/blob/main/src/langmem/short_term/summarization.py),
+and preservation of user corrections, restrictions and unresolved work from the
+[reference summary prompt](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/agent-prompt-conversation-summarization.md).
+Repeated summarization can lose meaning; controlled tests prove the runtime path,
+while deployment-model evaluation must measure task/constraint retention.
+
+Automatic memory orientation uses the same
 authorized dispatch path as model-requested reads. Model-directed exact-ID reads,
 topic search and same-turn correction writes use the ordinary tool loop; the
 [memory contract](memory-system.md) owns their behavior. Do not add mutable application registries or

@@ -1,5 +1,7 @@
 // src/oran-storage/sqlite.cpp — expected-only SQLite core implementation.
 
+#include <filesystem>
+
 #include <oran/storage/sqlite.hpp>
 
 #include <cstddef>
@@ -395,6 +397,29 @@ void Connection::close() noexcept {
   impl_.reset();
 }
 
+core::Result<void> Connection::backup_to(std::string_view destination) {
+  std::error_code ec;
+  const auto path = std::filesystem::path{destination};
+  if (destination.empty() || std::filesystem::exists(path, ec) || ec)
+    return std::unexpected(core::Error::invalid_argument("backup requires a new destination path"));
+  auto statement = prepare("VACUUM main INTO ?");
+  if (!statement)
+    return std::unexpected(statement.error());
+  if (auto bound = statement->bind_all(destination); !bound)
+    return std::unexpected(bound.error());
+  if (auto done = statement->expect_done("backup"); !done)
+    return std::unexpected(done.error());
+  auto copy = Connection::open({.path = path.string(), .mode = OpenMode::read_only, .enable_wal = false});
+  if (!copy)
+    return std::unexpected(copy.error());
+  auto integrity = copy->query("PRAGMA integrity_check");
+  if (!integrity)
+    return std::unexpected(integrity.error());
+  if (integrity->rows.size() != 1 || integrity->rows[0].values.size() != 1 || integrity->rows[0].values[0] != "ok")
+    return std::unexpected(core::Error::storage("backup integrity check failed"));
+  return {};
+}
+
 core::Result<void> Connection::execute(std::string_view sql) {
   if (!is_open()) {
     return std::unexpected(closed_error());
@@ -495,7 +520,8 @@ core::Result<std::string> Statement::required_text(int index, std::string_view f
     return std::unexpected(std::move(value).error().with("field", std::string{field}));
   }
   if (!*value) {
-    return std::unexpected(core::Error::storage("sqlite row has null required field").with("field", std::string{field}));
+    return std::unexpected(
+        core::Error::storage("sqlite row has null required field").with("field", std::string{field}));
   }
   return **std::move(value);
 }

@@ -46,10 +46,13 @@ headers. Provider owns endpoint construction values and `SecretLookup` in
 
 ## Session Boundary
 
-`AgentSession` loads bounded history, prepares an owned conversation through
-`agent::prepare_conversation`, drives `agent::Loop`, and appends the successful
-transcript suffix atomically through `Store::append_all`. The prepared value
-records the history boundary independently of storage. The session borrows the
+`AgentSession` loads a working checkpoint and fixed history end, supplies a
+bounded forward reader to `agent::Loop`, and appends its original successful
+transcript suffix and provisional checkpoint atomically through `Store::append_all`.
+The reader hops onto the blocking executor; the loop owns the compacted provider
+view. Without storage, the session retains original history and its checkpoint in
+memory. Host `AgentSessionOptions::context` supplies the route-wide budget,
+summary byte cap and optional input tokenizer; children inherit those options. The session borrows the
 provider backend directly; the loop invokes provider execution for retries,
 attribution and pricing. The session resolves
 `memory.longterm.recall` from configuration and loads the scoped index through

@@ -20,8 +20,10 @@ correct it when new evidence arrives, and make the correction available later.
 A note should hold one useful lesson. Its title names the topic; its opening
 sentence states the fact; the body explains why it matters and when to apply it.
 The index derives a cue from existing content, so old records need no rewrite.
-Temporary progress stays in the conversation. There is no persisted working
-summary or automatic transcript compaction yet.
+Temporary progress stays session-scoped. A derived working-context checkpoint
+preserves the active task when older exchanges leave the provider view; it never
+becomes a durable note automatically. The [agent contract](agent-platform.md)
+owns compaction policy and model requests.
 
 ## Consultation And Learning
 
@@ -52,8 +54,8 @@ is a third-party extraction used to inform same-turn correction handling.
 separates thread state from cross-thread knowledge and explains the cost of
 foreground versus background learning. The current implementation uses one
 foreground write path. OpenHands' [condenser design](https://github.com/OpenHands/software-agent-sdk/blob/main/openhands-sdk/openhands/sdk/context/condenser/README.md)
-informs the separation of preserved history from a bounded model view; its
-compaction mechanism is not implemented here.
+informs the separation of preserved history from a bounded model view. Orangutan's
+session checkpoint and compaction policy are owned by the agent contract.
 
 ## Prompt Boundary
 
@@ -88,15 +90,32 @@ memory and transactions owned by storage.
 byte limits. Defaults are 128 rows and 512 KiB; valid limits are 1–4096 rows and
 1–16 MiB. Counting includes content and metadata bytes. Stop at the first row
 that does not fit, preserving a contiguous suffix. The full history remains in
-SQLite. The agent removes an incomplete leading exchange before prompt assembly.
+SQLite. This remains a bounded browsing API; agent continuation uses forward pages from
+its checkpoint so older task context cannot silently disappear.
 
 `Store::append_all` serializes an entire transcript suffix before the repository
 acquires its writer. Serialization or storage failure leaves the preceding
 conversation intact; success appends every message in order. Single-message
-`append` uses the same path. An empty suffix has no effect. Message encoding and
+`append` uses the same path. An empty suffix without a checkpoint has no effect. Message encoding and
 existing tables are preserved. Individual memory-tool effects commit under their
 own dispatch contract and are not rolled back with a failed transcript commit.
-Explicit import mapping remains tracked persistence work.
+Session import maps source and destination session/agent keys explicitly through
+the storage repository; it does not import or remap long-term memory scopes.
+
+## Working Context
+
+`Store::load_context` reads a fixed history end and the optional working checkpoint
+from reserved `sessions.metadata_json.oran_working_context`. The checkpoint carries
+`covered_sequence`, `revision` and the bounded handoff text. Absent checkpoints
+start at sequence zero. Invalid metadata, coverage or revisions fail explicitly.
+`load_after` reads bounded pages after that sequence without discarding older rows.
+
+`append_all` can accept the loaded snapshot and a provisional checkpoint. It
+serializes the whole suffix before acquiring a writer, checks the prior message
+count/revision and atomically commits both suffix and checkpoint. Conflicts or
+failures leave both unchanged. Checkpoints covering unfinished work are never
+persisted independently. Other session metadata fields remain intact, and no new
+schema or long-term memory format is introduced.
 
 ## Scoped Reads And Records
 
@@ -193,6 +212,7 @@ answer; an assertion that the model "remembers" is not persistence evidence.
 
 Record consultation success, durable-write success, stale-note use, unwanted
 writes and token cost across repeated runs of the deployment model. Semantic
-retrieval, background reflection and compaction need evidence from these failures
-before extending the runtime. Pending gates live in
+retrieval and background reflection need evidence from these failures before
+extending the runtime. Session compaction separately needs deployment-model
+measurements of goal retention, constraint loss and summary drift. Pending gates live in
 [live debt](../exec-plans/tech-debt-tracker.md).

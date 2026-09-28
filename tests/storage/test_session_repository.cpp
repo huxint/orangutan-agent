@@ -202,15 +202,22 @@ TEST_CASE("SessionRepository reopening preserves saved session data while append
 
     auto reader = co_await pool.acquire_reader();
     REQUIRE(reader.has_value());
-    auto skills = reader->connection().query(
-        "SELECT session_id, agent_key, skill_name, active, created_at, updated_at "
-        "FROM session_skill_activations ORDER BY session_id");
+    auto skills = reader->connection().query("SELECT session_id, agent_key, skill_name, active, created_at, updated_at "
+                                             "FROM session_skill_activations ORDER BY session_id");
     REQUIRE(skills.has_value());
     REQUIRE(skills->rows.size() == 2);
-    REQUIRE(skills->rows[0].values == std::vector<storage::ColumnValue>{
-        "s-kept", "coder", "release-note", "0", "2000-01-01T00:00:00Z", "2001-01-01T00:00:00Z"});
-    REQUIRE(skills->rows[1].values == std::vector<storage::ColumnValue>{
-        "s-other", "researcher", "review-pr", "1", "2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z"});
+    REQUIRE(skills->rows[0].values == std::vector<storage::ColumnValue>{"s-kept",
+                                                                        "coder",
+                                                                        "release-note",
+                                                                        "0",
+                                                                        "2000-01-01T00:00:00Z",
+                                                                        "2001-01-01T00:00:00Z"});
+    REQUIRE(skills->rows[1].values == std::vector<storage::ColumnValue>{"s-other",
+                                                                        "researcher",
+                                                                        "review-pr",
+                                                                        "1",
+                                                                        "2000-01-01T00:00:00Z",
+                                                                        "2000-01-01T00:00:00Z"});
   });
 }
 
@@ -524,5 +531,124 @@ TEST_CASE("SessionRepository leaves storage untouched for empty or invalid suffi
       REQUIRE_FALSE(appended.has_value());
       REQUIRE(appended.error().kind() == core::ErrorKind::invalid_argument);
     }
+  });
+}
+
+TEST_CASE("Session checkpoints commit with suffixes and reject stale writers", "[storage][context]") {
+  TempDb db{"oran-context-commit"};
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_pool(io, db);
+    storage::SessionRepository repo{pool};
+    auto migrated = co_await repo.migrate();
+    REQUIRE(migrated);
+    storage::SessionKey key{"session", "agent"};
+    std::vector<storage::SessionMessageInput> seed{{.content_json = "first"}};
+    auto seeded = co_await repo.append_messages(key, seed);
+    REQUIRE(seeded);
+    {
+      auto writer = co_await pool.acquire_writer();
+      REQUIRE(writer);
+      auto metadata = writer->connection().execute("UPDATE sessions SET metadata_json='{\"pinned\":true}'");
+      REQUIRE(metadata);
+    }
+    storage::SessionCommit checkpoint{.expected_messages = 1,
+                                      .expected_revision = 0,
+                                      .checkpoint_json = R"({"covered_sequence":2,"revision":1,"summary":"handoff"})"};
+    auto committed = co_await repo.append_messages(key, seed, checkpoint);
+    REQUIRE(committed);
+    auto session = co_await repo.get_session(key);
+    REQUIRE(session);
+    REQUIRE(*session);
+    REQUIRE((**session).message_count == 2);
+    REQUIRE((**session).metadata_json.contains("\"pinned\":true"));
+    REQUIRE((**session).metadata_json.contains("handoff"));
+    auto stale = co_await repo.append_messages(key, seed, checkpoint);
+    REQUIRE_FALSE(stale);
+    REQUIRE(stale.error().kind() == core::ErrorKind::conflict);
+    checkpoint.expected_messages = 2;
+    checkpoint.expected_revision = 1;
+    checkpoint.checkpoint_json = R"({"covered_sequence":999,"revision":2,"summary":"bad"})";
+    auto invalid = co_await repo.append_messages(key, seed, checkpoint);
+    REQUIRE_FALSE(invalid);
+    auto unchanged = co_await repo.get_session(key);
+    REQUIRE(unchanged);
+    REQUIRE((**unchanged).message_count == 2);
+    REQUIRE((**unchanged).metadata_json == (**session).metadata_json);
+    auto first = co_await repo.load_after(key, 0, 2, 1, 32);
+    REQUIRE(first);
+    REQUIRE(first->size() == 1);
+    REQUIRE(first->front().sequence == 1);
+    auto second = co_await repo.load_after(key, 1, 2, 1, 32);
+    REQUIRE(second);
+    REQUIRE(second->front().sequence == 2);
+    auto oversized = co_await repo.load_after(key, 0, 2, 1, 1);
+    REQUIRE_FALSE(oversized);
+  });
+}
+
+TEST_CASE("Session backup includes WAL rows and import preserves explicit identities", "[storage][context][backup]") {
+  TempDb db{"oran-context-source"};
+  TempDb backup{"oran-context-backup"};
+  TempDb imported{"oran-context-import"};
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    auto source_pool = open_pool(io, db);
+    storage::SessionRepository source{source_pool};
+    auto migrated = co_await source.migrate();
+    REQUIRE(migrated);
+    storage::SessionKey source_key{"original", "coder"};
+    std::vector<storage::SessionMessageInput> messages{
+        {.content_json = "saved", .metadata_json = R"({"origin":"user"})"}};
+    auto saved = co_await source.append_messages(source_key, messages);
+    REQUIRE(saved);
+    {
+      auto writer = co_await source_pool.acquire_writer();
+      REQUIRE(writer);
+      auto seeded = writer->connection().execute(R"sql(
+UPDATE sessions SET title='Keep title',metadata_json='{"pinned":true,"oran_working_context":{"covered_sequence":1,"revision":1,"summary":"saved summary"}}';
+INSERT INTO session_skill_activations VALUES('original','coder','build',1,'created','updated');
+)sql");
+      REQUIRE(seeded);
+    }
+    auto copied = co_await source.backup_to(backup.string());
+    REQUIRE(copied);
+    auto overwrite = co_await source.backup_to(backup.string());
+    REQUIRE_FALSE(overwrite);
+    auto later = co_await source.append_messages(source_key, messages);
+    REQUIRE(later);
+    auto target_pool = open_pool(io, imported);
+    storage::SessionRepository target{target_pool};
+    auto target_migrated = co_await target.migrate();
+    REQUIRE(target_migrated);
+    storage::SessionKey target_key{"restored", "reviewer"};
+    auto restored = co_await target.import_session(backup.string(), source_key, target_key);
+    REQUIRE(restored);
+    auto rows = co_await target.load_messages(target_key);
+    REQUIRE(rows);
+    REQUIRE(rows->size() == 1);
+    REQUIRE(rows->front().session_id == "restored");
+    REQUIRE(rows->front().agent_key == "reviewer");
+    REQUIRE(rows->front().content_json == "saved");
+    REQUIRE(rows->front().metadata_json == messages[0].metadata_json);
+    auto metadata = co_await target.get_session(target_key);
+    REQUIRE(metadata);
+    REQUIRE((**metadata).title == "Keep title");
+    REQUIRE((**metadata).metadata_json.contains("saved summary"));
+    auto duplicate = co_await target.import_session(backup.string(), source_key, target_key);
+    REQUIRE_FALSE(duplicate);
+    REQUIRE(duplicate.error().kind() == core::ErrorKind::conflict);
+    storage::SessionKey absent{"absent", "coder"};
+    storage::SessionKey empty_destination{"empty", "coder"};
+    auto missing = co_await target.import_session(backup.string(), absent, empty_destination);
+    REQUIRE_FALSE(missing);
+    auto no_partial = co_await target.get_session(empty_destination);
+    REQUIRE(no_partial);
+    REQUIRE_FALSE(*no_partial);
+    auto reader = co_await target_pool.acquire_reader();
+    REQUIRE(reader);
+    auto skills = reader->connection().query("SELECT session_id,agent_key,skill_name FROM session_skill_activations");
+    REQUIRE(skills);
+    REQUIRE(skills->rows.size() == 1);
+    REQUIRE(skills->rows[0].values[0] == "restored");
+    REQUIRE(skills->rows[0].values[1] == "reviewer");
   });
 }

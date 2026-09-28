@@ -255,8 +255,11 @@ async::Awaitable<core::Result<void>> Store::append(SessionId session_id, AgentKe
   co_return co_await append_all(std::move(session_id), std::move(agent_key), std::span{&message, 1});
 }
 
-async::Awaitable<core::Result<void>>
-Store::append_all(SessionId session_id, AgentKey agent_key, std::span<const core::Message> messages) {
+async::Awaitable<core::Result<void>> Store::append_all(SessionId session_id,
+                                                       AgentKey agent_key,
+                                                       std::span<const core::Message> messages,
+                                                       std::optional<ContextSnapshot> expected,
+                                                       core::WorkingContext checkpoint) {
   if (auto valid = validate_key(session_id.value, agent_key.value); !valid) {
     co_return std::unexpected(std::move(valid).error());
   }
@@ -272,12 +275,70 @@ Store::append_all(SessionId session_id, AgentKey agent_key, std::span<const core
                                   .with("index", std::to_string(encoded.size())));
   }
 
-  auto appended =
-      co_await repository_->append_messages(key_from(std::move(session_id), std::move(agent_key)), std::move(encoded));
+  std::optional<storage::SessionCommit> commit;
+  if (expected) {
+    try {
+      commit = storage::SessionCommit{.expected_messages = expected->message_count,
+                                      .expected_revision = expected->checkpoint.revision,
+                                      .checkpoint_json = json{{"covered_sequence", checkpoint.covered_sequence},
+                                                              {"revision", checkpoint.revision},
+                                                              {"summary", checkpoint.summary}}
+                                                             .dump()};
+    } catch (const json::exception&) {
+      co_return std::unexpected(core::Error::parsing("checkpoint cannot be serialized"));
+    }
+  }
+  auto appended = co_await repository_->append_messages(key_from(std::move(session_id), std::move(agent_key)),
+                                                        std::move(encoded),
+                                                        std::move(commit));
   if (!appended) {
     co_return std::unexpected(std::move(appended).error());
   }
   co_return core::Result<void>{};
+}
+
+async::Awaitable<core::Result<ContextSnapshot>> Store::load_context(SessionId session_id, AgentKey agent_key) {
+  auto record = co_await repository_->get_session(key_from(std::move(session_id), std::move(agent_key)));
+  if (!record)
+    co_return std::unexpected(record.error());
+  if (!*record)
+    co_return ContextSnapshot{};
+  ContextSnapshot result{.checkpoint = {}, .message_count = (**record).message_count};
+  try {
+    auto metadata = json::parse((**record).metadata_json);
+    if (!metadata.is_object())
+      co_return std::unexpected(core::Error::storage("session metadata must be an object"));
+    if (metadata.contains("oran_working_context")) {
+      const auto& context = metadata.at("oran_working_context");
+      if (!context.at("covered_sequence").is_number_integer() || !context.at("revision").is_number_integer())
+        co_return std::unexpected(core::Error::storage("invalid checkpoint sequence or revision"));
+      result.checkpoint = {.covered_sequence = context.at("covered_sequence").get<std::int64_t>(),
+                           .revision = context.at("revision").get<std::int64_t>(),
+                           .summary = context.at("summary").get<std::string>()};
+      if (result.checkpoint.covered_sequence < 0 || result.checkpoint.covered_sequence > result.message_count ||
+          result.checkpoint.revision < 0 || result.checkpoint.summary.size() > 65536 ||
+          (result.checkpoint.covered_sequence > 0 && result.checkpoint.summary.empty()))
+        co_return std::unexpected(core::Error::storage("invalid session checkpoint"));
+    }
+  } catch (const json::exception&) {
+    co_return std::unexpected(core::Error::storage("invalid session checkpoint metadata"));
+  }
+  co_return result;
+}
+
+async::Awaitable<core::Result<std::vector<core::Message>>>
+Store::load_after(SessionId session_id, AgentKey agent_key, std::int64_t after, std::int64_t through) {
+  auto rows = co_await repository_->load_after(key_from(std::move(session_id), std::move(agent_key)), after, through);
+  if (!rows)
+    co_return std::unexpected(rows.error());
+  std::vector<core::Message> messages;
+  for (const auto& row : *rows) {
+    auto message = message_from_json(row);
+    if (!message)
+      co_return std::unexpected(message.error());
+    messages.push_back(std::move(*message));
+  }
+  co_return messages;
 }
 
 async::Awaitable<core::Result<std::vector<core::Message>>> Store::load(SessionId session_id, AgentKey agent_key) {

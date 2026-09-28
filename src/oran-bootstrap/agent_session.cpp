@@ -166,19 +166,17 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<Result<agent::PromptResult>> run_prompt(agent::PromptRequest request) {
-    auto history = std::vector<core::Message>{};
     auto* store = options_.assembly->session_store();
+    memory::session::ContextSnapshot snapshot{.checkpoint = checkpoint_,
+                                              .message_count = static_cast<std::int64_t>(transcript_.size())};
     if (store != nullptr) {
       auto loaded = co_await asio::co_spawn(options_.blocking_executor,
-                                            store->load_tail(memory::session::SessionId{.value = session_id_text_},
-                                                             memory::session::AgentKey{.value = options_.agent_key}),
+                                            store->load_context(memory::session::SessionId{.value = session_id_text_},
+                                                                memory::session::AgentKey{.value = options_.agent_key}),
                                             asio::use_awaitable);
-      if (!loaded) {
-        co_return std::unexpected(std::move(loaded).error());
-      }
-      history = std::move(*loaded);
-    } else {
-      history = transcript_;
+      if (!loaded)
+        co_return std::unexpected(loaded.error());
+      snapshot = std::move(*loaded);
     }
 
     auto context = tool::DispatchContext::for_now(options_.blocking_executor,
@@ -211,7 +209,7 @@ public:
       }
       memory_framing = std::move(*recalled);
     }
-    auto conversation = agent::prepare_conversation(std::move(history), std::move(request.prompt));
+    auto conversation = std::vector{core::Message::user_text(std::move(request.prompt))};
     auto catalog = registry_->catalog();
     if (!context.agent_run) {
       std::erase_if(catalog, [](const auto& definition) { return definition.name == tool::AGENT_RUN_NAME; });
@@ -226,7 +224,22 @@ public:
         .active_tools = active_tools,
         .memory_framing = memory_framing,
         .per_agent_overlay = options_.per_agent_overlay,
-        .conversation_tail = conversation.messages,
+        .conversation_tail = conversation,
+        .context = options_.context,
+        .checkpoint = snapshot.checkpoint,
+        .history_end = snapshot.message_count,
+        .history_loader = [this, store, end = snapshot.message_count](
+                              std::int64_t after) -> async::Awaitable<Result<std::vector<core::Message>>> {
+          if (store)
+            co_return co_await asio::co_spawn(options_.blocking_executor,
+                                              store->load_after(memory::session::SessionId{.value = session_id_text_},
+                                                                memory::session::AgentKey{.value = options_.agent_key},
+                                                                after,
+                                                                end),
+                                              asio::use_awaitable);
+          const auto limit = std::min(end, after + 64);
+          co_return std::vector<core::Message>{transcript_.begin() + after, transcript_.begin() + limit};
+        },
         .tool_choice = options_.tool_choice,
         .max_tokens = options_.max_tokens,
         .thinking_budget = options_.thinking_budget,
@@ -273,18 +286,22 @@ public:
       co_return std::unexpected(std::move(result).error());
     }
     if (store != nullptr) {
-      auto persisted =
-          co_await asio::co_spawn(options_.blocking_executor,
-                                  store->append_all(memory::session::SessionId{.value = session_id_text_},
-                                                    memory::session::AgentKey{.value = options_.agent_key},
-                                                    std::span{result->transcript}.subspan(conversation.history_size)),
-                                  asio::use_awaitable);
+      auto persisted = co_await asio::co_spawn(options_.blocking_executor,
+                                               store->append_all(memory::session::SessionId{.value = session_id_text_},
+                                                                 memory::session::AgentKey{.value = options_.agent_key},
+                                                                 std::span{result->transcript},
+                                                                 snapshot,
+                                                                 result->checkpoint),
+                                               asio::use_awaitable);
       if (!persisted) {
         co_return std::unexpected(std::move(persisted).error());
       }
     }
     if (store == nullptr) {
-      transcript_ = std::move(result->transcript);
+      transcript_.insert(transcript_.end(),
+                         std::make_move_iterator(result->transcript.begin()),
+                         std::make_move_iterator(result->transcript.end()));
+      checkpoint_ = std::move(result->checkpoint);
     }
     co_return agent::PromptResult{.text = std::move(result->text)};
   }
@@ -305,6 +322,7 @@ private:
   config::PromptActiveToolsConfig active_tools_;
   std::string session_id_text_;
   std::vector<core::Message> transcript_;
+  core::WorkingContext checkpoint_;
 };
 
 core::Result<std::unique_ptr<AgentSession>> AgentSession::create(AgentSessionOptions options) {
@@ -317,6 +335,8 @@ core::Result<std::unique_ptr<AgentSession>> AgentSession::create(AgentSessionOpt
         .kinds = recall.kinds,
     };
   }
+  if (auto valid = agent::validate_context_options(options.context); !valid)
+    return std::unexpected(valid.error());
   if (auto valid = validate_options(options); !valid) {
     return std::unexpected(std::move(valid).error());
   }

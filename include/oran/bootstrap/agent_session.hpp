@@ -10,6 +10,7 @@
 
 #include <asio/any_io_executor.hpp>
 
+#include <oran/agent/context.hpp>
 #include <oran/agent/prompt.hpp>
 #include <oran/agent/scheduler.hpp>
 #include <oran/core/result.hpp>
@@ -55,6 +56,7 @@ struct AgentSessionOptions {
   std::optional<std::string> tool_choice{std::string{"auto"}};
   std::optional<std::uint32_t> max_tokens{4096};
   std::optional<std::uint32_t> thinking_budget{};
+  agent::ContextOptions context{};
   provider::RetryPolicy retry{};
   bool stream{true};
   core::TurnId session_id{};

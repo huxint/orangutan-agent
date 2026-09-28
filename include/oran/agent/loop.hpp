@@ -10,6 +10,7 @@
 
 #include <asio/any_io_executor.hpp>
 
+#include <oran/agent/context.hpp>
 #include <oran/async/awaitable_fwd.hpp>
 #include <oran/core/content.hpp>
 #include <oran/core/message.hpp>
@@ -17,6 +18,7 @@
 #include <oran/core/stop_reason.hpp>
 #include <oran/core/tool_def.hpp>
 #include <oran/core/turn_id.hpp>
+#include <oran/core/working_context.hpp>
 #include <oran/prompt/render.hpp>
 #include <oran/provider/system.hpp>
 #include <oran/provider/types.hpp>
@@ -76,6 +78,12 @@ struct RunTurnInputs {
   /// these messages into the provider request; the span only needs to remain
   /// valid until the coroutine is awaited to completion.
   std::span<const core::Message> conversation_tail{};
+  ContextOptions context{};
+  core::WorkingContext checkpoint{};
+  std::int64_t history_end{};
+  /// Forward reader over a fixed persisted snapshot, starting after sequence.
+  /// Returns a bounded nonempty page until history_end is reached.
+  std::function<async::Awaitable<core::Result<std::vector<core::Message>>>(std::int64_t)> history_loader{};
   std::optional<std::string> tool_choice{};
   std::optional<std::uint32_t> max_tokens{};
   std::optional<std::uint32_t> thinking_budget{};
@@ -118,9 +126,11 @@ struct RunTurnResult {
   /// Owned system text and cache identity shared by this turn's iterations.
   prompt::RenderedPrompt rendered_prompt{};
   std::uint32_t iterations{0};
-  /// Complete transcript tail, including the terminal assistant response.
-  /// The session persists the suffix after its prepared history boundary.
+  /// Original conversation_tail plus new responses/results; excludes loaded
+  /// history and synthetic summaries. Session callers supply only the new user
+  /// request and persist this suffix atomically with the checkpoint.
   std::vector<core::Message> transcript;
+  core::WorkingContext checkpoint;
 };
 
 class Loop {
@@ -137,7 +147,7 @@ public:
   /// scheduler. Borrowed context and trace services must outlive the turn and
   /// its tool cleanup. Cancellation during provider or tool work is surfaced as
   /// `ErrorKind::cancelled` with `reason=parent_cancelled` plus
-  /// `cancellation_phase=provider_initial|provider_stream|provider_complete|tools`;
+  /// `cancellation_phase=provider_initial|provider_stream|provider_complete|tools|context`;
   /// when a trace context is configured, the same phase is persisted before
   /// the cancelled result is returned.
   /// When `LoopOptions::max_iterations` is exhausted by repeated tool_use

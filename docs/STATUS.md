@@ -25,7 +25,9 @@ filesystem authority. Memory tools and AgentRun use the same dispatch gates.
 Unknown tool selections fail before provider work; visibility grants no authority.
 Path locks follow live holders and waiters, and cancellation joins borrowed work.
 
-Sessions load bounded history and a scoped memory index. Exact reads, lexical
+Sessions load a working checkpoint, forward history pages and a scoped memory index.
+The provider view compacts older complete exchanges under context pressure;
+original transcript suffixes and checkpoint coverage commit together. Exact reads, lexical
 search and same-turn note corrections run through memory tools. Successful
 transcript suffixes serialize before acquiring the writer and commit atomically.
 Browsing does not update read timestamps; corrections preserve record history.
@@ -61,10 +63,10 @@ cover denied effects, atomic persistence, scoped recall, fallback attribution,
 cost, stable prompt snapshots and joined cancellation. These checks establish
 runtime behavior, not spontaneous memory use or service-side cache hits.
 
-[Live debt](exec-plans/tech-debt-tracker.md) tracks session working memory,
-backup/import tooling, shell execution, real-model memory evaluation, hosted
-quality jobs and reference-hardware compile budgets. Persisted working context
-needs backup/import boundaries first. Real-model evaluation uses explicitly
+[Live debt](exec-plans/tech-debt-tracker.md) tracks broader memory import mappings,
+durable-note provenance, shell execution, real-model memory/context evaluation,
+hosted quality jobs and reference-hardware compile budgets. SQLite snapshots and
+explicit session imports support recovery without rewriting original records. Real-model evaluation uses explicitly
 supplied credentials.
 
 Run the normal release gate from the repository root:

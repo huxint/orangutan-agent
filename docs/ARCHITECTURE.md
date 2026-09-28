@@ -13,9 +13,10 @@ operate on explicit values. They do not discover configuration or start work.
 Provider, filesystem and SQLite operations are effect boundaries coordinated by
 Asio. RAII owns resources; cancellation requests are followed by a lifetime join.
 
-Conversation preparation returns an owned value and a persistence boundary.
-The session coordinator loads history and the scoped memory index, runs a turn and
-persists its completed suffix. Memory adapters borrow explicit storage services.
+The session coordinator loads a checkpoint and scoped memory index, supplies a
+bounded forward history reader, runs a turn and atomically persists its completed
+suffix and checkpoint. The loop keeps a compacted provider view separate from the
+original messages it returns for persistence. Memory adapters borrow explicit storage services.
 Tool selection and pure prompt rendering produce one owned catalogue and stable
 system prefix per turn. Native declarations contribute to the fingerprint;
 conversation stays in typed messages. New abstractions must express a current

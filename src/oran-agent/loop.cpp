@@ -25,6 +25,7 @@
 #include <oran/tool/catalog.hpp>
 #include <oran/tool/registry.hpp>
 
+#include "context.hpp"
 #include "turn_observer.hpp"
 
 namespace orangutan::agent {
@@ -273,6 +274,15 @@ public:
       inputs.turn_id = *generated;
     }
 
+    if (auto valid = validate_context_options(inputs.context); !valid)
+      co_return std::unexpected(valid.error());
+    if (inputs.checkpoint.covered_sequence < 0 || inputs.checkpoint.covered_sequence > inputs.history_end ||
+        inputs.checkpoint.revision < 0 || (inputs.checkpoint.covered_sequence > 0 && inputs.checkpoint.summary.empty()))
+      co_return std::unexpected(core::Error::invalid_argument("invalid context coverage"));
+    if (!inputs.checkpoint.summary.empty()) {
+      if (auto valid = validate_context_summary(inputs.checkpoint.summary, inputs.context.summary_max_bytes); !valid)
+        co_return std::unexpected(valid.error());
+    }
     std::vector<core::Message> transcript{inputs.conversation_tail.begin(), inputs.conversation_tail.end()};
     auto total_usage = provider::Usage{};
     const auto started_at_ns = detail::now_epoch_ns();
@@ -296,25 +306,80 @@ public:
     // so a multi-iteration turn shares one path-lock table.
     std::optional<ToolScheduler> owned_scheduler;
 
+    detail::ContextView view{.checkpoint = inputs.checkpoint, .messages = {}};
+    auto frame = provider::Request{
+        .messages = {},
+        .system_prompt = rendered.system_prompt,
+        .tools = *native_tools,
+        .tool_choice = inputs.tool_choice,
+        .max_tokens = inputs.max_tokens,
+        .thinking_budget = thinking_budget,
+        .stream = inputs.stream,
+        .cache = provider::PromptCacheHints{.prefix_hash = rendered.prefix_hash, .prefix_bytes = rendered.prefix_bytes},
+        .retry = inputs.retry};
+    auto budget_frame = frame;
+    auto thinking_reserve = thinking_budget.value_or(0);
+    thinking_reserve = std::max(thinking_reserve, route_.primary.thinking_budget.value_or(0));
+    for (const auto& target : route_.fallbacks)
+      thinking_reserve = std::max(thinking_reserve, target.thinking_budget.value_or(0));
+    budget_frame.thinking_budget = thinking_reserve;
+    // A summary uses the same route and observations but cannot execute tools or
+    // stream private handoff text to the host's answer sink.
+    std::uint32_t context_iteration = 0;
+    const detail::SummarySender summarize =
+        [&](provider::Request request) -> async::Awaitable<core::Result<provider::Response>> {
+      auto summary_route = route_;
+      summary_route.primary.thinking_budget.reset();
+      for (auto& target : summary_route.fallbacks)
+        target.thinking_budget.reset();
+      const auto started = core::time::now_utc();
+      co_await observer.provider_request(request, context_iteration, started);
+      auto outcome = co_await provider::execution::run(provider_, std::move(request), summary_route, nullptr);
+      const auto finished = core::time::now_utc();
+      last_target = outcome.target;
+      if (!outcome.response) {
+        if (outcome.response.error().kind() == core::ErrorKind::cancelled)
+          co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+        co_await observer.provider_error(outcome.response.error(),
+                                         outcome.target,
+                                         context_iteration,
+                                         started,
+                                         finished);
+      } else {
+        co_await observer.provider_response(*outcome.response, outcome.target, context_iteration, started, finished);
+        add_usage(total_usage, outcome.response->usage);
+      }
+      co_return std::move(outcome.response);
+    };
+    auto loaded = inputs.checkpoint.covered_sequence;
+    while (loaded < inputs.history_end) {
+      if (!inputs.history_loader)
+        co_return std::unexpected(co_await observer.fail(core::Error::invalid_argument("missing history reader"),
+                                                         "context",
+                                                         {total_usage, 0, last_target}));
+      auto page = co_await inputs.history_loader(loaded);
+      if (!page || page->empty() || page->size() > static_cast<std::uint64_t>(inputs.history_end - loaded)) {
+        auto error = page ? core::Error::storage("incomplete context history page") : page.error();
+        co_return std::unexpected(co_await observer.fail(std::move(error), "context", {total_usage, 0, last_target}));
+      }
+      for (auto& message : *page) {
+        view.messages.push_back(std::move(message));
+        ++loaded;
+        if (auto fitted = co_await detail::fit_context(view, budget_frame, inputs.context, summarize); !fitted)
+          co_return std::unexpected(co_await observer.fail(fitted.error(), "context", {total_usage, 0, last_target}));
+      }
+    }
+    view.messages.insert(view.messages.end(), transcript.begin(), transcript.end());
+
     for (std::uint32_t iteration = 1; iteration <= options_.max_iterations; ++iteration) {
       const auto progress = [&] {
         return detail::TurnProgress{.usage = total_usage, .iterations = iteration, .target = last_target};
       };
-      auto request = provider::Request{
-          .messages = transcript,
-          .system_prompt = rendered.system_prompt,
-          .tools = *native_tools,
-          .tool_choice = inputs.tool_choice,
-          .max_tokens = inputs.max_tokens,
-          .thinking_budget = thinking_budget,
-          .stream = inputs.stream,
-          .cache =
-              provider::PromptCacheHints{
-                  .prefix_hash = rendered.prefix_hash,
-                  .prefix_bytes = rendered.prefix_bytes,
-              },
-          .retry = inputs.retry,
-      };
+      context_iteration = iteration;
+      if (auto fitted = co_await detail::fit_context(view, budget_frame, inputs.context, summarize); !fitted)
+        co_return std::unexpected(co_await observer.fail(fitted.error(), "context", progress()));
+      auto request = frame;
+      request.messages = detail::context_messages(view);
 
       const auto provider_started_at = core::time::now_utc();
       co_await observer.provider_request(request, iteration, provider_started_at);
@@ -344,8 +409,10 @@ public:
               co_await observer.fail(unsupported_response("tool_use response"), "tools", progress()));
         }
         if (tool_uses.empty()) {
-          co_return std::unexpected(co_await observer.fail(
-              unsupported_response("tool_use stop reason without tool blocks"), "tools", progress()));
+          co_return std::unexpected(
+              co_await observer.fail(unsupported_response("tool_use stop reason without tool blocks"),
+                                     "tools",
+                                     progress()));
         }
 
         transcript.push_back(core::Message{
@@ -353,6 +420,8 @@ public:
             .blocks = response->blocks,
             .created_at = std::nullopt,
         });
+
+        view.messages.push_back(transcript.back());
 
         // Every batch, including a single call, uses the scheduler: bounded
         // parallelism, path locks, per-call timeout and parent cancellation.
@@ -386,8 +455,10 @@ public:
         // a model-repairable error becomes an error tool_result block.
         auto tool_results = collect_tool_results(std::move(batch_result));
         if (!tool_results) {
-          co_return std::unexpected(co_await observer.fail(
-              with_cancellation_phase(std::move(tool_results).error(), "tools"), "tools", progress()));
+          co_return std::unexpected(
+              co_await observer.fail(with_cancellation_phase(std::move(tool_results).error(), "tools"),
+                                     "tools",
+                                     progress()));
         }
 
         transcript.push_back(core::Message{
@@ -395,6 +466,7 @@ public:
             .blocks = std::move(*tool_results),
             .created_at = std::nullopt,
         });
+        view.messages.push_back(transcript.back());
         continue;
       }
 
@@ -424,15 +496,16 @@ public:
           .rendered_prompt = std::move(rendered),
           .iterations = iteration,
           .transcript = std::move(transcript),
+          .checkpoint = std::move(view.checkpoint),
       };
     }
 
     auto error = iteration_cap_error(options_.max_iterations);
     if (options_.max_iterations != 0) {
-      error = co_await observer.fail(
-          std::move(error),
-          "tools",
-          {.usage = total_usage, .iterations = options_.max_iterations, .target = last_target});
+      error =
+          co_await observer.fail(std::move(error),
+                                 "tools",
+                                 {.usage = total_usage, .iterations = options_.max_iterations, .target = last_target});
     }
     co_return std::unexpected(std::move(error));
   }

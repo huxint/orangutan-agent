@@ -719,7 +719,8 @@ TEST_CASE("AgentSession exposes memory orientation by default without a recall h
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false);
     REQUIRE(assembly.longterm_memory_backend() != nullptr);
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("lt-default", "Prefer small changes with clear reasons."));
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(
+        make_longterm_record("lt-default", "Prefer small changes with clear reasons."));
     REQUIRE(upserted.has_value());
 
     RecordingProvider recording{{text_response("done")}};
@@ -746,7 +747,8 @@ TEST_CASE("AgentSession recalls long-term memory once before loop iterations",
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false);
     REQUIRE(assembly.longterm_memory_backend() != nullptr);
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("lt-recall-1", "Recall plumbing reaches the prompt boundary."));
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(
+        make_longterm_record("lt-recall-1", "Recall plumbing reaches the prompt boundary."));
     REQUIRE(upserted.has_value());
     auto foreign = make_longterm_record("foreign", "Recall plumbing belongs to another workspace.");
     foreign.key.scope_key = "scope-B";
@@ -820,7 +822,8 @@ TEST_CASE("AgentSession dispatches MemoryRecall through long-term runtime",
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false);
     REQUIRE(assembly.longterm_memory_backend() != nullptr);
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("lt-tool-recall", "Memory tool found toolrecallanchor in the project."));
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(
+        make_longterm_record("lt-tool-recall", "Memory tool found toolrecallanchor in the project."));
     REQUIRE(upserted.has_value());
     std::vector<MemoryHookCapture> hook_captures;
     auto sink = memory_capture_sink(hook_captures);
@@ -1039,7 +1042,8 @@ TEST_CASE("AgentSession dispatches MemoryForget through long-term backend",
     std::vector<MemoryHookCapture> hook_captures;
     auto sink = memory_capture_sink(hook_captures);
     assembly.hook_bus().subscribe(sink, {hook::Event::memory_forget});
-    auto upserted = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("lt-tool-forget", "Memory forget should remove forgetanchor."));
+    auto upserted = co_await assembly.longterm_memory_backend()->upsert(
+        make_longterm_record("lt-tool-forget", "Memory forget should remove forgetanchor."));
     REQUIRE(upserted.has_value());
 
     RecordingProvider recording{{
@@ -1412,7 +1416,8 @@ TEST_CASE("automatic orientation reports denied memory without leaking it or blo
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
     auto cfg = parse_config(R"({"permissions":{"deny":[{"tool_pattern":"MemoryRecall"}]}})");
     auto assembly = build_assembly(temp.path(), io, false);
-    auto saved = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("private", "Private recall content"));
+    auto saved =
+        co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("private", "Private recall content"));
     REQUIRE(saved.has_value());
     std::vector<MemoryHookCapture> captures;
     auto sink = memory_capture_sink(captures);
@@ -1527,7 +1532,8 @@ TEST_CASE("an automatic memory index cannot be rewritten into full prompt conten
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false);
-    auto seeded = co_await assembly.longterm_memory_backend()->upsert(make_longterm_record("note", "DETAIL_MUST_STAY_OUT_OF_AUTOMATIC_PREFIX"));
+    auto seeded = co_await assembly.longterm_memory_backend()->upsert(
+        make_longterm_record("note", "DETAIL_MUST_STAY_OUT_OF_AUTOMATIC_PREFIX"));
     REQUIRE(seeded.has_value());
     hook::Sink rewrite{
         .id = "rewrite-index",
@@ -1676,4 +1682,173 @@ TEST_CASE("AgentSession resumes completed history after a failed transcript comm
     REQUIRE(requests.back().messages[1].blocks == core::Message::assistant_text("saved answer").blocks);
     REQUIRE(requests.back().messages[2].blocks == core::Message::user_text("continue").blocks);
   });
+}
+
+TEST_CASE("Session compaction retains early task context across pages and reopening", "[bootstrap][context]") {
+  TempDir temp{"oran-working-context"};
+  test::run_async(
+      [&](asio::io_context& io) -> async::Awaitable<void> {
+        class ContextProvider final : public provider::System {
+        public:
+          mutable std::size_t summaries{};
+          mutable std::size_t answers{};
+          bool fail_answer{};
+          async::Awaitable<core::Result<provider::Response>>
+          send(provider::Request request, provider::ModelTarget, provider::EventSink*) const override {
+            std::string text;
+            for (const auto& message : request.messages)
+              for (const auto& block : message.blocks)
+                if (auto* content = std::get_if<core::TextContent>(&block))
+                  text += content->text;
+            REQUIRE(text.contains("Preserve dragonfruit"));
+            if (request.system_prompt.value_or("").starts_with("Produce a bounded session handoff")) {
+              ++summaries;
+              REQUIRE(request.tools.empty());
+              co_return text_response(
+                  "Objective:\nPreserve dragonfruit.\nConstraints:\nNo new dependencies.\nDecisions:\nUse existing "
+                  "parser [1].\nCompleted:\nRead files.\nPending:\nRun tests.\nReferences:\nsrc/parser.cpp [1]\n");
+            }
+            ++answers;
+            if (fail_answer)
+              co_return std::unexpected(core::Error::internal("controlled answer failure"));
+            co_return text_response("Continue the parser task.");
+          }
+        } backend;
+        auto cfg = config::Config{};
+        auto assembly = build_assembly(temp.path(), io, false, true, false);
+        auto id = core::generate_turn_id();
+        REQUIRE(id);
+        memory::session::SessionId session_id{core::format_turn_id_hex(*id)};
+        memory::session::AgentKey agent_key{"coder"};
+        auto* store = assembly.session_store();
+        REQUIRE(store);
+        std::vector<core::Message> history;
+        for (int i = 0; i < 90; ++i) {
+          history.push_back(
+              core::Message::user_text(i == 0 ? "Preserve dragonfruit. No new dependencies." : std::string(300, 'u')));
+          history.push_back(core::Message::assistant_text(std::string(300, 'a')));
+        }
+        auto seeded = co_await store->append_all(session_id, agent_key, history);
+        REQUIRE(seeded);
+        auto options = base_runner_options(io, assembly, cfg, backend);
+        options.session_id = *id;
+        options.system_preamble = "Agent";
+        options.context = {.max_tokens = 16384, .summary_max_bytes = 512};
+        options.max_tokens = 512;
+        backend.fail_answer = true;
+        {
+          auto runner = bootstrap::AgentSession::create(options);
+          REQUIRE(runner);
+          auto failed = co_await (*runner)->run_prompt({.prompt = "Continue"});
+          REQUIRE_FALSE(failed);
+        }
+        auto unchanged = co_await store->load_context(session_id, agent_key);
+        REQUIRE(unchanged);
+        REQUIRE(unchanged->message_count == 180);
+        REQUIRE(unchanged->checkpoint.covered_sequence == 0);
+        backend.fail_answer = false;
+        {
+          auto runner = bootstrap::AgentSession::create(options);
+          REQUIRE(runner);
+          auto completed = co_await (*runner)->run_prompt({.prompt = "Continue"});
+          REQUIRE(completed);
+        }
+        REQUIRE(backend.summaries > 2);
+        auto checkpoint = co_await store->load_context(session_id, agent_key);
+        REQUIRE(checkpoint);
+        REQUIRE(checkpoint->message_count == 182);
+        REQUIRE(checkpoint->checkpoint.covered_sequence > 128);
+        REQUIRE(checkpoint->checkpoint.summary.contains("Preserve dragonfruit"));
+        {
+          auto reopened = bootstrap::AgentSession::create(options);
+          REQUIRE(reopened);
+          auto continued = co_await (*reopened)->run_prompt({.prompt = "What remains?"});
+          REQUIRE(continued);
+        }
+        auto all = co_await store->load(session_id, agent_key);
+        REQUIRE(all);
+        REQUIRE(all->size() == 184);
+        REQUIRE(all->front().blocks == history.front().blocks);
+        REQUIRE(std::get<core::TextContent>((*all)[180].blocks.front()).text == "Continue");
+      },
+      std::chrono::seconds{10});
+}
+
+TEST_CASE("Tool iterations compact provisional work and persist it only on success", "[bootstrap][context]") {
+  for (const bool cancel : {false, true}) {
+    TempDir temp{"oran-tool-context"};
+    test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+      class ToolContextProvider final : public provider::System {
+      public:
+        mutable int calls{};
+        mutable int summaries{};
+        bool cancel{};
+        async::Awaitable<core::Result<provider::Response>>
+        send(provider::Request request, provider::ModelTarget, provider::EventSink*) const override {
+          if (request.system_prompt.value_or("").starts_with("Produce a bounded session handoff")) {
+            ++summaries;
+            if (cancel && calls == 2)
+              co_return std::unexpected(core::Error::cancelled());
+            co_return text_response(
+                "Objective:\nFinish task.\nConstraints:\nNo dependencies.\nDecisions:\nUse existing "
+                "code.\nCompleted:\nRead tool results.\nPending:\nVerify.\nReferences:\nTool results.\n");
+          }
+          ++calls;
+          if (calls <= 2)
+            co_return tool_response("LargeResult", std::to_string(calls), "{}");
+          REQUIRE(tool_result_output_in(request, "2").size() == 18000);
+          co_return text_response("done");
+        }
+      } backend;
+      backend.cancel = cancel;
+      auto cfg = parse_config(
+          R"({"runtime":{"prompt":{"active_tools":["LargeResult"]}},"permissions":{"allow":[{"tool_pattern":"LargeResult"}]}})");
+      auto assembly = build_assembly(temp.path(), io, false, true, false);
+      tool::Registry registry;
+      auto added =
+          registry.add(core::ToolDef::with_no_input("LargeResult", "Read large context"),
+                       [](std::string_view, tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+                         co_return tool::Output::text_only(std::string(18000, 'x'));
+                       });
+      REQUIRE(added);
+      agent::ToolScheduler scheduler{io.get_executor(), registry};
+      auto id = core::generate_turn_id();
+      REQUIRE(id);
+      memory::session::SessionId session_id{core::format_turn_id_hex(*id)};
+      memory::session::AgentKey agent_key{"coder"};
+      std::vector<core::Message> history;
+      for (int i = 0; i < 6; ++i) {
+        history.push_back(core::Message::user_text(std::string(450, 'u')));
+        history.push_back(core::Message::assistant_text(std::string(450, 'a')));
+      }
+      auto seeded = co_await assembly.session_store()->append_all(session_id, agent_key, history);
+      REQUIRE(seeded);
+      auto options = base_runner_options(io, assembly, cfg, backend);
+      options.session_id = *id;
+      options.registry = &registry;
+      options.scheduler = &scheduler;
+      options.system_preamble = "Agent";
+      options.max_tokens = 512;
+      options.context = {.max_tokens = 32768, .summary_max_bytes = 512};
+      auto runner = bootstrap::AgentSession::create(options);
+      REQUIRE(runner);
+      auto result = co_await (*runner)->run_prompt({.prompt = "Read twice and finish"});
+      auto stored = co_await assembly.session_store()->load_context(session_id, agent_key);
+      REQUIRE(stored);
+      REQUIRE(backend.summaries >= 2);
+      if (cancel) {
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error().kind() == core::ErrorKind::cancelled);
+        REQUIRE(stored->message_count == 12);
+        REQUIRE(stored->checkpoint.covered_sequence == 0);
+      } else {
+        REQUIRE(result);
+        REQUIRE(stored->message_count == 18);
+        REQUIRE(stored->checkpoint.covered_sequence > 12);
+        auto messages = co_await assembly.session_store()->load(session_id, agent_key);
+        REQUIRE(messages);
+        REQUIRE(std::get<core::ToolResultContent>((*messages)[14].blocks.front()).output.size() == 18000);
+      }
+    });
+  }
 }

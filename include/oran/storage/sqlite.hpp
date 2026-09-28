@@ -99,7 +99,10 @@ private:
   [[nodiscard]] core::Result<void> bind_value(int index, const T& value) {
     if constexpr (std::same_as<T, Null>) {
       return bind_null(index);
-    } else if constexpr (requires { value.has_value(); *value; }) {
+    } else if constexpr (requires {
+                           value.has_value();
+                           *value;
+                         }) {
       return value.has_value() ? bind_value(index, *value) : bind_null(index);
     } else if constexpr (std::same_as<T, bool>) {
       return bind_int64(index, value ? 1 : 0);
@@ -138,6 +141,9 @@ public:
   [[nodiscard]] bool is_open() const noexcept;
   void close() noexcept;
 
+  /// Consistent SQLite snapshot, including committed WAL data. Destination must
+  /// not exist. Host owns destination directory authority and privacy.
+  [[nodiscard]] core::Result<void> backup_to(std::string_view destination);
   [[nodiscard]] core::Result<void> execute(std::string_view sql);
   [[nodiscard]] core::Result<Statement> prepare(std::string_view sql);
   [[nodiscard]] core::Result<QueryResult> query(std::string_view sql);

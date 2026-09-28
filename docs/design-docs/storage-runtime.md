@@ -37,8 +37,9 @@ The long-term memory schema belongs to `oran-memory`.
 
 Backups before schema changes and explicit ownership/scope import mappings are
 required before a data-format migration is introduced. Runtime reductions may
-drop derived views and indexes but leave persisted user rows intact. Complete
-import/backup tooling is tracked in [live debt](../exec-plans/tech-debt-tracker.md).
+drop derived views and indexes but leave persisted user rows intact. The explicit
+backup and session-import APIs below support this boundary; broader long-term
+memory import mappings remain [live debt](../exec-plans/tech-debt-tracker.md).
 
 The session skill table (`session_skill_activations`) remains accessible through
 SQLite for compatibility. Audit migration 6 drops the derived
@@ -46,6 +47,27 @@ SQLite for compatibility. Audit migration 6 drops the derived
 older `hook_publish` rows, are untouched.
 Reopening a database and appending runtime records preserves saved session
 metadata, skill rows, audit decisions and traces. Migration history is retained.
+
+## Backup And Session Import
+
+`Connection::backup_to` uses SQLite `VACUUM INTO`, capturing committed WAL data,
+and verifies the result with `integrity_check`. It requires a new destination;
+`SessionRepository::backup_to` acquires a reader and delegates. These are explicit
+host maintenance operations on the blocking executor. The host owns private
+source/destination directories and must keep their paths stable for the operation.
+Take and verify a backup before applying a user-data format migration. A failed
+backup may leave an incomplete destination and never reports it as successful.
+
+`SessionRepository::import_session` opens a source snapshot read-only and requires
+explicit source/destination session and agent keys. The supported source schema is
+the existing session schema (version 2). It copies message sequences, content,
+metadata, timestamps and skill rows in one destination transaction, preserving the
+session title, metadata and working checkpoint. Any existing destination identity
+(including orphan message/skill rows), missing source, SQL failure or observed
+cancellation aborts the import. Source rows and migration history are untouched.
+No memory scope, approval grant, audit or trace authority is imported. This narrow
+API supports session recovery and identity mapping; it is not a general database
+merge tool.
 
 ## Repositories
 
@@ -55,8 +77,15 @@ metadata, skill rows, audit decisions and traces. Migration history is retained.
   It validates the complete input, acquires one writer lease and commits all
   inserts and session-row updates in one transaction. Any later insert or commit
   failure rolls back the suffix; an empty suffix does not create a session.
-  Single-message append delegates to this transaction boundary. `get_session`
+  Single-message append delegates to this transaction boundary. Optional
+  `SessionCommit` compares the loaded message count and checkpoint revision before
+  writing, then updates only the reserved working-context metadata key in the same
+  transaction. Coverage cannot exceed the committed transcript. Invalid metadata
+  and stale snapshots fail without appending any rows. `get_session`
   reads one session's metadata and message count by the same composite key.
+- `load_after` reads ascending rows between explicit sequence bounds in bounded
+  pages (default 64 rows/512 KiB). It rejects gaps and an oversized first row so a
+  caller cannot mistake omitted history for completion.
 - `load_tail` reads a contiguous newest suffix bounded by row count and UTF-8
   encoded content/metadata bytes, then returns ascending sequence order. Defaults
   are 128 rows/512 KiB. The API never prunes stored messages.
