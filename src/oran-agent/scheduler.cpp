@@ -1,5 +1,6 @@
 #include <oran/agent/scheduler.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <deque>
@@ -72,7 +73,6 @@ struct BatchState {
   /// ask-approval can hand the caller its issued token for replay.
   bool thread_approval_token_output;
   std::vector<std::optional<ToolBatchResult>> results;
-  async::Channel<std::monostate> semaphore;
   async::Channel<std::size_t> completion;
   /// One cancellation signal per spawned child. asio's `cancellation_signal`
   /// owns a single slot at a time, so multiple coroutines binding to one
@@ -85,7 +85,7 @@ struct BatchState {
 
   BatchState(asio::any_io_executor exec, std::size_t n, ToolSchedulerOptions opts)
       : executor{std::move(exec)}, options{opts}, total_calls{n}, thread_approval_token_output{n == 1}, results(n),
-        semaphore{executor, opts.max_parallel_tools}, completion{executor, n} {
+        completion{executor, n} {
     for (std::size_t i = 0; i < n; ++i) {
       child_cancels.emplace_back();
     }
@@ -135,6 +135,8 @@ private:
   run_batch_shared(std::shared_ptr<SharedState> shared,
                    std::vector<ToolBatchCall> batch,
                    tool::DispatchContext& prototype) {
+    if (!shared->executor || shared->options.max_parallel_tools == 0 || shared->options.per_call_timeout.count() <= 0)
+      co_return std::unexpected(core::Error::invalid_argument("scheduler requires an executor and positive bounds"));
     if (batch.empty()) {
       co_return std::vector<ToolBatchResult>{};
     }
@@ -146,44 +148,14 @@ private:
 
     auto state = std::make_shared<BatchState>(shared->executor, batch.size(), shared->options);
 
-    // Fill the channel-as-semaphore with one permit per concurrency slot. The
-    // `try_send` calls cannot fail because we just constructed the channel
-    // with capacity == max_parallel_tools; they are documented to discard
-    // their result on the happy path.
-    for (std::size_t i = 0; i < shared->options.max_parallel_tools; ++i) {
-      [[maybe_unused]] auto permit = state->semaphore.try_send(std::monostate{});
-    }
-
     std::vector<std::string> names;
     names.reserve(batch.size());
-    for (std::size_t i = 0; i < batch.size(); ++i) {
-      names.push_back(batch[i].name);
-      const auto call_id = batch[i].tool_use_id;
-      const auto call_name = batch[i].name;
-      ++shared->active_calls;
-      ++shared->active_contexts[&prototype];
-      asio::co_spawn(shared->executor,
-                     run_call(state, shared, std::move(batch[i]), i, std::ref(prototype)),
-                     asio::bind_cancellation_slot(
-                         state->child_cancels[i].slot(),
-                         [shared, state, i, context = &prototype, call_id, call_name](std::exception_ptr exception) {
-                           if (exception) {
-                             state->results[i] = ToolBatchResult{
-                                 .tool_use_id = call_id,
-                                 .name = call_name,
-                                 .output = std::unexpected(core::Error::internal("tool dispatch failed unexpectedly"))};
-                             static_cast<void>(state->completion.try_send(i));
-                           }
-                           --shared->active_calls;
-                           if (--shared->active_contexts[context] == 0)
-                             shared->active_contexts.erase(context);
-                           for (auto& weak : shared->idle_waiters) {
-                             if (auto waiter = weak.lock())
-                               waiter->cancel();
-                           }
-                           shared->idle_waiters.clear();
-                         }));
-    }
+    for (const auto& call : batch)
+      names.push_back(call.name);
+    std::size_t admitted = 0;
+    const auto workers = std::min(batch.size(), shared->options.max_parallel_tools);
+    for (; admitted < workers; ++admitted)
+      start_call(state, shared, std::move(batch[admitted]), admitted, prototype);
 
     std::vector<bool> reported(state->total_calls, false);
     std::size_t completed = 0;
@@ -199,6 +171,15 @@ private:
       }
       reported[*next] = true;
       ++completed;
+      if (auto cancellation = co_await asio::this_coro::cancellation_state;
+          cancellation.cancelled() != asio::cancellation_type::none) {
+        parent_cancelled = true;
+        break;
+      }
+      if (admitted < batch.size()) {
+        start_call(state, shared, std::move(batch[admitted]), admitted, prototype);
+        ++admitted;
+      }
     }
 
     if (!parent_cancelled) {
@@ -213,9 +194,13 @@ private:
     // Phase 2 — parent cancellation. Emit on every child signal so each
     // in-flight dispatch sees its own cancellation contract, then stop
     // honouring the parent token so the bounded drain below can still await.
-    for (auto& signal : state->child_cancels) {
-      signal.emit(asio::cancellation_type::all);
+    // Queued values have no borrowed dispatch frame and cannot lag cleanup.
+    for (std::size_t i = admitted; i < state->total_calls; ++i) {
+      reported[i] = true;
+      ++completed;
     }
+    for (std::size_t i = 0; i < admitted; ++i)
+      state->child_cancels[i].emit(asio::cancellation_type::all);
     co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
 
     // Wait out the cancellation grace window for the remaining calls. A cancel-aware
@@ -243,28 +228,55 @@ private:
     co_return std::unexpected(parent_cancelled_error());
   }
 
-  [[nodiscard]] static async::Awaitable<void> run_call(std::shared_ptr<BatchState> state,
-                                                       std::shared_ptr<SharedState> shared,
-                                                       ToolBatchCall call,
-                                                       std::size_t index,
-                                                       std::reference_wrapper<tool::DispatchContext> prototype_ref) {
-    auto acquired = co_await state->semaphore.receive();
-    if (!acquired) {
-      state->results[index] = ToolBatchResult{
-          .tool_use_id = std::move(call.tool_use_id),
-          .name = std::move(call.name),
-          .output = std::unexpected(parent_cancelled_error()),
-      };
-      // The semaphore wait was cancelled before this call ever ran a handler,
-      // so the call is *not* a cancellation laggard. Filter cancellation on
-      // this coroutine before the completion send (`Channel::send` short-circuits
-      // to `cancelled` while the slot is armed) so the index still reports and
-      // the parent's grace drain does not mis-name a merely-queued call.
-      co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-      [[maybe_unused]] auto sent = co_await state->completion.send(index);
-      co_return;
-    }
+  static void start_call(const std::shared_ptr<BatchState>& state,
+                         const std::shared_ptr<SharedState>& shared,
+                         ToolBatchCall call,
+                         std::size_t index,
+                         tool::DispatchContext& prototype) {
+    const auto id = call.tool_use_id;
+    const auto name = call.name;
+    ++shared->active_calls;
+    ++shared->active_contexts[&prototype];
+    asio::co_spawn(shared->executor,
+                   run_call(state, shared, std::move(call), std::ref(prototype)),
+                   asio::bind_cancellation_slot(
+                       state->child_cancels[index].slot(),
+                       [shared, state, index, context = &prototype, id, name](std::exception_ptr exception,
+                                                                              core::Result<tool::Output> output) {
+                         if (exception)
+                           output = std::unexpected(core::Error::internal("tool dispatch failed unexpectedly"));
+                         state->results[index] = ToolBatchResult{id, name, std::move(output)};
+                         --shared->active_calls;
+                         if (--shared->active_contexts[context] == 0)
+                           shared->active_contexts.erase(context);
+                         for (auto& weak : shared->idle_waiters)
+                           if (auto waiter = weak.lock())
+                             waiter->cancel();
+                         shared->idle_waiters.clear();
+                         // Report only after the dispatch frame and context are released.
+                         static_cast<void>(state->completion.try_send(index));
+                       }));
+  }
 
+  [[nodiscard]] static async::Awaitable<core::Result<tool::Output>>
+  dispatch(tool::Registry& registry, const ToolBatchCall& call, tool::DispatchContext& context) {
+    try {
+      co_return co_await registry.dispatch(call.name, call.input_json, context);
+    } catch (...) {
+      // A thrown branch is not a completed Result in Asio's || race: translate
+      // here so a failed effect cannot wait for the timeout or strand the queue.
+    }
+    const auto cancellation = co_await asio::this_coro::cancellation_state;
+    co_return std::unexpected(cancellation.cancelled() != asio::cancellation_type::none
+                                  ? parent_cancelled_error()
+                                  : core::Error::internal("tool dispatch failed unexpectedly"));
+  }
+
+  [[nodiscard]] static async::Awaitable<core::Result<tool::Output>>
+  run_call(std::shared_ptr<BatchState> state,
+           std::shared_ptr<SharedState> shared,
+           ToolBatchCall call,
+           std::reference_wrapper<tool::DispatchContext> prototype_ref) {
     auto per_call_ctx = tool::DispatchContext::for_now(prototype_ref.get(), state->thread_approval_token_output);
     per_call_ctx.path_locks = &shared->locks;
 
@@ -272,7 +284,7 @@ private:
         std::unexpected(core::Error::internal("scheduler: race did not produce a result"));
     {
       using namespace asio::experimental::awaitable_operators;
-      auto raced = co_await (shared->registry->dispatch(call.name, call.input_json, per_call_ctx) ||
+      auto raced = co_await (dispatch(*shared->registry, call, per_call_ctx) ||
                              async::sleep_for(state->executor, state->options.per_call_timeout));
       if (auto* dispatched = std::get_if<core::Result<tool::Output>>(&raced); dispatched != nullptr) {
         output = std::move(*dispatched);
@@ -287,21 +299,7 @@ private:
       }
     }
 
-    // Release the semaphore slot. Capacity == max_parallel_tools and we hold
-    // exactly one permit, so `try_send` always succeeds here.
-    [[maybe_unused]] auto release = state->semaphore.try_send(std::monostate{});
-
-    state->results[index] = ToolBatchResult{
-        .tool_use_id = std::move(call.tool_use_id),
-        .name = std::move(call.name),
-        .output = std::move(output),
-    };
-
-    // The completion channel was sized to total_calls, so this send cannot
-    // back-pressure. Filter cancellation on the spawned coroutine so the
-    // parent-emitted cancel does not turn this final signal into a no-op.
-    co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-    [[maybe_unused]] auto sent = co_await state->completion.send(index);
+    co_return output;
   }
 
   /// Drain pending completions until every call has reported. Used inside the

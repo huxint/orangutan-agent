@@ -76,8 +76,10 @@ struct AgentSessionOptions {
 
 [[nodiscard]] core::Result<agent::ToolSchedulerOptions> scheduler_options_from(const config::Config& config);
 
-/// Owns one agent session over borrowed runtime services. Calls are serialized
-/// by the owning service; the assembly and provider outlive the session.
+/// Owns one agent session over borrowed runtime services. Calls use the owning
+/// strand; overlapping prompts return conflict before any effects. Admission
+/// remains held through cleanup/persistence. The assembly and provider outlive
+/// the session.
 class AgentSession {
 public:
   class PrivateTag {

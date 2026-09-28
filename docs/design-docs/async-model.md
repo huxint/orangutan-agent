@@ -41,6 +41,11 @@ SIGINT/SIGTERM emits cooperative cancellation from the application strand.
 
 Cross-coroutine queues use `async::Channel<T>` with explicit capacity. Admission
 failure is observable. Task groups and schedulers also have finite capacity.
+The tool scheduler admits at most its per-batch parallel limit as live coroutine
+frames. Completion means the dispatch frame has been released before another
+queued value starts. Cancellation drops queued values without dispatching or
+misreporting them as laggards. Per-batch limits are independent for nested child
+sessions, avoiding parent/child permit deadlocks.
 Timers replace blocking sleeps. Tests use real executors and synchronization
 points, with a hard timeout to expose missing completion.
 

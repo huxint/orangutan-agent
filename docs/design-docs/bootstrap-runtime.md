@@ -46,6 +46,13 @@ headers. Provider owns endpoint construction values and `SecretLookup` in
 
 ## Session Boundary
 
+`run_prompt` admits one prompt per session on the coordinating strand. A second
+in-flight prompt returns `conflict` before effects; the guard covers context
+loading, child/tool cleanup and persistence and releases on every exit. This
+prevents reentrant hooks or concurrent channel deliveries from corrupting a
+shared in-memory conversation or racing checkpoint commits. Independent sessions
+continue concurrently.
+
 `AgentSession` loads a working checkpoint and fixed history end, supplies a
 bounded forward reader to `agent::Loop`, and appends its original successful
 transcript suffix and provisional checkpoint atomically through `Store::append_all`.

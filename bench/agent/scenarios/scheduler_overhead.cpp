@@ -1,13 +1,13 @@
 // bench/agent/scenarios/scheduler_overhead.cpp
 //
-// Spec 0012 AC12: dispatch overhead under the scheduler must stay within 1.5x
-// the single-call direct-dispatch overhead (spec 0002's <= 50 us ceiling).
+// Compare the fixed cost of scheduled and direct dispatch under the same
+// executor and permission setup. Interpret timings on the measured host.
 //
 //   A = `agent.scheduler_overhead_direct_dispatch` : one `Registry::dispatch`
 //       of a no-op tool through an allow rule + `NullAuditSink`, no hook bus.
 //   B = `agent.scheduler_overhead_run_batch`       : one-call
-//       `ToolScheduler::run_batch` of the same tool (channel-as-semaphore
-//       permit, ordered-result drain, per-call timeout race, no path lock
+//       `ToolScheduler::run_batch` of the same tool (bounded call admission,
+//       ordered-result drain, per-call timeout race, no path lock
 //       because the tool declares no capabilities).
 //
 // B / A is the scheduler's per-batch overhead. Both paths share the same

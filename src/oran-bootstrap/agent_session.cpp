@@ -166,6 +166,15 @@ public:
   }
 
   [[nodiscard]] async::Awaitable<Result<agent::PromptResult>> run_prompt(agent::PromptRequest request) {
+    if (running_)
+      co_return std::unexpected(Error{core::ErrorKind::conflict, "agent session already has an active prompt"});
+    running_ = true;
+    struct Admission {
+      bool& running;
+      ~Admission() {
+        running = false;
+      }
+    } admission{running_};
     auto* store = options_.assembly->session_store();
     memory::session::ContextSnapshot snapshot{.checkpoint = checkpoint_,
                                               .message_count = static_cast<std::int64_t>(transcript_.size())};
@@ -323,6 +332,7 @@ private:
   std::string session_id_text_;
   std::vector<core::Message> transcript_;
   core::WorkingContext checkpoint_;
+  bool running_{false};
 };
 
 core::Result<std::unique_ptr<AgentSession>> AgentSession::create(AgentSessionOptions options) {

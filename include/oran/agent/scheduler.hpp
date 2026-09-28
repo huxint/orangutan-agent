@@ -19,7 +19,7 @@ struct DispatchContext;
 
 namespace orangutan::agent {
 
-/// Per-batch concurrency and per-dispatch timeout bounds.
+/// Per-batch concurrency and per-dispatch timeout bounds; both must be positive.
 struct ToolSchedulerOptions {
   std::size_t max_parallel_tools{4};
   std::chrono::milliseconds per_call_timeout{60'000};
@@ -55,6 +55,8 @@ public:
   ToolScheduler(ToolScheduler&&) noexcept;
   ToolScheduler& operator=(ToolScheduler&&) noexcept;
 
+  /// Admit at most max_parallel_tools coroutine frames; queued calls remain
+  /// values until a slot completes. Invalid bounds fail before any effect.
   /// Return results in input order. Parent cancellation propagates to every
   /// call, then returns `parent_cancelled` after a 100 ms cleanup grace window
   /// and recording any lagging calls. Their path locks survive until cleanup.

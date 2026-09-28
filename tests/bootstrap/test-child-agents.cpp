@@ -644,3 +644,82 @@ TEST_CASE("AgentRun child writes proceed after bounded approval", "[integration]
     REQUIRE_FALSE(result_in(provider.requests[2], "write-1").is_error);
   });
 }
+
+TEST_CASE("AgentSession rejects overlapping prompts and releases admission after completion", "[bootstrap][collaboration]") {
+  orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    SessionFixture fixture{io.get_executor()};
+    ScriptedProvider provider{{answer("first"), answer("second")}};
+    auto session = bootstrap::AgentSession::create(fixture.options(provider));
+    REQUIRE(session);
+    std::optional<core::Result<agent::PromptResult>> nested;
+    fixture.assembly.hook_bus().subscribe({
+        .id = "reenter-session",
+        .observe = [&](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> {
+          if (!nested) {
+            nested = std::unexpected(core::Error::internal("pending"));
+            nested = co_await (*session)->run_prompt({.prompt = "overlap"});
+          }
+        }}, {hook::Event::provider_request});
+    auto first = co_await (*session)->run_prompt({.prompt = "first prompt"});
+    REQUIRE(first);
+    REQUIRE(nested);
+    REQUIRE_FALSE(*nested);
+    CHECK(nested->error().kind() == core::ErrorKind::conflict);
+    CHECK(provider.requests.size() == 1);
+    auto second = co_await (*session)->run_prompt({.prompt = "second prompt"});
+    REQUIRE(second);
+    CHECK(second->text == "second");
+    CHECK(provider.requests.size() == 2);
+  });
+}
+
+TEST_CASE("AgentRun can dispatch child tools with one parallel slot", "[bootstrap][collaboration]") {
+  orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    SessionFixture fixture{io.get_executor()};
+    tool::Registry registry;
+    REQUIRE(tool::register_builtins(registry));
+    const auto names = std::array{std::string{"worker"}};
+    REQUIRE(tool::register_agent_run(registry, names));
+    agent::ToolScheduler scheduler{io.get_executor(), registry, {.max_parallel_tools = 1}};
+    ScriptedProvider provider{{
+        calls({call("child", "AgentRun", R"({"agent":"worker","prompt":"write a file"})")}),
+        calls({call("write", "FileWrite", R"({"path":"single-slot.txt","content":"done"})")}),
+        answer("child done"), answer("parent done")}};
+    auto options = fixture.options(provider);
+    options.registry = &registry;
+    options.scheduler = &scheduler;
+    auto session = bootstrap::AgentSession::create(std::move(options));
+    REQUIRE(session);
+    auto result = co_await (*session)->run_prompt({.prompt = "delegate"});
+    REQUIRE(result);
+    CHECK(result->text == "parent done");
+    CHECK(std::filesystem::exists(fixture.workspace.path / "single-slot.txt"));
+    CHECK(fixture.worker_session_count() == 1);
+    auto joined = co_await scheduler.wait_idle();
+    REQUIRE(joined);
+  });
+}
+
+TEST_CASE("AgentSession releases prompt admission after provider failure", "[bootstrap][collaboration]") {
+  class FailOnceProvider final : public provider::System {
+  public:
+    async::Awaitable<core::Result<provider::Response>>
+    send(provider::Request, provider::ModelTarget, provider::EventSink* = nullptr) const override {
+      if (attempts++ == 0) co_return std::unexpected(core::Error::upstream("controlled failure"));
+      co_return answer("recovered");
+    }
+    mutable int attempts{0};
+  };
+  orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    SessionFixture fixture{io.get_executor()};
+    FailOnceProvider provider;
+    auto session = bootstrap::AgentSession::create(fixture.options(provider));
+    REQUIRE(session);
+    auto failed = co_await (*session)->run_prompt({.prompt = "first"});
+    REQUIRE_FALSE(failed);
+    auto recovered = co_await (*session)->run_prompt({.prompt = "retry"});
+    REQUIRE(recovered);
+    CHECK(recovered->text == "recovered");
+    CHECK(provider.attempts == 2);
+  });
+}

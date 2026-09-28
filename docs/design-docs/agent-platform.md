@@ -29,7 +29,9 @@ references. They remain valid until the turn and its tool work finish.
 text used by every iteration; conversation remains in the typed transcript.
 The loop forwards unfiltered prefix identity to the provider, whose protocol
 boundary applies the selected route's cache policy.
-The session coordinator serializes turns using the same session identity.
+The session coordinator admits one prompt per session on its owning strand.
+Overlapping calls return `conflict` before context reads or provider work;
+admission remains held through cleanup and persistence, and releases on errors.
 
 The loop calls `provider::execution::run` over its borrowed backend and route.
 Execution returns owned attribution alongside a result: profile, reported or
@@ -127,9 +129,13 @@ registry. Concurrent calls consume the same prompt-local admission count.
 
 Children reuse the parent's registry, scheduler and coordinating strand. This
 shares filesystem path locks while retaining separate dispatch contexts. The
-scheduler bounds concurrency per batch, so a parent awaiting a child does not
-consume that child's tool permits. Parent cancellation propagates through child
-provider and tool work; context-specific draining joins cleanup before either
+scheduler bounds live dispatch coroutine frames per batch, retaining queued calls
+as values until an admitted call fully completes. A parent awaiting a child does
+not consume that child's tool permits, including with a one-slot scheduler.
+Nonpositive concurrency or timeout bounds fail before dispatch. Exceptions become
+results inside the timeout race, so a failing dispatch cannot stall queued work
+until its timeout. Unadmitted calls are never reported as cancellation laggards.
+Parent cancellation propagates through child provider and tool work; context-specific draining joins cleanup before either
 session releases borrowed services. An unrelated session does not extend that
 join.
 

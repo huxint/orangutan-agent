@@ -1093,7 +1093,7 @@ TEST_CASE("ToolScheduler: a queued call cancelled before it runs is not mis-name
   auto prototype = make_prototype(io, rules, audit);
 
   // max_parallel_tools = 2 < batch size, so four of the six calls sit queued on
-  // the channel-as-semaphore when the parent cancel lands. A queued call never
+  // the admission queue when the parent cancel lands. A queued call never
   // ran a handler, so it must report its (cancelled) completion rather than be
   // mis-named as a cancellation laggard.
   agent::ToolScheduler scheduler{io.get_executor(),
@@ -1244,4 +1244,55 @@ TEST_CASE("ToolScheduler: timeout includes final-path admission and joins only t
   REQUIRE_FALSE(std::filesystem::exists(root.path() / "original.txt"));
   REQUIRE_FALSE(observations[0].succeeded);
   REQUIRE(observations[0].error_kind == "cancelled");
+}
+
+TEST_CASE("ToolScheduler: invalid bounds fail before dispatch", "[agent][scheduler]") {
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    auto rules = allow_all_rules();
+    permission::NullAuditSink audit;
+    auto context = make_prototype(io, rules, audit);
+    for (const auto options : {agent::ToolSchedulerOptions{.max_parallel_tools = 0},
+                               agent::ToolSchedulerOptions{.per_call_timeout = 0ms},
+                               agent::ToolSchedulerOptions{.per_call_timeout = -1ms}}) {
+      agent::ToolScheduler scheduler{io.get_executor(), registry, options};
+      auto batch = std::vector{call(0, "unused")};
+      auto result = co_await scheduler.run_batch(std::move(batch), context);
+      REQUIRE_FALSE(result);
+      CHECK(result.error().kind() == core::ErrorKind::invalid_argument);
+      auto drained = co_await scheduler.wait_idle(&context);
+      REQUIRE(drained);
+    }
+  });
+}
+
+TEST_CASE("ToolScheduler: exceptional dispatch completes promptly and queued calls progress", "[agent][scheduler]") {
+  class ThrowOnceAudit final : public permission::AuditSink {
+  public:
+    async::Awaitable<core::Result<void>> record(permission::AuditEvent) override {
+      if (calls++ == 0)
+        throw std::runtime_error{"injected audit failure"};
+      co_return core::Result<void>{};
+    }
+    int calls{0};
+  };
+  test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    add_latency_tool(registry, "Noop", 1ms);
+    auto rules = allow_all_rules();
+    ThrowOnceAudit audit;
+    auto context = make_prototype(io, rules, audit);
+    agent::ToolScheduler scheduler{io.get_executor(), registry, {.max_parallel_tools = 1, .per_call_timeout = 30s}};
+    auto batch = std::vector{call(0, "Noop"), call(1, "Noop"), call(2, "Noop")};
+    auto result = co_await scheduler.run_batch(std::move(batch), context);
+    REQUIRE(result);
+    REQUIRE(result->size() == 3);
+    CHECK_FALSE((*result)[0].output);
+    CHECK((*result)[0].output.error().kind() == core::ErrorKind::internal);
+    CHECK((*result)[1].output);
+    CHECK((*result)[2].output);
+    CHECK(audit.calls == 3);
+    auto joined = co_await scheduler.wait_idle(&context);
+    REQUIRE(joined);
+  });
 }
