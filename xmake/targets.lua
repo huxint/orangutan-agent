@@ -41,4 +41,4 @@ oran_lib("agent", { "oran-core", "oran-async", "oran-storage", "oran-prompt", "o
 
 oran_lib("channel", { "oran-core", "oran-async", "oran-permission", "oran-hook" }, { "nlohmann_json" })
 
-oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-tool", "oran-provider", "oran-agent", "oran-channel" }, { "nlohmann_json" })
+oran_lib("bootstrap", { "oran-core", "oran-async", "oran-http", "oran-io", "oran-storage", "oran-config", "oran-permission", "oran-hook", "oran-memory", "oran-tool", "oran-provider", "oran-agent", "oran-channel" }, { "nlohmann_json", "libsodium" })

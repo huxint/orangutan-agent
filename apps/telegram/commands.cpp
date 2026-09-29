@@ -4,15 +4,11 @@
 #include <array>
 #include <format>
 
-#include <asio/co_spawn.hpp>
-#include <asio/this_coro.hpp>
-#include <asio/use_awaitable.hpp>
-#include <oran/bootstrap/runtime_assembly.hpp>
-#include <oran/memory/session.hpp>
-#include <oran/provider/system.hpp>
-#include <oran/storage/trace_repository.hpp>
+#include <nlohmann/json.hpp>
+#include <oran/bootstrap/session_status.hpp>
 
 namespace orangutan::telegram_host {
+using Json = nlohmann::json;
 namespace {
 constexpr std::array catalogue{
     std::pair{"new", "开启新会话，保留旧记录和长期记忆"},
@@ -63,48 +59,24 @@ std::string command_help() {
   return text;
 }
 
-async::Awaitable<core::Result<std::string>> session_status(bootstrap::RuntimeAssembly& assembly,
-                                                           const provider::Route& route,
-                                                           core::TurnId session,
-                                                           asio::any_io_executor worker) {
-  const auto cancellation = co_await asio::this_coro::cancellation_state;
-  if (cancellation.cancelled() != asio::cancellation_type::none)
-    co_return std::unexpected(core::Error::cancelled());
-  std::string text = std::format("配置模型：`{}`\n长期记忆：{}\n",
-                                 route.primary.model,
-                                 assembly.longterm_memory_enabled() ? "开启" : "关闭");
-  if (auto* store = assembly.session_store()) {
-    auto snapshot = co_await asio::co_spawn(worker,
-                                            store->load_context({core::format_turn_id_hex(session)}, {"telegram"}),
-                                            asio::use_awaitable);
-    if (!snapshot)
-      co_return std::unexpected(snapshot.error());
-    text += std::format("已保存消息：{} 条\n摘要已覆盖：{} 条\n",
-                        snapshot->message_count,
-                        snapshot->checkpoint.covered_sequence);
+std::string format_session_status(const bootstrap::SessionStatus& status, std::string_view model) {
+  std::string text =
+      std::format("配置模型：`{}`\n长期记忆：{}\n", model, status.longterm_memory_enabled ? "开启" : "关闭");
+  if (status.saved_messages) {
+    text += std::format("已保存消息：{} 条\n摘要已覆盖：{} 条\n", *status.saved_messages, status.summarized_messages);
   } else {
     text += "会话存储：关闭\n";
   }
-  if (auto* trace = assembly.trace_repository()) {
-    auto turns =
-        co_await asio::co_spawn(worker,
-                                trace->list_turns({.session_id = session, .agent_key = "telegram", .limit = 1}),
-                                asio::use_awaitable);
-    if (!turns)
-      co_return std::unexpected(turns.error());
-    if (turns->empty()) {
-      text += "最近调用：暂无记录";
-    } else {
-      const auto& last = turns->front();
-      text += std::format("最近调用模型：`{}`\n最近调用 token：输入 {} / 输出 {}\n缓存读取：{} token",
-                          last.route_model,
-                          last.input_tokens,
-                          last.output_tokens,
-                          last.cache_read_tokens);
-    }
+  if (status.last_turn) {
+    const auto& last = *status.last_turn;
+    text += std::format("最近调用模型：`{}`\n最近调用 token：输入 {} / 输出 {}\n缓存读取：{} token",
+                        last.model,
+                        last.input_tokens,
+                        last.output_tokens,
+                        last.cache_read_tokens);
   } else {
-    text += "最近调用：追踪已关闭";
+    text += status.trace_enabled ? "最近调用：暂无记录" : "最近调用：追踪已关闭";
   }
-  co_return text;
+  return text;
 }
 }  // namespace orangutan::telegram_host

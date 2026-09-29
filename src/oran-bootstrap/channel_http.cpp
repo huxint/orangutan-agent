@@ -9,6 +9,38 @@
 
 namespace orangutan::bootstrap {
 namespace {
+bool path_segment(std::string_view value) {
+  if (value.empty() || value.contains('/'))
+    return false;
+  std::string decoded;
+  for (std::size_t i = 0; i < value.size(); ++i) {
+    unsigned char byte = value[i];
+    if (byte == '%') {
+      if (value.size() - i < 3)
+        return false;
+      unsigned int number{};
+      const auto* first = value.data() + i + 1;
+      auto [end, error] = std::from_chars(first, first + 2, number, 16);
+      if (error != std::errc{} || end != first + 2)
+        return false;
+      byte = static_cast<unsigned char>(number);
+      i += 2;
+    }
+    if (byte == '/' || byte == '\\' || byte == 0)
+      return false;
+    decoded += static_cast<char>(byte);
+  }
+  return decoded != "." && decoded != "..";
+}
+
+bool message_operation(std::string_view path, std::string_view prefix, std::string_view operation) {
+  if (!path.starts_with(prefix))
+    return false;
+  path.remove_prefix(prefix.size());
+  const auto slash = path.find('/');
+  return slash != std::string_view::npos && path_segment(path.substr(0, slash)) && path.substr(slash) == operation;
+}
+
 async::Awaitable<core::Result<channel::Response>> send_channel(http::Client& client,
                                                                const ChannelCredential& credential,
                                                                channel::Conversation conversation,
@@ -26,15 +58,29 @@ async::Awaitable<core::Result<channel::Response>> send_channel(http::Client& cli
   bool path_allowed = false;
   switch (conversation.platform) {
     case channel::Platform::telegram:
-      path_allowed = request.path == "/sendMessage" || request.path == "/sendChatAction" ||
-                     request.path == "/setMessageReaction" || request.path == "/sendMessageDraft" ||
-                     request.path == "/getFile";
+      path_allowed = request.method == "POST" && (request.path == "/sendMessage" || request.path == "/sendChatAction" ||
+                                                  request.path == "/setMessageReaction" ||
+                                                  request.path == "/sendMessageDraft" || request.path == "/getFile");
       break;
     case channel::Platform::qq:
-      path_allowed = request.path.starts_with("/v2/groups/") || request.path.starts_with("/v2/users/");
+      path_allowed = !conversation.account.empty() && conversation.account.size() <= 64 &&
+                     std::ranges::all_of(conversation.account,
+                                         [](unsigned char c) { return std::isalnum(c) || c == '_' || c == '-'; }) &&
+                     request.method == "POST" &&
+                     (message_operation(request.path, "/v2/groups/", "/messages") ||
+                      message_operation(request.path, "/v2/users/", "/messages"));
       break;
     case channel::Platform::feishu:
-      path_allowed = request.path.starts_with("/open-apis/im/v1/messages/");
+      if (request.method == "POST") {
+        path_allowed = message_operation(request.path, "/open-apis/im/v1/messages/", "/reply") ||
+                       message_operation(request.path, "/open-apis/im/v1/messages/", "/reactions");
+      } else {
+        const auto last = request.path.rfind('/');
+        path_allowed = last != std::string::npos && path_segment(std::string_view{request.path}.substr(last + 1)) &&
+                       message_operation(std::string_view{request.path}.substr(0, last),
+                                         "/open-apis/im/v1/messages/",
+                                         "/reactions");
+      }
       break;
   }
   if (!path_allowed)
@@ -62,6 +108,7 @@ async::Awaitable<core::Result<channel::Response>> send_channel(http::Client& cli
       case channel::Platform::qq:
         body.url = "https://api.sgroup.qq.com" + request.path;
         body.headers.push_back({"Authorization", "QQBot " + *token});
+        body.headers.push_back({"X-Union-Appid", conversation.account});
         break;
       case channel::Platform::feishu:
         body.url = "https://open.feishu.cn" + request.path;

@@ -49,6 +49,9 @@ outboxes; [messaging channels](design-docs/messaging-channels.md) owns the contr
 The opt-in `oran-telegram` host supplies authenticated polling for one allowed
 private user, text and image input, persistent session routing, a durable
 intake/delivery journal and explicit reconciliation after ambiguous failures.
+Bootstrap also supplies official QQ webhook authentication, durable-enqueue ACKs
+and scoped token refresh. Public QQ ingress, queue/outbox deployment and account
+configuration remain host responsibilities in the messaging contract.
 
 ## Contract Owners
 

@@ -10,6 +10,7 @@
 #include <asio/post.hpp>
 #include <oran/async/sleep.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
+#include <oran/bootstrap/session_status.hpp>
 #include <oran/hook/bus.hpp>
 #include <oran/memory/session.hpp>
 #include <oran/provider/system.hpp>
@@ -261,16 +262,20 @@ TEST_CASE("Telegram status reads scoped persisted facts and leaves earlier sessi
     provider::Route route{
         .primary = {.profile = "test", .model = "configured-model", .thinking_budget = {}, .cache = {}},
         .fallbacks = {}};
-    auto old_status = co_await telegram_host::session_status(*assembly, route, *old_id, io.get_executor());
-    REQUIRE(old_status);
-    CHECK(old_status->contains("已保存消息：1 条"));
-    CHECK(old_status->contains("served-model"));
-    CHECK(old_status->contains("输入 11 / 输出 7"));
-    CHECK_FALSE(old_status->contains("private content"));
-    auto new_status = co_await telegram_host::session_status(*assembly, route, *new_id, io.get_executor());
-    REQUIRE(new_status);
-    CHECK(new_status->contains("已保存消息：0 条"));
-    CHECK(new_status->contains("暂无记录"));
+    auto old_facts = co_await bootstrap::inspect_session(*assembly, *old_id, "telegram", io.get_executor());
+    REQUIRE(old_facts);
+    const auto old_status = telegram_host::format_session_status(*old_facts, route.primary.model);
+
+    CHECK(old_status.contains("已保存消息：1 条"));
+    CHECK(old_status.contains("served-model"));
+    CHECK(old_status.contains("输入 11 / 输出 7"));
+    CHECK_FALSE(old_status.contains("private content"));
+    auto new_facts = co_await bootstrap::inspect_session(*assembly, *new_id, "telegram", io.get_executor());
+    REQUIRE(new_facts);
+    const auto new_status = telegram_host::format_session_status(*new_facts, route.primary.model);
+
+    CHECK(new_status.contains("已保存消息：0 条"));
+    CHECK(new_status.contains("暂无记录"));
     auto original = co_await store->load({core::format_turn_id_hex(*old_id)}, {"telegram"});
     REQUIRE(original);
     REQUIRE(original->size() == 1);

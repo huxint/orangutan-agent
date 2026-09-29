@@ -46,3 +46,44 @@ TEST_CASE("Channel HTTP binding rejects unsafe routes before looking up credenti
     CHECK(cancelled.error().kind() == orangutan::core::ErrorKind::cancelled);
   });
 }
+
+TEST_CASE("QQ and Feishu bindings only authorize implemented message and reaction routes") {
+  orangutan::tests::run_async([](asio::io_context& io) -> orangutan::async::Awaitable<void> {
+    using namespace orangutan;
+    http::Client client{io.get_executor()};
+    int lookups = 0;
+    auto transport =
+        bootstrap::channel_http_transport(client,
+                                          [&](channel::Conversation) -> async::Awaitable<core::Result<std::string>> {
+                                            ++lookups;
+                                            co_return std::unexpected(core::Error::config("unavailable"));
+                                          });
+    channel::Conversation target{channel::Platform::qq, "app", channel::ChatKind::direct, "owner", {}};
+    for (const auto* path : {"/v2/users/owner",
+                             "/v2/users/owner/files",
+                             "/v2/users/a/b/messages",
+                             "/v2/users/%2e%2e/messages",
+                             "/v2/users/a%2fb/messages"}) {
+      auto rejected = co_await transport(target, {"POST", path, "{}"});
+      REQUIRE_FALSE(rejected);
+      CHECK(lookups == 0);
+    }
+    auto deleted = co_await transport(target, {"DELETE", "/v2/users/owner/messages", "{}"});
+    REQUIRE_FALSE(deleted);
+    CHECK(lookups == 0);
+    auto valid = co_await transport(target, {"POST", "/v2/users/owner/messages", "{}"});
+    REQUIRE_FALSE(valid);
+    CHECK(lookups == 1);
+    target.platform = channel::Platform::feishu;
+    for (const auto* path : {"/open-apis/im/v1/messages/id",
+                             "/open-apis/im/v1/messages/id/other",
+                             "/open-apis/im/v1/messages/id/reactions/r/extra"}) {
+      auto rejected = co_await transport(target, {"DELETE", path, "{}"});
+      REQUIRE_FALSE(rejected);
+      CHECK(lookups == 1);
+    }
+    auto reaction = co_await transport(target, {"DELETE", "/open-apis/im/v1/messages/id/reactions/r", "{}"});
+    REQUIRE_FALSE(reaction);
+    CHECK(lookups == 2);
+  });
+}

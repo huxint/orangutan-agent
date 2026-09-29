@@ -18,6 +18,7 @@
 #include <oran/bootstrap/channel_http.hpp>
 #include <oran/bootstrap/provider_backend.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
+#include <oran/bootstrap/session_status.hpp>
 #include <oran/config/config.hpp>
 #include <oran/hook/bus.hpp>
 #include <oran/http/client.hpp>
@@ -289,19 +290,22 @@ int main(int argc, char** argv) try {
   int exit_code = 1;
   asio::co_spawn(
       strand,
-      telegram_host::run(
-          options,
-          std::move(api),
-          std::move(outbound),
-          std::move(turn),
-          hooks,
-          *directory,
-          *state,
-          runtime.cpu_executor(),
-          presentation.get(),
-          [&](core::TurnId id) -> async::Awaitable<core::Result<std::string>> {
-            co_return co_await telegram_host::session_status(*assembly, provider->route(), id, runtime.cpu_executor());
-          }),
+      telegram_host::run(options,
+                         std::move(api),
+                         std::move(outbound),
+                         std::move(turn),
+                         hooks,
+                         *directory,
+                         *state,
+                         runtime.cpu_executor(),
+                         presentation.get(),
+                         [&](core::TurnId id) -> async::Awaitable<core::Result<std::string>> {
+                           auto status =
+                               co_await bootstrap::inspect_session(*assembly, id, "telegram", runtime.cpu_executor());
+                           if (!status)
+                             co_return std::unexpected(status.error());
+                           co_return telegram_host::format_session_status(*status, provider->route().primary.model);
+                         }),
       asio::bind_cancellation_slot(cancellation.slot(), [&](std::exception_ptr exception, core::Result<void> result) {
         exit_code = !exception && (result || (stopping && result.error().kind() == core::ErrorKind::cancelled)) ? 0 : 1;
         if (exception || !result)

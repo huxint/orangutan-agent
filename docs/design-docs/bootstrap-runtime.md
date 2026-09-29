@@ -137,6 +137,13 @@ these interfaces with a controlled transport and a reopened persistent session.
 
 ## Channel transport
 
+`inspect_session` reads bounded session/checkpoint metadata and the most recent
+trace for an explicit session ID and agent key on the supplied worker executor.
+It returns `SessionStatus` values; application formatting is separate. Callers
+authorize inspection before calling it. Disabled stores and unavailable trace
+records remain distinguishable from an empty session. No transcript bodies or
+credentials enter the result, and inspection does not write storage.
+
 `channel_http_transport` binds the SDK-free channel transport port to the host's
 HTTP client and current credential lookup. The host maps normalized conversation
 keys to retained sessions and owns authenticated ingress and durable delivery.

@@ -75,6 +75,12 @@ Credentials enter only the HTTP binding, never requests, hooks or diagnostics.
 Upstream bodies and credential-callback error text are not propagated as errors.
 No channel settings are implicitly read from the runtime configuration.
 
+QQ permits only POST to `/v2/users/{id}/messages` and `/v2/groups/{id}/messages`.
+Its configured account identity is the AppID, also sent in `X-Union-Appid`.
+Feishu permits POST reply/reaction creation and DELETE of one reaction. Identifiers
+must remain single path segments even after percent decoding. Unsupported methods,
+arbitrary API suffixes and encoded path traversal fail before credential lookup.
+
 A host composes these ports on its coordinating strand:
 
 ```cpp
@@ -259,6 +265,61 @@ cursor. It does not rerun the model or resend an answer. Preserve the archive
 when manually handling an unsent response. It needs no credentials and refuses
 a running host or a mismatched update ID. The host favors recoverable intake and
 explicit reconciliation; it does not promise exactly-once remote delivery.
+
+## Official QQ webhook and credentials
+
+`<oran/bootstrap/qq.hpp>` supplies the official callback and credential boundaries.
+It does not start a public HTTP server or a deprecated WebSocket gateway.
+The embedding host supplies TLS ingress, secret references, a durable inbox and
+outbox, and workers that feed the existing QQ dispatcher/session loop.
+
+`verify_qq_webhook` checks the original body bytes with QQ's Ed25519 scheme:
+repeat the app secret to obtain a 32-byte seed and verify timestamp + raw body
+against `X-Signature-Ed25519`. Pass `X-Signature-Timestamp` unchanged and an
+explicit current UTC time. Bodies are limited to 1 MiB and timestamp skew to
+five minutes. Modified bodies, malformed signatures and stale/future requests
+fail before parsing or effects. Signature checks include Tencent's published
+test vector. This authenticates ingress; it does not replace sender permissions.
+
+`accept_qq_webhook` handles signed URL validation (op 13) and heartbeat (op 1).
+It decodes supported dispatch events only after verification, then authorizes
+`QQInbox` with `write_memory`; rules can inspect conversation, sender and event ID.
+The injected `QQEnqueue` must durably and idempotently record accepted messages
+before returning success. Only then does the callback return `{"op":12,"d":0}`.
+Enqueue failure returns `d:1` for QQ retry. Cancellation propagates; authentication,
+parse and permission errors remain errors for the HTTP host to map to a non-success
+status. Unknown authenticated event types are acknowledged without enqueueing.
+The HTTP host must enforce the body limit while receiving, before allocating the
+complete body. Retries within the timestamp window require durable event-ID
+deduplication; this API does not claim exactly-once delivery.
+
+`QQTokenSource` owns one account's resolved app secret and cached access token.
+Bind its `get(Conversation)` to `channel_http_transport`; the account must match
+the source's AppID. Inject the ordinary HTTP client through `QQHttpSend` and retain
+the source/client/hook bus until all callers finish. Refresh uses the fixed
+`https://bots.qq.com/app/getAppAccessToken` endpoint, a ten-second timeout and a
+16-KiB response bound. `QQToken` requires `egress_http` and publishes its decision
+before the request. A cached token introduces no network request.
+
+Calls run on one coordinating strand. One refresh holds a cancel-aware permit;
+up to 32 callers may wait or own it. A cancelled waiter cannot cancel the owner.
+The cache accepts positive lifetimes up to 24 hours, with a refresh margin of ten
+percent capped at 30 seconds, measured using an injectable monotonic clock.
+Responses and exceptions never appear in errors; app secrets and token cache
+storage are cleared when the source is destroyed. Failed sends are not replayed
+automatically by this credential helper.
+
+Deployment still needs an official QQ AppID/AppSecret, enabled C2C/group events,
+a public HTTPS callback and the platform's egress IP allowlist. There is no
+standalone `oran-qq` deployment executable in this slice. Controlled tests cover
+signed durable intake followed by real AgentSession/Dispatcher replies, duplicate
+delivery and reopening a persistent QQ session; they do not establish live
+account approval or network reachability.
+
+The wire contracts follow Tencent's [SDK overview](https://github.com/tencent-connect/botgo/blob/master/README.md),
+[webhook implementation](https://github.com/tencent-connect/botgo/blob/master/interaction/webhook/webhook.go),
+[signature scheme](https://github.com/tencent-connect/botgo/blob/master/interaction/signature/interaction.go)
+and [token source](https://github.com/tencent-connect/botgo/blob/master/token/token_source.go).
 
 ## Dispatcher authority, lifecycle and recovery
 
