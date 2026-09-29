@@ -269,7 +269,7 @@ explicit reconciliation; it does not promise exactly-once remote delivery.
 ## Official QQ webhook and credentials
 
 `<oran/bootstrap/qq.hpp>` supplies the official callback and credential boundaries.
-It does not start a public HTTP server or a deprecated WebSocket gateway.
+It does not start a public HTTP server or a WebSocket gateway.
 The embedding host supplies TLS ingress, secret references, a durable inbox and
 outbox, and workers that feed the existing QQ dispatcher/session loop.
 
@@ -314,7 +314,9 @@ a public HTTPS callback and the platform's egress IP allowlist. There is no
 standalone `oran-qq` deployment executable in this slice. Controlled tests cover
 signed durable intake followed by real AgentSession/Dispatcher replies, duplicate
 delivery and reopening a persistent QQ session; they do not establish live
-account approval or network reachability.
+account approval or network reachability. The opt-in
+[QQ dialogue evaluator](../rules/testing-and-bench.md#qq-live-dialogue-evaluation)
+can process a trusted private event through a real session and outbound transport.
 
 The wire contracts follow Tencent's [SDK overview](https://github.com/tencent-connect/botgo/blob/master/README.md),
 [webhook implementation](https://github.com/tencent-connect/botgo/blob/master/interaction/webhook/webhook.go),

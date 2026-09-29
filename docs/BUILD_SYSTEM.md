@@ -29,6 +29,9 @@ verification. Build it with `xmake build -j4 oran-qq-login` after installing sys
 `libqrencode` 4.1.1 development files. That optional dependency is isolated from
 runtime libraries and tests. [QR authorization](design-docs/messaging-channels.md#qr-authorization)
 owns the command and private credential contract.
+The opt-in `eval-qq` target processes one trusted private QQ event for live
+dialogue verification; [testing](rules/testing-and-bench.md#qq-live-dialogue-evaluation)
+owns its command and recovery limits.
 `xmake test` builds test targets before running them.
 The opt-in `eval-context` target runs controlled or explicitly configured live
 working-context evaluations; [testing](rules/testing-and-bench.md#working-context-evaluation)

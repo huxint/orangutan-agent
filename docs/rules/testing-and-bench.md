@@ -96,3 +96,48 @@ that an explicitly pending task label was reported as completed. Repeat
 with the deployment model and inspect failed answers and checkpoints before
 changing memory policy. Grader negatives, budget exhaustion and controlled
 end-to-end execution are covered by `test-bootstrap`.
+
+
+## QQ Live Dialogue Evaluation
+
+`eval-qq` processes one authenticated QQ event supplied by a trusted local ingress
+harness. It is opt-in and does not connect a Gateway or start public ingress.
+The current Tencent `qqbot-nodejs` SDK supports a WebSocket Gateway; a live
+experiment can authenticate there and feed C2C events to this runner without
+adding a WebSocket dependency to the runtime. The bootstrap webhook API remains
+independent of this ingress choice.
+
+```sh
+xmake build -j4 eval-qq
+python3 tests/eval/test_qq.py build/linux/x86_64/release/eval-qq
+build/linux/x86_64/release/eval-qq "$CONFIG" "$WORKSPACE" "$QQ_STATE_DIR"
+```
+
+The private state directory must already contain `qq-credentials.json` from
+`oran-qq-login` and the trusted harness's `event.json` (at most 1 MiB). The event
+file is not independently authenticated; never feed untrusted local files or
+public HTTP bodies to this entry point. Only direct text from the saved scanning
+user is admitted. Missing owner identity fails closed. State must be outside the
+workspace; extra filesystem roots are refused. Provider credentials use the
+configuration's ordinary environment references. The runner grants no typing
+status requests and disables child delegation; model/tool permissions still
+come from the supplied configuration.
+
+`live-journal.json` binds the app, user, workspace and persistent session ID.
+It saves input before the model runs, answer before sending, and each confirmed
+receipt. A failed or ambiguous operation leaves `pending` intact and blocks the
+next invocation. Preserve and inspect it before any manual reconciliation;
+there is no automatic retry or acknowledgment command. Delivered event IDs
+suppress duplicates. Each evaluation is limited to 16 delivered events; the
+runner never evicts them. Private `live-sessions.db`, `live-memory.db` and
+`live-audit.db` preserve runtime history independently of the delivery journal.
+Do not delete user records to restart an evaluation.
+
+SIGINT/SIGTERM requests cancellation and joins active work. The evaluation runner
+is a bounded local test entry point, not a durable production Gateway service.
+The CLI regression check covers foreign/missing owner, binding changes, pending
+preservation, duplicate suppression, the turn limit and denied-provider recovery.
+Live acceptance additionally requires user-originated QQ messages, real provider
+responses, remote send receipts and confirmation in the user's QQ client. A
+correct answer after a second process opens the same session verifies that
+specific continuation case, not general long-term-memory quality.

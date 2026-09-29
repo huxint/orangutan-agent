@@ -68,6 +68,9 @@ journal. Its deployment and recovery contract belongs to
 The opt-in `oran-qq-login` in `apps/qq/` composes bootstrap's official QR
 authorization with terminal display and private credential storage. It binds a
 bot or probes its saved credentials; the QQ message receiver remains host work.
+The opt-in `eval-qq` runner composes a persisted session and QQ dispatcher for
+one trusted local event; [testing](rules/testing-and-bench.md#qq-live-dialogue-evaluation)
+owns this bounded live-test surface.
 
 Dependencies flow toward domain values and platform primitives. Intentional
 same-layer edges are HTTP/IO/storage → async and tool → permission/hook.
