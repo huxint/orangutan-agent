@@ -21,6 +21,7 @@
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <oran/agent.hpp>
 #include <oran/async.hpp>
@@ -1650,6 +1651,46 @@ TEST_CASE("a session advertises memory tools only when memory is available",
     CHECK_FALSE(
         std::ranges::contains(requests.front().tools, std::string_view{"MemoryRemember"}, &core::ToolDef::name));
     CHECK_FALSE(std::ranges::contains(requests.front().tools, std::string_view{"MemoryForget"}, &core::ToolDef::name));
+  });
+}
+
+TEST_CASE("AgentSession does not commit incomplete responses and can continue", "[integration][bootstrap][memory]") {
+  const auto reason = GENERATE(core::StopReason::max_tokens, core::StopReason::cancelled, core::StopReason::error);
+  const bool with_tool = GENERATE(false, true);
+  TempDir temp{"oran-session-incomplete"};
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, true);
+    auto incomplete = with_tool
+        ? tool_response("FileWrite", "write-1", R"({"path":"must-not-exist.txt","content":"partial"})")
+        : text_response("partial answer");
+    incomplete.stop_reason = reason;
+    RecordingProvider recording{{text_response("saved answer"), std::move(incomplete), text_response("continued")}};
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::permissive;
+    options.session_id.back() = std::byte{0x42};
+    auto runner = bootstrap::AgentSession::create(std::move(options));
+    REQUIRE(runner.has_value());
+    auto first = co_await (*runner)->run_prompt({.prompt = "saved prompt"});
+    REQUIRE(first.has_value());
+    auto failed = co_await (*runner)->run_prompt({.prompt = "unfinished prompt"});
+    REQUIRE_FALSE(failed.has_value());
+    REQUIRE_FALSE(std::filesystem::exists(temp.path() / "must-not-exist.txt"));
+    auto loaded = co_await assembly.session_store()->load(
+        memory::session::SessionId{.value = "00000000000000000000000000000042"},
+        memory::session::AgentKey{.value = "coder"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 2);
+    REQUIRE((*loaded)[1].blocks == core::Message::assistant_text("saved answer").blocks);
+    auto continued = co_await (*runner)->run_prompt({.prompt = "continue"});
+    REQUIRE(continued.has_value());
+    REQUIRE(continued->text == "continued");
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 3);
+    REQUIRE(requests.back().messages.size() == 3);
+    REQUIRE(requests.back().messages[0].blocks == core::Message::user_text("saved prompt").blocks);
+    REQUIRE(requests.back().messages[1].blocks == core::Message::assistant_text("saved answer").blocks);
+    REQUIRE(requests.back().messages[2].blocks == core::Message::user_text("continue").blocks);
   });
 }
 

@@ -1433,6 +1433,70 @@ TEST_CASE("Loop persists loop-boundary error trace rows", "[unit][agent][loop][t
   });
 }
 
+TEST_CASE("Loop rejects incomplete responses before tools or success", "[unit][agent][loop][trace]") {
+  const auto reason = GENERATE(core::StopReason::max_tokens, core::StopReason::cancelled, core::StopReason::error);
+  const bool with_tool = GENERATE(false, true);
+  TempDb db{"oran-incomplete-response"};
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+    provider::Response response{
+        .blocks = {core::TextContent{.text = "partial answer"}},
+        .stop_reason = reason,
+        .usage = {.input_tokens = 11, .output_tokens = 7, .cost_estimate = std::nullopt},
+    };
+    if (with_tool) {
+      response.blocks.push_back(core::ToolUseContent{.id = "write-1", .name = "Write", .input_json = "{}"});
+    }
+    RecordingProvider provider{std::move(response)};
+    agent::Loop loop{provider, default_route()};
+    tool::Registry registry;
+    int effects = 0;
+    REQUIRE(registry.add(tool_def("Write", "Perform an effect"),
+        [&](std::string_view, tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+          ++effects;
+          co_return tool::Output::text_only("changed");
+        }).has_value());
+    auto rules = allow_all_rules();
+    permission::RecordingAuditSink audit;
+    auto ctx = dispatch_context(io, rules, audit);
+    const auto catalog = registry.catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("perform work")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.tools = &registry;
+    inputs.dispatch_context = &ctx;
+    inputs.turn_id = turn_id_with(0x31);
+    inputs.trace = agent::TraceContext{
+        .repository = &trace,
+        .blocking_executor = io.get_executor(),
+        .session_id = turn_id_with(0x80),
+        .agent_key = "coder",
+        .origin = "cli",
+    };
+    auto result = co_await loop.run_turn(inputs);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(effects == 0);
+    REQUIRE(audit.events().empty());
+    REQUIRE(provider.calls() == 1);
+    const bool cancelled = reason == core::StopReason::cancelled;
+    REQUIRE(result.error().kind() == (cancelled ? core::ErrorKind::cancelled : core::ErrorKind::upstream));
+    if (cancelled) {
+      REQUIRE(contains_context(result.error(), "cancellation_phase", "provider_complete"));
+    } else {
+      REQUIRE(contains_context(result.error(), "stop_reason", core::enum_name(reason)));
+    }
+    auto row = co_await trace.get_turn(*inputs.turn_id);
+    REQUIRE(row.has_value());
+    REQUIRE(row->has_value());
+    REQUIRE((*row)->stop_reason == (cancelled ? "cancelled" : "error"));
+    REQUIRE((*row)->input_tokens == 11);
+    REQUIRE((*row)->output_tokens == 7);
+    REQUIRE((*row)->iteration_count == 1);
+  });
+}
+
 TEST_CASE("Loop dispatches one tool_use and re-enters the provider with a tool result", "[unit][agent][loop]") {
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     RecordingSequenceProvider provider{std::vector<provider::Response>{

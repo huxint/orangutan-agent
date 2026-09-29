@@ -412,6 +412,23 @@ public:
       co_await observer.provider_response(*response, last_target, iteration, provider_started_at, provider_finished_at);
       add_usage(total_usage, response->usage);
 
+      // A complete tool block can still belong to a truncated or cancelled
+      // response. Check completion before admitting any effects or transcript.
+      if (response->stop_reason == core::StopReason::cancelled) {
+        co_return std::unexpected(co_await observer.fail(
+            with_cancellation_phase(core::Error::cancelled(), "provider_complete"),
+            "provider_complete", progress()));
+      }
+      if (response->stop_reason != core::StopReason::end_turn &&
+          response->stop_reason != core::StopReason::stop_sequence &&
+          response->stop_reason != core::StopReason::tool_use) {
+        auto error = core::Error::upstream(response->stop_reason == core::StopReason::max_tokens
+                                              ? "model output limit reached before response completion"
+                                              : "provider response did not complete")
+                         .with("stop_reason", std::string{core::enum_name(response->stop_reason)});
+        co_return std::unexpected(co_await observer.fail(std::move(error), "provider_complete", progress()));
+      }
+
       const auto tool_uses = tool_uses_in(response->blocks);
       if (response->stop_reason == core::StopReason::tool_use || !tool_uses.empty()) {
         if (inputs.tools == nullptr || inputs.dispatch_context == nullptr) {
@@ -478,14 +495,6 @@ public:
         });
         view.messages.push_back(transcript.back());
         continue;
-      }
-
-      if (response->stop_reason != core::StopReason::end_turn &&
-          response->stop_reason != core::StopReason::stop_sequence &&
-          response->stop_reason != core::StopReason::max_tokens &&
-          response->stop_reason != core::StopReason::cancelled) {
-        co_return std::unexpected(
-            co_await observer.fail(unsupported_response("non-terminal stop reason"), "provider_complete", progress()));
       }
 
       auto text = assemble_terminal_text(response->blocks);

@@ -198,6 +198,8 @@ async::Awaitable<core::Result<void>> fit_context(ContextView& view,
     co_return core::Result<void>{};
   }
   auto response = co_await send(std::move(summary_request));
+  if (response && response->stop_reason == core::StopReason::cancelled)
+    co_return std::unexpected(core::Error::cancelled());
   core::Result<void> valid;
   std::string summary;
   if (!response)

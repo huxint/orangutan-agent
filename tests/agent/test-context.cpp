@@ -42,13 +42,17 @@ public:
   mutable std::vector<provider::Request> requests;
   bool fail_summary{};
   bool cancel_summary{};
+  bool cancelled_response{};
   async::Awaitable<core::Result<provider::Response>>
   send(provider::Request request, provider::ModelTarget, provider::EventSink*) const override {
     const bool summary = request.system_prompt.value_or("").starts_with("Produce a bounded session handoff");
     requests.push_back(std::move(request));
     if (summary && cancel_summary)
       co_return std::unexpected(core::Error::cancelled());
-    co_return response(summary ? (fail_summary ? "invalid" : SUMMARY) : "done");
+    auto result = response(summary ? (fail_summary ? "invalid" : SUMMARY) : "done");
+    if (summary && cancelled_response)
+      result.stop_reason = core::StopReason::cancelled;
+    co_return result;
   }
 };
 }  // namespace
@@ -79,11 +83,12 @@ TEST_CASE("Context compaction keeps original transcript and accounts for summary
 }
 
 TEST_CASE("Invalid soft summaries retain context and cancelled summaries stop the turn", "[agent][context]") {
-  for (bool cancel : {false, true}) {
-    test::run_async([cancel](asio::io_context&) -> async::Awaitable<void> {
+  for (int cancellation : {0, 1, 2}) {
+    test::run_async([cancellation](asio::io_context&) -> async::Awaitable<void> {
       SummarizingProvider backend;
       backend.fail_summary = true;
-      backend.cancel_summary = cancel;
+      backend.cancel_summary = cancellation == 1;
+      backend.cancelled_response = cancellation == 2;
       agent::Loop loop{backend, route()};
       auto messages = history();
       messages.push_back(core::Message::user_text("Continue"));
@@ -91,7 +96,7 @@ TEST_CASE("Invalid soft summaries retain context and cancelled summaries stop th
       inputs.context = {.max_tokens = 16384, .summary_max_bytes = 512};
       inputs.max_tokens = 512;
       auto result = co_await loop.run_turn(inputs);
-      if (cancel) {
+      if (cancellation != 0) {
         REQUIRE_FALSE(result);
         REQUIRE(result.error().kind() == core::ErrorKind::cancelled);
         REQUIRE(backend.requests.size() == 1);

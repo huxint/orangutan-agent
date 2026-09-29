@@ -20,6 +20,22 @@ bounded independently. Model-repairable tool errors re-enter the model as error
 results; infrastructure failures terminate the turn. Trace rows correlate the
 turn with its tool audits without storing raw prompt bodies.
 
+Response completion is checked before inspecting tool calls for execution.
+Only `end_turn`, `stop_sequence` and `tool_use` enter the normal paths.
+`max_tokens` returns an upstream error identifying output-budget exhaustion;
+`error` returns an upstream failure. `cancelled` returns cancellation attributed
+to `provider_complete`. Even valid tool JSON in these incomplete responses must
+not run. Usage and served-provider attribution still reach the terminal trace.
+There is no automatic retry or continuation of the rejected response.
+Cancellation reported by a context-summary response also terminates the turn,
+even when compaction could otherwise be deferred under soft context pressure.
+
+An incomplete response is not a successful turn and does not commit a transcript
+or checkpoint. The next prompt resumes previously completed history. Streamed
+partial text remains only an observation; it does not establish task completion.
+Effects from earlier, complete tool responses are not rolled back if a later
+response fails; their ordinary audit records and effect-specific durability remain.
+
 Tool results whose usage marks truncation or dropped structured data carry an
 explicit notice in the model-visible text and the returned transcript. A truncated
 result must not appear complete merely because its tool call succeeded. These
