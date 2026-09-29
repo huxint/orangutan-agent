@@ -309,7 +309,7 @@ Responses and exceptions never appear in errors; app secrets and token cache
 storage are cleared when the source is destroyed. Failed sends are not replayed
 automatically by this credential helper.
 
-Deployment still needs an official QQ AppID/AppSecret, enabled C2C/group events,
+Deployment still needs official QQ bot credentials, enabled C2C/group events,
 a public HTTPS callback and the platform's egress IP allowlist. There is no
 standalone `oran-qq` deployment executable in this slice. Controlled tests cover
 signed durable intake followed by real AgentSession/Dispatcher replies, duplicate
@@ -320,6 +320,59 @@ The wire contracts follow Tencent's [SDK overview](https://github.com/tencent-co
 [webhook implementation](https://github.com/tencent-connect/botgo/blob/master/interaction/webhook/webhook.go),
 [signature scheme](https://github.com/tencent-connect/botgo/blob/master/interaction/signature/interaction.go)
 and [token source](https://github.com/tencent-connect/botgo/blob/master/token/token_source.go).
+
+### QR authorization
+
+`connect_qq` in `<oran/bootstrap/qq_connect.hpp>` obtains bot credentials through
+Tencent's official QR binding service. It creates a random 32-byte key, posts its
+base64 representation to `https://q.qq.com/lite/create_bind_task`, and passes the
+official QQ connect URL to the host's display callback. Every create/poll requires
+`QQBind` with `egress_http` and emits a channel hook containing only the operation
+and decision. The binding key is never part of the QR URL, hooks or diagnostics.
+Retain the options, HTTP client and hook bus until the operation completes.
+
+The operation polls `/lite/poll_bind_result` at two-second intervals by default.
+States 0/1 wait, 2 completes, and 3 refreshes the QR with a new key; unknown states
+fail. At most three tasks are created under one five-minute deadline (configurable
+up to ten minutes). Each HTTP request has at most ten seconds and a 16-KiB response
+limit. Request failures stop the operation; it does not retry ambiguous creates.
+Cancellation joins HTTP/display work. The service returns an AES-256-GCM envelope
+(12-byte nonce, ciphertext, 16-byte tag); authenticate it before returning AppID,
+AppSecret and the optional scanning user's open ID. Temporary key storage is
+cleared at completion. Existing libsodium requires hardware AES-GCM support;
+unsupported machines fail before any binding request.
+
+The opt-in `oran-qq-login` executable displays the QR directly in the terminal,
+so no AppID/AppSecret copying is needed:
+
+```sh
+xmake build -j4 oran-qq-login
+build/linux/x86_64/release/oran-qq-login --state "$QQ_STATE_DIR" --workspace "$WORKSPACE_DIR"
+build/linux/x86_64/release/oran-qq-login --state "$QQ_STATE_DIR" --workspace "$WORKSPACE_DIR" --probe
+```
+
+Install system `libqrencode` 4.1.1 development files to build this executable.
+Use mobile QQ to scan and approve the displayed official page. SIGINT/SIGTERM
+cancels and joins the login. `QQCredentialRead`/`QQCredentialWrite` authorize
+private storage. The host holds a directory lock and atomically saves
+`qq-credentials.json` with `app_id`, `app_secret` and `user_openid`, mode 0600.
+The file contains an unencrypted secret: keep the private state directory outside
+the agent workspace and every extra filesystem root. The executable rejects state
+under its selected workspace and never replaces an existing binding, even with a
+malformed file or a new scan. Use a different private directory for another bot.
+
+`--probe` reads that binding and obtains an access token through `QQTokenSource`,
+without creating a QR, invoking a model or sending a chat message. Binding itself
+only persists credentials; neither command starts a message receiver. A QQ host
+must consume the saved identity, select allowed senders (the scanning user's open
+ID when available), and compose authenticated ingress, durable intake and delivery.
+An absent open ID does not grant access to every user.
+
+The protocol follows Tencent's [official plugin login](https://github.com/tencent-connect/openclaw-qqbot/blob/a730701d36aa7a070f98d4cba0f340f91f15e5f5/src/setup/login.ts)
+and the published [`qqbot-connector` 1.2.0](https://www.npmjs.com/package/@tencent-connect/qqbot-connector/v/1.2.0)
+wire implementation. That JavaScript package is not a dependency. Controlled
+tests verify state transitions, authenticated decryption, denial, cancellation
+and private persistence; actual account binding still requires a user's scan.
 
 ## Dispatcher authority, lifecycle and recovery
 

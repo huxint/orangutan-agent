@@ -52,6 +52,9 @@ intake/delivery journal and explicit reconciliation after ambiguous failures.
 Bootstrap also supplies official QQ webhook authentication, durable-enqueue ACKs
 and scoped token refresh. Public QQ ingress, queue/outbox deployment and account
 configuration remain host responsibilities in the messaging contract.
+The opt-in `oran-qq-login` obtains credentials by official QR authorization,
+stores the binding privately without overwriting existing accounts, and probes
+saved credentials. It does not start QQ message ingress.
 
 ## Contract Owners
 

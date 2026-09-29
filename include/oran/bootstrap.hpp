@@ -5,6 +5,7 @@
 #include <oran/bootstrap/provider-profiles.hpp>
 #include <oran/bootstrap/provider_backend.hpp>
 #include <oran/bootstrap/qq.hpp>
+#include <oran/bootstrap/qq_connect.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/bootstrap/session_status.hpp>
 

@@ -57,6 +57,9 @@ For real Telegram testing, build the opt-in `oran-telegram` host and follow the
 It includes a DeepSeek Flash example, persistent conversations, status reactions,
 streaming previews, Markdown formatting, reply context and image input for vision-capable models.
 Chat commands `/new`, `/status`, `/help` and `/whoami` provide local session controls.
+For QQ, `oran-qq-login` supports [official QR binding](docs/design-docs/messaging-channels.md#qr-authorization)
+without manually entering AppID/AppSecret, plus a saved-credential probe. The QQ
+message-receiving host is still separate deployment work.
 
 Working-context retention can be measured with the opt-in `eval-context` runner.
 See [evaluation commands and interpretation](docs/rules/testing-and-bench.md#working-context-evaluation).

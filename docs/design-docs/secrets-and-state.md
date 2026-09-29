@@ -68,7 +68,11 @@ variable or an explicitly injected `provider::SecretLookup` at the provider
 construction boundary.
 Values are excluded from diagnostics. String values the parser reads expand
 `${NAME}` and `${NAME:-fallback}`; unread fields are never expanded; prefer references over
-embedding credentials in JSON. No credential encryption/store is implemented.
+embedding credentials in JSON. No general provider credential store is implemented.
+Channel hosts own separate credentials: the QQ login command stores a mode-0600,
+unencrypted binding outside the workspace. This is not a general provider secret
+store; [QR authorization](messaging-channels.md#qr-authorization) owns its format
+and preservation rules.
 
 ## State
 

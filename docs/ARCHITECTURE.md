@@ -65,6 +65,9 @@ The opt-in `oran-telegram` application in `apps/telegram/` composes authenticate
 polling, one allowed private user's persistent session and a private delivery
 journal. Its deployment and recovery contract belongs to
 [messaging channels](design-docs/messaging-channels.md#telegram-deployment-host).
+The opt-in `oran-qq-login` in `apps/qq/` composes bootstrap's official QR
+authorization with terminal display and private credential storage. It binds a
+bot or probes its saved credentials; the QQ message receiver remains host work.
 
 Dependencies flow toward domain values and platform primitives. Intentional
 same-layer edges are HTTP/IO/storage → async and tool → permission/hook.

@@ -24,6 +24,11 @@ The opt-in `oran-telegram` application hosts a private Telegram conversation;
 [messaging channels](design-docs/messaging-channels.md#telegram-deployment-host)
 owns deployment commands, credentials and recovery. Build it with
 `xmake build -j4 oran-telegram`; ordinary builds and tests never launch it.
+The opt-in `oran-qq-login` executable provides official QR binding and saved-token
+verification. Build it with `xmake build -j4 oran-qq-login` after installing system
+`libqrencode` 4.1.1 development files. That optional dependency is isolated from
+runtime libraries and tests. [QR authorization](design-docs/messaging-channels.md#qr-authorization)
+owns the command and private credential contract.
 `xmake test` builds test targets before running them.
 The opt-in `eval-context` target runs controlled or explicitly configured live
 working-context evaluations; [testing](rules/testing-and-bench.md#working-context-evaluation)
