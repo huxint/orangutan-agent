@@ -31,12 +31,12 @@ its conversation; use sender rules if group members have different authority.
 
 | Platform | Accepted ingress | Reply | Activity |
 | --- | --- | --- | --- |
-| Telegram | `message` text from users in private/group/supergroup chats | `sendMessage`, original message and forum topic | `sendChatAction`, refreshed every four seconds by default; expires naturally |
+| Telegram | User text, photos and image documents with captions in private/group/supergroup chats | `sendMessage`, original message and forum topic | `sendChatAction`, refreshed every four seconds by default; expires naturally |
 | QQ | `C2C_MESSAGE_CREATE`, `GROUP_AT_MESSAGE_CREATE` dispatch envelopes | Official `/v2/users` or `/v2/groups` passive text reply | C2C `msg_type: 6`, `input_type: 1`, then explicit `input_type: 2` stop; group activity unsupported |
 | Feishu | `im.message.receive_v1` user text events | Message reply with nested JSON content and thread routing | Add `Typing` reaction, then delete the exact returned reaction ID |
 
-Bot/self events where the protocol identifies bots, edits, attachments and other
-unsupported event types are ignored; malformed supported events return errors.
+Bot/self events where the protocol identifies bots, edits, unsupported attachments
+and other unsupported event types are ignored; malformed supported events return errors.
 Only configured bot mentions are removed, never arbitrary user mentions.
 Telegram group mention/command policy belongs to the host admission rules.
 Feishu requires the bot open ID to strip its mention placeholders.
@@ -64,9 +64,9 @@ wait for an agent turn inside a webhook acknowledgment deadline.
 
 Bootstrap's `channel_http_transport(Client&, ChannelCredential)` binds outbound
 requests to the existing HTTP client and fixed official HTTPS endpoints. Supported
-Telegram methods cover sends, typing, reactions and ephemeral drafts; arbitrary
-API paths remain rejected. The binding uses
-a ten-second request timeout and a one-MiB response cap. The credential callback
+Telegram methods cover sends, typing, reactions, ephemeral drafts and file metadata;
+arbitrary API paths remain rejected. The binding uses a ten-second request timeout
+and a one-MiB response cap. The credential callback
 returns a current Telegram bot token, QQ access token, or Feishu tenant access
 token on each request. The host owns environment/secret references and token
 refresh (QQ app credentials and Feishu app credentials are not access tokens).
@@ -93,8 +93,9 @@ auto dispatcher = channel::Dispatcher::create(
     std::move(options));
 ```
 
-This example binds one conversation. A multi-conversation host resolves its
-session by `conversation_key` inside the turn callback. The host supplies the
+This text-only example binds one conversation. Image attachments also need the
+host's authorized download and typed prompt mapping. A multi-conversation host
+resolves its session by `conversation_key` inside the turn callback. The host supplies the
 HTTP client's worker executor and retains all services until every dispatch has
 returned. The bootstrap channel integration test exercises a real `AgentSession`
 with a controlled provider and transport.
@@ -108,6 +109,30 @@ processes one update at a time, keeps Telegram's pending queue intact on startup
 verifies `getMe`, and refuses an active webhook without changing it. Run only one
 poller per bot token. The state lock excludes another process using the same
 state directory; Telegram rejects competing pollers in different directories.
+
+Photos select the largest available size; image documents keep their Telegram
+file ID and caption. After receive admission, `ChannelAttachment` authorizes both
+`getFile` and the bounded download from Telegram's fixed file endpoint. The host
+accepts JPEG, PNG, GIF and WebP signatures up to 5 MiB, with a 20-second download
+timeout. Neither bot tokens nor download URLs enter provider image blocks or
+session history. Captions accompany the image; without one, the host asks the
+model to inspect it in conversation context. Album entries remain separate turns.
+Unsupported or failed downloads receive a visible explanation rather than
+silently disappearing. The configured DeepSeek Flash model supports vision
+through its [Anthropic-compatible API](https://api-docs.deepseek.com/guides/anthropic_api).
+
+One level of `reply_to_message` retains the original text/caption, message and
+sender IDs, and an optional image, including replies to the bot's own messages.
+`quote.text` is retained verbatim as the selected passage, independently of the
+full original message; the host does not reconstruct it from UTF-16 offsets.
+Available external-reply image metadata and quote-only replies also work without
+inventing unavailable original text. Nested reply chains are not expanded.
+The prompt wraps reply context and the current request in distinct JSON fields
+inside the user message. Quoted text remains reference data and never becomes
+system instructions. Attached images are numbered: the replied image first,
+then the new image, each downloaded through the same permission and size gates.
+Text-only messages keep their original prompt representation. This framing follows
+the provenance distinction in the [reference prompt](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/system-prompt-project-timeline-user-message-provenance.md).
 
 ```sh
 xmake build -j4 oran-telegram
@@ -133,7 +158,8 @@ The DeepSeek example uses the Anthropic-compatible endpoint and the
 selected. It permits durable notes and provider requests. Filesystem writes and
 delegation are not exposed by this example; other configurations retain normal
 session permission decisions. The host provides no interactive approval consumer.
-The model receives plain text; `/start` payloads are stripped before the turn.
+The model receives typed text and image blocks; `/start` payloads are stripped
+before the turn.
 
 The host renders CommonMark with `cmark`, then sends plain text plus Telegram
 native entities. Supported formatting includes emphasis, headings, links, lists,

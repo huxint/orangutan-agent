@@ -20,6 +20,14 @@ struct TextContent {
   friend bool operator==(const TextContent&, const TextContent&) = default;
 };
 
+/// Owned image input. Inline bytes keep credential-bearing download URLs out of
+/// provider requests and make persisted conversations independent of remote files.
+struct ImageContent {
+  std::string media_type;
+  std::string data_base64;
+  friend bool operator==(const ImageContent&, const ImageContent&) = default;
+};
+
 struct ThinkingContent {
   std::string thinking;
   /// Optional vendor-issued signature (e.g., Anthropic extended thinking).
@@ -50,7 +58,7 @@ struct ToolResultContent {
   friend bool operator==(const ToolResultContent&, const ToolResultContent&) = default;
 };
 
-using Content = std::variant<TextContent, ThinkingContent, ToolUseContent, ToolResultContent>;
+using Content = std::variant<TextContent, ThinkingContent, ToolUseContent, ToolResultContent, ImageContent>;
 
 [[nodiscard]] bool holds_text(const Content&) noexcept;
 [[nodiscard]] bool holds_thinking(const Content&) noexcept;

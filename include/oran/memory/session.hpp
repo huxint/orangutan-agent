@@ -52,8 +52,12 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<ContextSnapshot>> load_context(SessionId session_id, AgentKey agent_key);
 
-  [[nodiscard]] async::Awaitable<core::Result<std::vector<core::Message>>>
-  load_after(SessionId session_id, AgentKey agent_key, std::int64_t after, std::int64_t through);
+  [[nodiscard]] async::Awaitable<core::Result<std::vector<core::Message>>> load_after(SessionId session_id,
+                                                                                      AgentKey agent_key,
+                                                                                      std::int64_t after,
+                                                                                      std::int64_t through,
+                                                                                      std::size_t max_bytes = 512 *
+                                                                                                              1024);
 
   [[nodiscard]] async::Awaitable<core::Result<std::vector<core::Message>>> load(SessionId session_id,
                                                                                 AgentKey agent_key);

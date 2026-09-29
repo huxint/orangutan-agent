@@ -82,9 +82,11 @@ output there.
 ## Session History
 
 `session::Store` wraps `storage::SessionRepository`. Keys are explicit session
-and agent values; messages retain typed text, thinking, tool-use and tool-result
-blocks. Its API appends and reads conversations, with serialization owned by
+and agent values; messages retain typed text, image, thinking, tool-use and
+tool-result blocks. Its API appends and reads conversations, with serialization owned by
 memory and transactions owned by storage.
+Image media types and base64 bytes round-trip in the existing message envelope;
+saved text records and database schemas are unchanged.
 
 `load_tail` returns the newest messages in conversation order with row and encoded
 byte limits. Defaults are 128 rows and 512 KiB; valid limits are 1–4096 rows and
@@ -109,6 +111,8 @@ from reserved `sessions.metadata_json.oran_working_context`. The checkpoint carr
 `covered_sequence`, `revision` and the bounded handoff text. Absent checkpoints
 start at sequence zero. Invalid metadata, coverage or revisions fail explicitly.
 `load_after` reads bounded pages after that sequence without discarding older rows.
+Its optional encoded-byte budget defaults to 512 KiB and accepts up to 16 MiB;
+an individual row that exceeds the budget fails explicitly rather than being skipped.
 
 `append_all` can accept the loaded snapshot and a provisional checkpoint. It
 serializes the whole suffix before acquiring a writer, checks the prior message

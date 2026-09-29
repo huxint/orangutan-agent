@@ -149,3 +149,44 @@ TEST_CASE("An indivisible oversized request fails before provider work", "[agent
     REQUIRE(backend.requests.empty());
   });
 }
+
+TEST_CASE("Image context accounting uses image allowance instead of base64 text length", "[agent][context]") {
+  provider::Request request;
+  request.messages.push_back(core::Message{.role = core::Role::user,
+                                           .blocks = {core::ImageContent{"image/png", "aW1hZ2U="}},
+                                           .created_at = std::nullopt});
+  const auto small = agent::estimate_input_tokens(request);
+  std::get<core::ImageContent>(request.messages.front().blocks.front()).data_base64.assign(1024 * 1024, 'A');
+  CHECK(agent::estimate_input_tokens(request) == small);
+  CHECK(small > 4096);
+  CHECK(small < 131072);
+}
+
+TEST_CASE("Image compaction preserves original bytes while keeping handoffs textual", "[agent][context]") {
+  test::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    SummarizingProvider backend;
+    agent::Loop loop{backend, route()};
+    auto messages = history();
+    const core::ImageContent image{"image/png", std::string(600 * 1024, 'A')};
+    messages.front().blocks.emplace_back(image);
+    messages.push_back(core::Message::user_text("Continue"));
+    agent::RunTurnInputs inputs{.system_preamble = "Agent", .conversation_tail = messages};
+    inputs.context = {.max_tokens = 16384, .summary_max_bytes = 512};
+    inputs.max_tokens = 512;
+    auto result = co_await loop.run_turn(inputs);
+    REQUIRE(result);
+    CHECK(result->checkpoint.covered_sequence > 0);
+    CHECK(result->transcript.front() == messages.front());
+    REQUIRE(backend.requests.size() >= 2);
+    bool image_marker = false;
+    for (const auto& message : backend.requests.front().messages) {
+      for (const auto& block : message.blocks) {
+        const auto* text = std::get_if<core::TextContent>(&block);
+        REQUIRE(text);
+        CHECK_FALSE(text->text.contains(image.data_base64));
+        image_marker = image_marker || text->text.contains("[Image: image/png;");
+      }
+    }
+    CHECK(image_marker);
+  });
+}

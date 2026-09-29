@@ -132,6 +132,76 @@ TEST_CASE("Channel API failures do not echo upstream bodies and preserve retry d
   CHECK_FALSE(channel::qq().accept({200, "{}", {}}));
 }
 
+TEST_CASE("Telegram receives the largest photo and image documents with captions") {
+  auto photo = channel::telegram().decode(R"({"update_id":7,"message":{"message_id":9,
+    "from":{"id":42,"is_bot":false},"chat":{"id":42,"type":"private"},"caption":"看这张图",
+    "photo":[{"file_id":"large","width":800,"height":600,"file_size":1234},
+             {"file_id":"small","width":80,"height":60}]}})",
+                                          {"bot", "1"});
+  REQUIRE(photo);
+  REQUIRE(*photo);
+  REQUIRE((**photo).image);
+  CHECK((**photo).image->file_id == "large");
+  CHECK((**photo).image->file_size == 1234);
+  CHECK((**photo).text == "看这张图");
+  auto document = channel::telegram().decode(R"({"update_id":8,"message":{"message_id":10,
+    "from":{"id":42},"chat":{"id":42,"type":"private"},
+    "document":{"file_id":"png-file","mime_type":"image/png","file_size":500}}})",
+                                             {"bot", "1"});
+  REQUIRE(document);
+  REQUIRE(*document);
+  REQUIRE((**document).image);
+  CHECK((**document).text.empty());
+  CHECK((**document).image->media_type == "image/png");
+  auto unsupported =
+      channel::telegram().decode(R"({"message":{"document":{"mime_type":"application/pdf"}}})", {"bot", "1"});
+  REQUIRE(unsupported);
+  CHECK_FALSE(*unsupported);
+}
+
+TEST_CASE("Telegram retains reply text and exact selected quotes independently of bot authorship") {
+  auto decoded = channel::telegram().decode(R"({"update_id":20,"message":{"message_id":30,
+    "from":{"id":42},"chat":{"id":42,"type":"private"},"text":"解释这句",
+    "reply_to_message":{"message_id":29,"from":{"id":1,"is_bot":true},
+                        "text":"😀第一句。第二句。","reply_to_message":{"text":"ignore nested reply"}},
+    "quote":{"text":"第二句。","position":7,"is_manual":true}}})",
+                                            {"bot", "1"});
+  REQUIRE(decoded);
+  REQUIRE(*decoded);
+  const auto& message = **decoded;
+  REQUIRE(message.reply_to);
+  CHECK(message.text == "解释这句");
+  CHECK(message.reply_to->message_id == "29");
+  CHECK(message.reply_to->sender == "1");
+  CHECK(message.reply_to->text == "😀第一句。第二句。");
+  CHECK(message.reply_to->quote == "第二句。");
+}
+
+TEST_CASE("Telegram retains replied images and quote-only external replies") {
+  auto decoded = channel::telegram().decode(R"({"update_id":21,"message":{"message_id":31,
+    "from":{"id":42},"chat":{"id":42,"type":"private"},"text":"看原图",
+    "reply_to_message":{"message_id":29,"from":{"id":42},"caption":"原图说明",
+      "photo":[{"file_id":"old-photo","width":800,"height":600}]}}})",
+                                            {"bot", "1"});
+  REQUIRE(decoded);
+  REQUIRE(*decoded);
+  REQUIRE((**decoded).reply_to);
+  REQUIRE((**decoded).reply_to->image);
+  CHECK((**decoded).reply_to->image->file_id == "old-photo");
+  CHECK((**decoded).reply_to->text == "原图说明");
+  CHECK_FALSE((**decoded).image);
+
+  auto quoted = channel::telegram().decode(R"({"update_id":22,"message":{"message_id":32,
+    "from":{"id":42},"chat":{"id":42,"type":"private"},"text":"这句呢",
+    "quote":{"text":"精确选中的内容","position":15}}})",
+                                           {"bot", "1"});
+  REQUIRE(quoted);
+  REQUIRE(*quoted);
+  REQUIRE((**quoted).reply_to);
+  CHECK((**quoted).reply_to->quote == "精确选中的内容");
+  CHECK((**quoted).reply_to->text.empty());
+}
+
 TEST_CASE("Channel text splitting preserves Unicode and rejects malformed UTF-8") {
   const std::string text = "你好🙂world";
   auto parts = channel::split_text(text, 4);

@@ -43,12 +43,28 @@ struct Conversation {
   friend bool operator==(const Conversation&, const Conversation&) = default;
 };
 
+struct ImageAttachment {
+  std::string file_id;
+  std::string media_type;
+  std::uint64_t file_size{0};
+};
+
+struct ReplyContext {
+  std::string message_id;
+  std::string sender;
+  std::string text;
+  std::string quote;
+  std::optional<ImageAttachment> image{};
+};
+
 struct Message {
   Conversation conversation;
   std::string event_id;
   std::string message_id;
   std::string sender;
   std::string text;
+  std::optional<ImageAttachment> image{};
+  std::optional<ReplyContext> reply_to{};
 };
 
 /// Account and bot identity come from trusted host configuration, not the event.

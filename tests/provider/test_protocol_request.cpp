@@ -304,3 +304,26 @@ TEST_CASE("Anthropic requests explicitly disable unbudgeted thinking", "[unit][p
   const auto body = json::parse(encoded->body_json);
   REQUIRE(body.at("thinking") == json{{"type", "disabled"}});
 }
+
+TEST_CASE("Provider requests preserve typed images without remote credential URLs", "[unit][provider][protocol]") {
+  provider::Request request;
+  request.max_tokens = 256;
+  request.messages.push_back(
+      core::Message{.role = core::Role::user,
+                    .blocks = {core::TextContent{"describe"}, core::ImageContent{"image/png", "aW1hZ2U="}},
+                    .created_at = std::nullopt});
+  auto anthropic = provider::make_protocol_request(request, target(provider::ProtocolKind::anthropic_messages));
+  REQUIRE(anthropic);
+  const auto image = json::parse(anthropic->body_json).at("messages").at(0).at("content").at(1);
+  CHECK(image.at("type") == "image");
+  CHECK(image.at("source") == json{{"type", "base64"}, {"media_type", "image/png"}, {"data", "aW1hZ2U="}});
+  auto openai = provider::make_protocol_request(request, target(provider::ProtocolKind::openai_responses));
+  REQUIRE(openai);
+  const auto item = json::parse(openai->body_json).at("input").at(1).at("content").at(0);
+  CHECK(item.at("type") == "input_image");
+  CHECK(item.at("image_url") == "data:image/png;base64,aW1hZ2U=");
+  request.messages.front().blocks.back() = core::ImageContent{"application/pdf", "PRIVATE_DATA"};
+  auto invalid = provider::make_protocol_request(request, target(provider::ProtocolKind::anthropic_messages));
+  REQUIRE_FALSE(invalid);
+  CHECK_FALSE(invalid.error().message().contains("PRIVATE_DATA"));
+}

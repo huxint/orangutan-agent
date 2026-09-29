@@ -429,7 +429,9 @@ TEST_CASE("AgentSession persists successful turns through the session store",
 
     auto runner = bootstrap::AgentSession::create(std::move(options));
     REQUIRE(runner.has_value());
-    auto result = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "remember"});
+    orangutan::agent::PromptRequest prompt{.prompt = "remember"};
+    prompt.images.push_back(core::ImageContent{"image/png", "aW1hZ2U="});
+    auto result = co_await (*runner)->run_prompt(std::move(prompt));
 
     REQUIRE(result.has_value());
     REQUIRE(result->text == "stored");
@@ -440,7 +442,8 @@ TEST_CASE("AgentSession persists successful turns through the session store",
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->size() == 2);
     REQUIRE((*loaded)[0].role == core::Role::user);
-    REQUIRE((*loaded)[0].blocks == core::Message::user_text("remember").blocks);
+    REQUIRE((*loaded)[0].blocks ==
+            std::vector<core::Content>{core::TextContent{"remember"}, core::ImageContent{"image/png", "aW1hZ2U="}});
     REQUIRE((*loaded)[1].role == core::Role::assistant);
     REQUIRE((*loaded)[1].blocks == core::Message::assistant_text("stored").blocks);
   });
@@ -456,6 +459,7 @@ TEST_CASE("AgentSession reloads persisted history for a new runner instance",
     core::TurnId session_id{};
     session_id[0] = std::byte{0x12};
     session_id[15] = std::byte{0x34};
+    const core::ImageContent original_image{"image/png", std::string(600 * 1024, 'A')};
 
     {
       provider::FakeProvider fake{std::vector<provider::ScriptedTurn>{
@@ -470,7 +474,9 @@ TEST_CASE("AgentSession reloads persisted history for a new runner instance",
       options.session_id = session_id;
       auto runner = bootstrap::AgentSession::create(std::move(options));
       REQUIRE(runner.has_value());
-      auto first = co_await (*runner)->run_prompt(orangutan::agent::PromptRequest{.prompt = "first prompt"});
+      orangutan::agent::PromptRequest prompt{.prompt = "first prompt"};
+      prompt.images.push_back(original_image);
+      auto first = co_await (*runner)->run_prompt(std::move(prompt));
       REQUIRE(first.has_value());
     }
 
@@ -488,7 +494,8 @@ TEST_CASE("AgentSession reloads persisted history for a new runner instance",
     REQUIRE(requests.size() == 1);
     REQUIRE(requests[0].messages.size() == 3);
     REQUIRE(requests[0].messages[0].role == core::Role::user);
-    REQUIRE(requests[0].messages[0].blocks == core::Message::user_text("first prompt").blocks);
+    REQUIRE(requests[0].messages[0].blocks ==
+            std::vector<core::Content>{core::TextContent{"first prompt"}, original_image});
     REQUIRE(requests[0].messages[1].role == core::Role::assistant);
     REQUIRE(requests[0].messages[1].blocks == core::Message::assistant_text("first answer").blocks);
     REQUIRE(requests[0].messages[2].role == core::Role::user);
@@ -500,6 +507,34 @@ TEST_CASE("AgentSession reloads persisted history for a new runner instance",
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->size() == 4);
     REQUIRE((*loaded)[3].blocks == core::Message::assistant_text("second answer").blocks);
+  });
+}
+
+TEST_CASE("AgentSession rejects oversized images before effects and accepts a subsequent image-only prompt",
+          "[unit][bootstrap][prompt_runner][image]") {
+  TempDir temp{"oran-bootstrap-image-input"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, true, false);
+    RecordingProvider fake{std::vector<provider::Response>{text_response("image received")}};
+    auto runner = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, fake));
+    REQUIRE(runner);
+    agent::PromptRequest oversized;
+    oversized.images = {{"image/png", std::string(8 * 1024 * 1024, 'A')},
+                        {"image/png", std::string(8 * 1024 * 1024, 'A')}};
+    auto rejected = co_await (*runner)->run_prompt(std::move(oversized));
+    REQUIRE_FALSE(rejected);
+    CHECK(rejected.error().kind() == core::ErrorKind::invalid_argument);
+    CHECK(fake.requests().empty());
+
+    agent::PromptRequest prompt;
+    const core::ImageContent image{"image/png", "aW1hZ2U="};
+    prompt.images.push_back(image);
+    auto accepted = co_await (*runner)->run_prompt(std::move(prompt));
+    REQUIRE(accepted);
+    REQUIRE(fake.requests().size() == 1);
+    REQUIRE(fake.requests().front().messages.size() == 1);
+    CHECK(fake.requests().front().messages.front().blocks == std::vector<core::Content>{image});
   });
 }
 

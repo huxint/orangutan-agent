@@ -56,6 +56,11 @@ profiles or recalculate prices.
 ## Protocols And Streaming
 
 Implemented protocols are `anthropic_messages` and `openai_responses`.
+User image blocks carry a JPEG, PNG, GIF or WebP media type and inline base64.
+Anthropic encodes an `image` block with a base64 source; Responses encodes
+`input_image` with a data URL. Provider credentials and remote download URLs
+are never part of image content. The configured model must support vision;
+protocol support alone does not imply that every model accepts images.
 `HttpProviderBackend` owns the transport, system and resolved route.
 Adapters translate roles, content, tool calls/results, stop reasons and usage,
 and classify malformed responses and provider errors. Anthropic-format requests

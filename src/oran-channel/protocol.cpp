@@ -48,12 +48,24 @@ std::string id(const Json& value) {
 }
 Result<void> validate(const Message& m, Platform p) {
   if (m.conversation.platform != p || m.conversation.account.empty() || m.conversation.chat.empty() ||
-      m.event_id.empty() || m.message_id.empty() || m.sender.empty() || m.text.empty() ||
+      m.event_id.empty() || m.message_id.empty() || m.sender.empty() || (m.text.empty() && !m.image) ||
       m.conversation.account.size() > 256 || m.conversation.chat.size() > 256 || m.conversation.thread.size() > 256 ||
       m.event_id.size() > 256 || m.message_id.size() > 256 || m.sender.size() > 256 || m.text.size() > 65536)
     return std::unexpected(Error::invalid_argument("invalid channel message identity or size"));
   if (!core::str::is_valid_utf8(m.text))
     return std::unexpected(Error::invalid_argument("invalid UTF-8 text"));
+  const auto valid_image = [](const std::optional<ImageAttachment>& image) {
+    return !image || (!image->file_id.empty() && image->file_id.size() <= 512);
+  };
+  if (!valid_image(m.image))
+    return std::unexpected(Error::invalid_argument("invalid channel image identifier"));
+  if (m.reply_to) {
+    const auto& reply = *m.reply_to;
+    if (reply.message_id.size() > 256 || reply.sender.size() > 256 || reply.text.size() > 65536 ||
+        reply.quote.size() > 65536 || !core::str::is_valid_utf8(reply.text) || !core::str::is_valid_utf8(reply.quote) ||
+        !valid_image(reply.image))
+      return std::unexpected(Error::invalid_argument("invalid channel reply context"));
+  }
   return {};
 }
 Result<std::optional<Message>> checked(Message m) {

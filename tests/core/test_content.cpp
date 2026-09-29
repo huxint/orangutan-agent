@@ -112,9 +112,13 @@ TEST_CASE("std::visit with Overloaded set walks every alternative", "[unit][core
     int operator()(const ToolResultContent&) const {
       return 4;
     }
+    int operator()(const orangutan::core::ImageContent&) const {
+      return 5;
+    }
   };
 
   REQUIRE(std::visit(Overloaded{}, Content{TextContent{.text = "x"}}) == 1);
+  REQUIRE(std::visit(Overloaded{}, Content{orangutan::core::ImageContent{"image/png", "aW1hZ2U="}}) == 5);
   REQUIRE(std::visit(Overloaded{}, Content{ThinkingContent{.thinking = "x", .signature = std::nullopt}}) == 2);
   REQUIRE(std::visit(Overloaded{}, Content{ToolUseContent{.id = "1", .name = "a", .input_json = "{}"}}) == 3);
   REQUIRE(std::visit(Overloaded{},

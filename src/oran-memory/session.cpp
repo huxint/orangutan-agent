@@ -54,6 +54,8 @@ void put_if_present(json& object, std::string_view key, const std::optional<std:
         using T = std::decay_t<decltype(block)>;
         if constexpr (std::same_as<T, core::TextContent>) {
           return json{{"type", "text"}, {"text", block.text}};
+        } else if constexpr (std::same_as<T, core::ImageContent>) {
+          return json{{"type", "image"}, {"media_type", block.media_type}, {"data_base64", block.data_base64}};
         } else if constexpr (std::same_as<T, core::ThinkingContent>) {
           auto out = json{{"type", "thinking"}, {"thinking", block.thinking}};
           put_if_present(out, "signature", block.signature);
@@ -146,6 +148,16 @@ optional_string(const json& object, std::string_view key, std::string_view conte
       return std::unexpected(std::move(signature).error());
     }
     return core::Content{core::ThinkingContent{.thinking = std::move(*thinking), .signature = std::move(*signature)}};
+  }
+
+  if (*type == "image") {
+    auto media = required_string(value, "media_type", context);
+    if (!media)
+      return std::unexpected(media.error());
+    auto data = required_string(value, "data_base64", context);
+    if (!data)
+      return std::unexpected(data.error());
+    return core::Content{core::ImageContent{std::move(*media), std::move(*data)}};
   }
 
   if (*type == "tool_use") {
@@ -326,9 +338,16 @@ async::Awaitable<core::Result<ContextSnapshot>> Store::load_context(SessionId se
   co_return result;
 }
 
-async::Awaitable<core::Result<std::vector<core::Message>>>
-Store::load_after(SessionId session_id, AgentKey agent_key, std::int64_t after, std::int64_t through) {
-  auto rows = co_await repository_->load_after(key_from(std::move(session_id), std::move(agent_key)), after, through);
+async::Awaitable<core::Result<std::vector<core::Message>>> Store::load_after(SessionId session_id,
+                                                                             AgentKey agent_key,
+                                                                             std::int64_t after,
+                                                                             std::int64_t through,
+                                                                             std::size_t max_bytes) {
+  auto rows = co_await repository_->load_after(key_from(std::move(session_id), std::move(agent_key)),
+                                               after,
+                                               through,
+                                               64,
+                                               max_bytes);
   if (!rows)
     co_return std::unexpected(rows.error());
   std::vector<core::Message> messages;

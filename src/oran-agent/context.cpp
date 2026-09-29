@@ -42,6 +42,8 @@ std::string block_text(const core::Content& block) {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, core::TextContent>)
           return value.text;
+        else if constexpr (std::is_same_v<T, core::ImageContent>)
+          return std::format("[Image: {}; original bytes remain in session history]", value.media_type);
         else if constexpr (std::is_same_v<T, core::ThinkingContent>)
           return value.thinking;
         else if constexpr (std::is_same_v<T, core::ToolUseContent>)
@@ -69,6 +71,8 @@ std::size_t estimate_input_tokens(const provider::Request& request) {
                           using T = std::decay_t<decltype(value)>;
                           if constexpr (std::is_same_v<T, core::TextContent>)
                             return value.text.size();
+                          else if constexpr (std::is_same_v<T, core::ImageContent>)
+                            return 16384;  // Conservative image allowance; hosts can supply model-aware counting.
                           else if constexpr (std::is_same_v<T, core::ThinkingContent>)
                             return value.thinking.size() + (value.signature ? value.signature->size() : 0);
                           else if constexpr (std::is_same_v<T, core::ToolUseContent>)

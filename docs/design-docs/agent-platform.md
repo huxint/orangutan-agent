@@ -76,7 +76,12 @@ checkpoint is provisional until session persistence succeeds.
 `ContextOptions` defaults to a 131072-token total budget and an 8192-byte summary.
 The host must select a budget that fits every configured route target. Input
 counting accepts a host tokenizer; the dependency-free default conservatively
-counts UTF-8 bytes plus message/block/tool framing allowances. It is an estimate,
+counts UTF-8 bytes plus message/block/tool framing allowances. Each image uses a
+16384-token allowance instead of counting base64 as text; this is not a calibrated
+vision tokenizer. Image data stays in recent typed context and saved history.
+Text-only handoff summaries mark image presence rather than copying encoded
+bytes; they rely on surrounding conversation for earlier visual findings.
+The default count is an estimate,
 not an exact protocol tokenizer. Output and thinking reserves count toward the
 budget, reserving the largest thinking allowance across the route. Compaction
 starts above 75% and selects an older complete prefix aiming for 50%, retaining

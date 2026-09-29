@@ -116,9 +116,21 @@ parse_object_document(std::string_view text, std::string field, const ModelTarge
   return json{{"type", "function"}, {"name", std::string{choice}}};
 }
 
-[[nodiscard]] core::Result<json> anthropic_content_block(const core::Content& content, const ModelTarget& target) {
+bool valid_image(const core::ImageContent& image) {
+  return !image.data_base64.empty() && (image.media_type == "image/jpeg" || image.media_type == "image/png" ||
+                                        image.media_type == "image/gif" || image.media_type == "image/webp");
+}
+
+[[nodiscard]] core::Result<json>
+anthropic_content_block(const core::Content& content, core::Role role, const ModelTarget& target) {
   if (const auto* text = std::get_if<core::TextContent>(&content); text != nullptr) {
     return json{{"type", "text"}, {"text", text->text}};
+  }
+  if (const auto* image = std::get_if<core::ImageContent>(&content)) {
+    if (role != core::Role::user || !valid_image(*image))
+      return std::unexpected(protocol_error("unsupported or empty image input", target));
+    return json{{"type", "image"},
+                {"source", {{"type", "base64"}, {"media_type", image->media_type}, {"data", image->data_base64}}}};
   }
   if (const auto* thinking = std::get_if<core::ThinkingContent>(&content); thinking != nullptr) {
     auto block = json{{"type", "thinking"}, {"thinking", thinking->thinking}};
@@ -175,7 +187,7 @@ append_anthropic_system_text(json& body, const core::Message& message, const Mod
 [[nodiscard]] core::Result<json> anthropic_message_json(const core::Message& message, const ModelTarget& target) {
   auto content = json::array();
   for (const auto& block : message.blocks) {
-    auto encoded = anthropic_content_block(block, target);
+    auto encoded = anthropic_content_block(block, message.role, target);
     if (!encoded) {
       return std::unexpected(std::move(encoded).error());
     }
@@ -314,6 +326,14 @@ append_openai_instructions_text(json& body, const core::Message& message, const 
 openai_input_item(const core::Content& content, core::Role role, const ModelTarget& target) {
   if (const auto* text = std::get_if<core::TextContent>(&content); text != nullptr) {
     return openai_text_message(role, text->text);
+  }
+  if (const auto* image = std::get_if<core::ImageContent>(&content)) {
+    if (role != core::Role::user || !valid_image(*image))
+      return std::unexpected(protocol_error("unsupported image input", target));
+    return json{{"role", "user"},
+                {"content",
+                 json::array({json{{"type", "input_image"},
+                                   {"image_url", "data:" + image->media_type + ";base64," + image->data_base64}}})}};
   }
   if (const auto* thinking = std::get_if<core::ThinkingContent>(&content); thinking != nullptr) {
     return json{{"type", "reasoning"},

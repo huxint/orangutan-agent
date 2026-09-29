@@ -175,6 +175,12 @@ public:
         running = false;
       }
     } admission{running_};
+    std::size_t image_bytes = 0;
+    for (const auto& image : request.images) {
+      if (image.data_base64.size() > 14 * 1024 * 1024 - image_bytes)
+        co_return std::unexpected(Error::invalid_argument("image inputs exceed the session byte budget"));
+      image_bytes += image.data_base64.size();
+    }
     auto* store = options_.assembly->session_store();
     memory::session::ContextSnapshot snapshot{.checkpoint = checkpoint_,
                                               .message_count = static_cast<std::int64_t>(transcript_.size())};
@@ -218,7 +224,12 @@ public:
       }
       memory_framing = std::move(*recalled);
     }
-    auto conversation = std::vector{core::Message::user_text(std::move(request.prompt))};
+    core::Message user{.role = core::Role::user, .blocks = {}, .created_at = std::nullopt};
+    if (!request.prompt.empty() || request.images.empty())
+      user.blocks.emplace_back(core::TextContent{std::move(request.prompt)});
+    for (auto& image : request.images)
+      user.blocks.emplace_back(std::move(image));
+    auto conversation = std::vector{std::move(user)};
     auto catalog = registry_->catalog();
     if (!context.agent_run) {
       std::erase_if(catalog, [](const auto& definition) { return definition.name == tool::AGENT_RUN_NAME; });
@@ -244,7 +255,8 @@ public:
                                               store->load_after(memory::session::SessionId{.value = session_id_text_},
                                                                 memory::session::AgentKey{.value = options_.agent_key},
                                                                 after,
-                                                                end),
+                                                                end,
+                                                                16 * 1024 * 1024),
                                               asio::use_awaitable);
           const auto limit = std::min(end, after + 64);
           co_return std::vector<core::Message>{transcript_.begin() + after, transcript_.begin() + limit};

@@ -46,6 +46,12 @@ headers. Provider owns endpoint construction values and `SecretLookup` in
 
 ## Session Boundary
 
+`PromptRequest` carries text and optional owned `ImageContent` values. Images
+remain typed user blocks through provider requests and persisted history; an
+image-only prompt does not introduce an empty text block. Combined encoded image
+input is limited to 14 MiB per prompt. Continuation reads 16-MiB forward pages so a
+saved image larger than the ordinary browsing page still resumes correctly.
+
 `run_prompt` admits one prompt per session on the coordinating strand. A second
 in-flight prompt returns `conflict` before effects; the guard covers context
 loading, child/tool cleanup and persistence and releases on every exit. This

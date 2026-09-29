@@ -65,6 +65,7 @@ core::Message full_message(core::Role role) {
       .blocks =
           {
               core::TextContent{.text = "hello"},
+              core::ImageContent{"image/png", "aW1hZ2U="},
               core::ThinkingContent{.thinking = "considering", .signature = std::string{"sig"}},
               core::ToolUseContent{.id = "toolu-1", .name = "FileRead", .input_json = R"({"path":"README.md"})"},
               core::ToolResultContent{

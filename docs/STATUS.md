@@ -42,13 +42,13 @@ Filesystem, HTTP and SQLite work runs on explicit executors. Durable audit
 decisions precede tool effects; terminal traces and cancellation cleanup finish
 before services are released. Existing user records remain intact.
 
-QQ, Telegram and Feishu text adapters expose injected transport and turn ports.
+QQ, Telegram and Feishu adapters expose injected transport and turn ports.
 The channel dispatcher bounds admission/deduplication, retains failed deliveries
 and joins typing-status cleanup. Hosts own authenticated ingress and durable
 outboxes; [messaging channels](design-docs/messaging-channels.md) owns the contract.
 The opt-in `oran-telegram` host supplies authenticated polling for one allowed
-private user, persistent session routing, a durable intake/delivery journal and
-explicit reconciliation after ambiguous failures.
+private user, text and image input, persistent session routing, a durable
+intake/delivery journal and explicit reconciliation after ambiguous failures.
 
 ## Contract Owners
 

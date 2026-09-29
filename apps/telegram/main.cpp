@@ -1,4 +1,5 @@
 #include "host.hpp"
+#include "input.hpp"
 #include "presentation.hpp"
 
 #include <charconv>
@@ -211,6 +212,20 @@ int main(int argc, char** argv) try {
   auto outbound = bootstrap::channel_http_transport(
       http,
       [&](channel::Conversation) -> async::Awaitable<core::Result<std::string>> { co_return token; });
+  telegram_host::DownloadImage download = [&](std::string path) -> async::Awaitable<core::Result<std::string>> {
+    http::BodyRequest request;
+    request.url = "https://api.telegram.org/file/bot" + token + "/" + path;
+    request.timeout = std::chrono::seconds{20};
+    request.max_bytes = telegram_host::image_max_bytes;
+    auto response = co_await http.send(std::move(request));
+    if (!response)
+      co_return std::unexpected(core::Error{response.error().kind(), "image download failed"});
+    if (response->status_code != 200)
+      co_return std::unexpected(core::Error::network("image download rejected"));
+    co_return std::move(response->body);
+  };
+  permission::RuleSet image_rules;
+  image_rules.push_back({.verdict = permission::Verdict::allow, .tool_pattern = "ChannelAttachment"});
   permission::RuleSet presentation_rules;
   for (const auto* operation : {"ChannelStatus", "ChannelDraft"})
     presentation_rules.push_back({.verdict = permission::Verdict::allow, .tool_pattern = operation});
@@ -222,7 +237,14 @@ int main(int argc, char** argv) try {
                      co_return;
                    }},
                   {hook::Event::provider_request, hook::Event::tool_before, hook::Event::tool_after});
-  channel::RunTurn turn = [&](channel::Message message) -> async::Awaitable<core::Result<std::string>> {
+  channel::RunTurn turn =
+      [&, image_transport = outbound](channel::Message message) -> async::Awaitable<core::Result<std::string>> {
+    auto prompt = co_await telegram_host::prepare_prompt(message, image_transport, download, hooks, image_rules);
+    if (!prompt) {
+      if (prompt.error().kind() == core::ErrorKind::cancelled)
+        co_return std::unexpected(prompt.error());
+      co_return "已收到消息，但其中或引用的图片读取失败。请重新发送不超过 5 MiB 的 JPG、PNG、GIF 或 WebP 图片。";
+    }
     if (!session) {
       bootstrap::AgentSessionOptions settings;
       settings.executor = strand;
@@ -245,9 +267,7 @@ int main(int argc, char** argv) try {
         co_return std::unexpected(created.error());
       session = std::move(*created);
     }
-    if (message.text.starts_with("/start "))
-      message.text = "/start";
-    auto result = co_await session->run_prompt({.prompt = std::move(message.text)});
+    auto result = co_await session->run_prompt(std::move(*prompt));
     if (!result)
       co_return std::unexpected(result.error());
     co_return std::move(result->text);
