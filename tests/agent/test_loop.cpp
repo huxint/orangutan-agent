@@ -23,6 +23,7 @@
 #include <asio/post.hpp>
 #include <asio/this_coro.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <oran/async.hpp>
 #include <oran/core/content.hpp>
@@ -1548,6 +1549,62 @@ TEST_CASE("Loop preserves structured tool output for provider protocol mapping",
     REQUIRE(tool_result.data_json ==
             std::optional<std::string>{R"({"kind":"file_read","path":"README.md","text":"body"})"});
     REQUIRE_FALSE(tool_result.is_error);
+  });
+}
+
+TEST_CASE("Loop exposes incomplete tool results to the provider and transcript", "[unit][agent][loop]") {
+  const int cap_mode = GENERATE(0, 1, 2);
+  const bool source_truncated = cap_mode == 0;
+  const bool output_error = GENERATE(false, true);
+  test::run_async([=](asio::io_context& io) -> async::Awaitable<void> {
+    RecordingSequenceProvider provider{std::vector<provider::Response>{
+        provider::Response{
+            .blocks = {core::ToolUseContent{.id = "partial-1", .name = "Read", .input_json = "{}"}},
+            .stop_reason = core::StopReason::tool_use,
+        },
+        provider::Response{
+            .blocks = {core::TextContent{.text = "done"}},
+            .stop_reason = core::StopReason::end_turn,
+        },
+    }};
+    agent::Loop loop{provider, default_route()};
+    tool::Registry registry;
+    REQUIRE(registry.add(tool_def("Read", "Read bounded text"),
+        [=](std::string_view, tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+          co_return tool::Output{
+              .text = "abcdefgh",
+              .data_json = R"({"value":"full"})",
+              .usage = {.truncated = source_truncated},
+              .is_error = output_error,
+          };
+        }).has_value());
+    auto rules = allow_all_rules();
+    permission::RecordingAuditSink audit;
+    auto ctx = dispatch_context(io, rules, audit);
+    // Exercise both source-declared truncation and dispatch-enforced caps.
+    ctx.output_caps = source_truncated
+        ? tool::OutputCapOptions{.max_text_bytes = 0, .max_data_bytes = 0}
+        : tool::OutputCapOptions{.max_text_bytes = cap_mode == 1 ? 1U : 0U, .max_data_bytes = 1};
+    const auto catalog = registry.catalog();
+    const std::vector<core::Message> tail{core::Message::user_text("read")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.tools = &registry;
+    inputs.dispatch_context = &ctx;
+    auto result = co_await loop.run_turn(inputs);
+    REQUIRE(result.has_value());
+    REQUIRE(provider.requests().size() == 2);
+    const auto& visible = tool_result_at(provider.requests()[1].messages[2], 0);
+    REQUIRE(visible.tool_use_id == "partial-1");
+    REQUIRE(visible.is_error == output_error);
+    REQUIRE(visible.output.starts_with("[Tool output truncated.") == (cap_mode != 2));
+    REQUIRE(visible.output.contains("do not assume the displayed result is complete") == (cap_mode != 2));
+    REQUIRE(visible.output.ends_with(cap_mode == 1 ? "a" : "abcdefgh"));
+    REQUIRE(visible.output.contains("Structured tool data omitted") == !source_truncated);
+    REQUIRE(visible.data_json.has_value() == source_truncated);
+    const auto& persisted = tool_result_at(result->transcript[2], 0);
+    REQUIRE(persisted.output == visible.output);
+    REQUIRE(persisted.data_json == visible.data_json);
+    REQUIRE(persisted.is_error == visible.is_error);
   });
 }
 

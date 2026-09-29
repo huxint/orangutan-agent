@@ -149,7 +149,7 @@ TEST_CASE("protocol request maps OpenAI Responses payloads", "[unit][provider][p
   REQUIRE(body.at("input")[1].at("arguments") == R"({"path":"README.md"})");
   REQUIRE(body.at("input")[2].at("type") == "function_call_output");
   REQUIRE(body.at("input")[2].at("call_id") == "call-1");
-  REQUIRE(json::parse(body.at("input")[2].at("output").get<std::string>()).at("kind") == "file_read");
+  REQUIRE(body.at("input")[2].at("output") == "README text fallback");
 }
 
 TEST_CASE("protocol request folds OpenAI Role::system messages into instructions", "[unit][provider][protocol]") {
@@ -188,6 +188,30 @@ TEST_CASE("protocol request preserves text-only tool results", "[unit][provider]
   REQUIRE(openai.has_value());
   auto openai_body = json::parse(openai->body_json);
   REQUIRE(openai_body.at("input")[2].at("output") == "README text fallback");
+}
+
+TEST_CASE("protocols preserve tool guidance ahead of structured data", "[unit][provider][protocol]") {
+  for (const auto protocol : {provider::ProtocolKind::anthropic_messages, provider::ProtocolKind::openai_responses}) {
+    auto request = tool_request();
+    auto& result = std::get<core::ToolResultContent>(request.messages[2].blocks[0]);
+    result.output = "[Tool output truncated.]\nRead again with a smaller limit.";
+    auto encoded = provider::make_protocol_request(request, target(protocol));
+    REQUIRE(encoded.has_value());
+    auto body = json::parse(encoded->body_json);
+    auto output = protocol == provider::ProtocolKind::anthropic_messages
+        ? body.at("messages")[2].at("content")[0].at("content")
+        : body.at("input")[2].at("output");
+    REQUIRE(output == result.output);
+
+    result.output.clear();
+    encoded = provider::make_protocol_request(request, target(protocol));
+    REQUIRE(encoded.has_value());
+    body = json::parse(encoded->body_json);
+    output = protocol == provider::ProtocolKind::anthropic_messages
+        ? body.at("messages")[2].at("content")[0].at("content")
+        : body.at("input")[2].at("output");
+    REQUIRE(output == *result.data_json);
+  }
 }
 
 TEST_CASE("protocol request maps Anthropic structured tool results to text content", "[unit][provider][protocol]") {
@@ -234,18 +258,6 @@ TEST_CASE("protocol request rejects malformed opaque JSON fields", "[unit][provi
     REQUIRE_FALSE(encoded.has_value());
     REQUIRE(encoded.error().kind() == core::ErrorKind::parsing);
     REQUIRE(context_value(encoded.error(), "field") == std::optional<std::string_view>{"tool.input_json"});
-    REQUIRE(context_value(encoded.error(), "tool_use_id") == std::optional<std::string_view>{"call-1"});
-  }
-
-  SECTION("structured tool result") {
-    auto request = tool_request();
-    std::get<core::ToolResultContent>(request.messages[2].blocks[0]).data_json = "{";
-
-    auto encoded = provider::make_protocol_request(request, target(provider::ProtocolKind::openai_responses));
-
-    REQUIRE_FALSE(encoded.has_value());
-    REQUIRE(encoded.error().kind() == core::ErrorKind::parsing);
-    REQUIRE(context_value(encoded.error(), "field") == std::optional<std::string_view>{"tool_result.data_json"});
     REQUIRE(context_value(encoded.error(), "tool_use_id") == std::optional<std::string_view>{"call-1"});
   }
 

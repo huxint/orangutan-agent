@@ -20,6 +20,14 @@ bounded independently. Model-repairable tool errors re-enter the model as error
 results; infrastructure failures terminate the turn. Trace rows correlate the
 turn with its tool audits without storing raw prompt bodies.
 
+Tool results whose usage marks truncation or dropped structured data carry an
+explicit notice in the model-visible text and the returned transcript. A truncated
+result must not appear complete merely because its tool call succeeded. These
+fixed notices are added after payload caps (at most 167 bytes of framing) so even
+a tiny text cap cannot hide them. They preserve the call ID, remaining structured
+data and success/error status. Context budgeting includes the complete framed
+message before the next provider request.
+
 ## Context And State
 
 `RunTurnInputs` contains borrowed prompt/context views and explicit service

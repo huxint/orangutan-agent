@@ -218,6 +218,16 @@ private:
 [[nodiscard]] core::Result<core::ToolResultContent> tool_result_from(std::string tool_use_id,
                                                                      core::Result<tool::Output> output) {
   if (output.has_value()) {
+    // Usage metadata does not cross the provider boundary. Preserve incomplete
+    // result notices in text so they also survive transcript persistence.
+    std::string notice;
+    if (output->usage.truncated) {
+      notice += "[Tool output truncated. Request a smaller range; do not assume the displayed result is complete.]\n";
+    }
+    if (output->usage.data_dropped) {
+      notice += "[Structured tool data omitted because it exceeded the output limit.]\n";
+    }
+    output->text.insert(0, notice);
     return core::ToolResultContent{
         .tool_use_id = std::move(tool_use_id),
         .output = std::move(output->text),

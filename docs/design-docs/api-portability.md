@@ -69,6 +69,12 @@ not equivalent on endpoints such as DeepSeek, which enable thinking by default.
 An explicit budget sends `thinking.type=enabled` with `budget_tokens`. This keeps
 bounded summary requests from spending their output allowance on reasoning.
 
+Both protocols send the tool result's nonempty model-facing text verbatim,
+including paging and incomplete-output notices. Only an empty text field falls
+back to the structured JSON string. Structured data remains in the typed result
+for hosts and persistence; it must not replace instructions carried in text or
+duplicate the file body on the model wire.
+
 HTTP/SSE transport enforces deadlines and byte caps. Decoders assemble text/tool
 input incrementally and reject inconsistent or incomplete terminal events.
 A partial stream is an observation, not a completed persisted answer.

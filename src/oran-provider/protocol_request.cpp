@@ -87,13 +87,8 @@ parse_object_document(std::string_view text, std::string field, const ModelTarge
   return input;
 }
 
-[[nodiscard]] core::Result<json> tool_result_data_json(const core::ToolResultContent& result,
-                                                       const ModelTarget& target) {
-  auto parsed = parse_json_document(*result.data_json, "tool_result.data_json", target);
-  if (!parsed) {
-    return std::unexpected(std::move(parsed).error().with("tool_use_id", result.tool_use_id));
-  }
-  return parsed;
+[[nodiscard]] const std::string& tool_result_text(const core::ToolResultContent& result) {
+  return !result.output.empty() || !result.data_json.has_value() ? result.output : *result.data_json;
 }
 
 [[nodiscard]] json anthropic_tool_choice(std::string_view choice) {
@@ -148,7 +143,7 @@ anthropic_content_block(const core::Content& content, core::Role role, const Mod
   }
   const auto& result = std::get<core::ToolResultContent>(content);
   auto block = json{{"type", "tool_result"}, {"tool_use_id", result.tool_use_id}};
-  block["content"] = !result.output.empty() || !result.data_json.has_value() ? result.output : *result.data_json;
+  block["content"] = tool_result_text(result);
   if (result.is_error) {
     block["is_error"] = true;
   }
@@ -349,15 +344,7 @@ openai_input_item(const core::Content& content, core::Role role, const ModelTarg
 
   const auto& result = std::get<core::ToolResultContent>(content);
   auto item = json{{"type", "function_call_output"}, {"call_id", result.tool_use_id}};
-  if (result.data_json.has_value()) {
-    auto data = tool_result_data_json(result, target);
-    if (!data) {
-      return std::unexpected(std::move(data).error());
-    }
-    item["output"] = data->dump();
-  } else {
-    item["output"] = result.output;
-  }
+  item["output"] = tool_result_text(result);
   if (result.is_error) {
     item["status"] = "error";
   }
