@@ -7,6 +7,7 @@
 
 add_requires("asio 1.36.0")
 add_requires("catch2 3.7.1")
+add_requires("cmark 0.31.2")
 add_requires("libcurl >=8.11.0", { system = true })
 add_requires("libsodium 1.0.21")
 add_requires("nanobench 4.3.11")

@@ -1,4 +1,5 @@
 #include "host.hpp"
+#include "presentation.hpp"
 
 #include <charconv>
 #include <csignal>
@@ -80,15 +81,18 @@ int main(int argc, char** argv) try {
       return 2;
     }
   }
-  std::int64_t user_id{};
-  const auto [end, parse_error] =
-      std::from_chars(options.user.data(), options.user.data() + options.user.size(), user_id);
-  if (state_path.empty() ||
-      (!options.probe && !acknowledge &&
-       (config_path.empty() || workspace.empty() || user_id <= 0 || parse_error != std::errc{} ||
-        end != options.user.data() + options.user.size() || options.user != std::to_string(user_id)))) {
+  if (state_path.empty()) {
     usage();
     return 2;
+  }
+  if (!options.probe && !acknowledge) {
+    std::int64_t user_id{};
+    const auto [end, error] = std::from_chars(options.user.data(), options.user.data() + options.user.size(), user_id);
+    if (config_path.empty() || workspace.empty() || error != std::errc{} ||
+        end != options.user.data() + options.user.size() || user_id <= 0 || options.user != std::to_string(user_id)) {
+      usage();
+      return 2;
+    }
   }
   if (acknowledge) {
     auto directory = io::PrivateDirectory::open(std::filesystem::weakly_canonical(state_path).string());
@@ -128,7 +132,7 @@ int main(int argc, char** argv) try {
     std::println(stderr, "Telegram state is already in use");
     return 2;
   }
-  auto state = options.probe ? core::Result<telegram_host::Json>{telegram_host::Json::object()}
+  auto state = options.probe ? core::Result<telegram_host::State>{telegram_host::State{}}
                              : telegram_host::load_state(*directory, options.user, workspace);
   if (!state) {
     std::println(stderr, "State invalid, binding changed, or pending delivery unresolved; inspect state.json");
@@ -190,14 +194,12 @@ int main(int argc, char** argv) try {
     assembly.emplace(std::move(*resources));
   }
   auto& hooks = assembly ? assembly->hook_bus() : probe_hooks;
-  telegram_host::Api api = [&](channel::Request request) -> async::Awaitable<core::Result<channel::Response>> {
-    // Paths are fixed by the poller, credentials only enter this HTTP boundary.
-    if (request.path != "/getMe" && request.path != "/getWebhookInfo" && request.path != "/getUpdates")
-      co_return std::unexpected(core::Error::invalid_argument("unsupported polling method"));
+  telegram_host::Api api = [&](telegram_host::PollMethod method,
+                               std::string payload) -> async::Awaitable<core::Result<channel::Response>> {
     http::BodyRequest body;
     body.method = "POST";
-    body.url = "https://api.telegram.org/bot" + token + request.path;
-    body.body = std::move(request.body);
+    body.url = "https://api.telegram.org/bot" + token + "/" + std::string{core::enum_name(method)};
+    body.body = std::move(payload);
     body.headers = {{"Content-Type", "application/json"}};
     body.timeout = std::chrono::seconds{35};
     body.max_bytes = 1024 * 1024;
@@ -209,6 +211,17 @@ int main(int argc, char** argv) try {
   auto outbound = bootstrap::channel_http_transport(
       http,
       [&](channel::Conversation) -> async::Awaitable<core::Result<std::string>> { co_return token; });
+  permission::RuleSet presentation_rules;
+  for (const auto* operation : {"ChannelStatus", "ChannelDraft"})
+    presentation_rules.push_back({.verdict = permission::Verdict::allow, .tool_pattern = operation});
+  auto presentation =
+      std::make_shared<telegram_host::Presentation>(strand, outbound, hooks, std::move(presentation_rules));
+  hooks.subscribe({.id = "telegram-presentation",
+                   .observe = [presentation](hook::Event event, hook::PayloadPtr) -> async::Awaitable<void> {
+                     presentation->observe(event);
+                     co_return;
+                   }},
+                  {hook::Event::provider_request, hook::Event::tool_before, hook::Event::tool_after});
   channel::RunTurn turn = [&](channel::Message message) -> async::Awaitable<core::Result<std::string>> {
     if (!session) {
       bootstrap::AgentSessionOptions settings;
@@ -217,15 +230,16 @@ int main(int argc, char** argv) try {
       settings.assembly = &*assembly;
       settings.config = &*config;
       settings.provider = &provider->system();
+      settings.event_sink = presentation.get();
       settings.route = provider->route();
-      settings.session_id = *core::parse_turn_id_hex(state->at("session").get<std::string>());
+      settings.session_id = state->session;
       settings.scope_key = channel::conversation_key(message.conversation);
       settings.agent_key = "telegram";
       settings.identity = options.user;
       settings.origin = "telegram";
       settings.max_child_runs = 0;
       settings.per_agent_overlay = "You are responding in a private Telegram chat. Reply in the user's language. "
-                                   "For /start, briefly confirm you are ready to help. Use plain text.";
+                                   "For /start, briefly confirm you are ready to help.";
       auto created = bootstrap::AgentSession::create(std::move(settings));
       if (!created)
         co_return std::unexpected(created.error());
@@ -257,9 +271,10 @@ int main(int argc, char** argv) try {
                          hooks,
                          *directory,
                          *state,
-                         runtime.cpu_executor()),
+                         runtime.cpu_executor(),
+                         presentation.get()),
       asio::bind_cancellation_slot(cancellation.slot(), [&](std::exception_ptr exception, core::Result<void> result) {
-        exit_code = !exception && result ? 0 : (stopping ? 0 : 1);
+        exit_code = !exception && (result || (stopping && result.error().kind() == core::ErrorKind::cancelled)) ? 0 : 1;
         if (exception || !result)
           std::println(stderr,
                        "Telegram host stopped ({}); inspect state.json before restarting",

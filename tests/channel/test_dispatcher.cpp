@@ -71,6 +71,39 @@ TEST_CASE("Channel admission is fail closed and observed before effects") {
   });
 }
 
+TEST_CASE("Channel authorizes the host-rendered reply before transport") {
+  orangutan::tests::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    hook::Bus bus;
+    auto opts = options(bus);
+    auto pattern = permission::InputPattern::compile("forbidden-destination");
+    REQUIRE(pattern);
+    opts.rules.push_back(
+        {.verdict = permission::Verdict::deny, .tool_pattern = "ChannelSend", .input_pattern = std::move(*pattern)});
+    opts.render_reply =
+        [](const channel::Message& message, std::string_view text, std::size_t part) -> core::Result<channel::Request> {
+      auto request = channel::telegram().reply(message, text, part);
+      REQUIRE(request);
+      request->body = R"({"text":"answer","entities":[{"url":"https://forbidden-destination.test"}]})";
+      return request;
+    };
+    int replies = 0;
+    auto dispatcher = channel::Dispatcher::create(
+        channel::telegram(),
+        [&](channel::Conversation, channel::Request request) -> async::Awaitable<core::Result<channel::Response>> {
+          if (request.path == "/sendMessage")
+            ++replies;
+          co_return telegram_success();
+        },
+        [](channel::Message) -> async::Awaitable<core::Result<std::string>> { co_return "answer"; },
+        std::move(opts));
+    REQUIRE(dispatcher);
+    auto denied = co_await (*dispatcher)->handle(message());
+    REQUIRE_FALSE(denied);
+    CHECK(denied.error().kind() == core::ErrorKind::permission_denied);
+    CHECK(replies == 0);
+  });
+}
+
 TEST_CASE("Channel retries preserve generated replies and skip confirmed parts") {
   orangutan::tests::run_async([](asio::io_context&) -> async::Awaitable<void> {
     hook::Bus bus;

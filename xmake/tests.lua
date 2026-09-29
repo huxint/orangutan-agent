@@ -15,6 +15,8 @@ local function oran_test(name, deps, extra_packages)
         if name == "bootstrap" then
             add_files(path.join(root, "eval/context/scenarios.cpp"), path.join(root, "eval/context/runner.cpp"))
             add_files(path.join(root, "apps/telegram/host.cpp"))
+            add_files(path.join(root, "apps/telegram/state.cpp"))
+            add_files(path.join(root, "apps/telegram/format.cpp"), path.join(root, "apps/telegram/presentation.cpp"))
         end
         add_deps(table.unpack(deps))
         add_packages("catch2")
@@ -44,6 +46,6 @@ oran_test("tool", { "oran-tool" }, { "nlohmann_json" })
 oran_test("prompt", { "oran-prompt" })
 oran_test("provider", { "oran-provider" }, { "nlohmann_json" })
 oran_test("agent", { "oran-agent" })
-oran_test("bootstrap", { "oran-bootstrap" }, { "nlohmann_json" })
+oran_test("bootstrap", { "oran-bootstrap" }, { "nlohmann_json", "cmark" })
 
 oran_test("channel", { "oran-channel" }, { "nlohmann_json" })

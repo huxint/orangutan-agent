@@ -54,7 +54,8 @@ and transport ports, and joined typing-status cleanup. See the
 ingress, credentials, permissions and delivery recovery.
 For real Telegram testing, build the opt-in `oran-telegram` host and follow the
 [private-chat setup](docs/design-docs/messaging-channels.md#telegram-deployment-host).
-It includes a DeepSeek Flash example and persists conversations across restarts.
+It includes a DeepSeek Flash example, persistent conversations, status reactions,
+streaming previews and Markdown formatting.
 
 Working-context retention can be measured with the opt-in `eval-context` runner.
 See [evaluation commands and interpretation](docs/rules/testing-and-bench.md#working-context-evaluation).

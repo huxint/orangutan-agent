@@ -14,6 +14,7 @@ namespace {
 using namespace orangutan;
 using core::Result;
 using telegram_host::Json;
+using telegram_host::PollMethod;
 
 struct StateDirectory {
   std::filesystem::path path;
@@ -41,13 +42,14 @@ Json update(int id, int user = 42, std::string kind = "private") {
 }
 telegram_host::Api api(std::vector<Json> updates, std::vector<std::int64_t>& offsets, bool webhook = false) {
   return [updates = std::move(updates), &offsets, webhook, index = std::size_t{}](
-             channel::Request request) mutable -> async::Awaitable<Result<channel::Response>> {
-    if (request.path == "/getMe")
+             PollMethod method,
+             std::string payload) mutable -> async::Awaitable<Result<channel::Response>> {
+    if (method == PollMethod::getMe)
       co_return response(Json{{"is_bot", true}, {"id", 123}, {"username", "fixture_bot"}});
-    if (request.path == "/getWebhookInfo")
+    if (method == PollMethod::getWebhookInfo)
       co_return response(Json{{"url", webhook ? "https://example.test/hook" : ""}});
-    REQUIRE(request.path == "/getUpdates");
-    auto body = Json::parse(request.body);
+    REQUIRE(method == PollMethod::getUpdates);
+    auto body = Json::parse(payload);
     CHECK(body.at("limit") == 1);
     offsets.push_back(body.at("offset").get<std::int64_t>());
     REQUIRE(index < updates.size());
@@ -62,7 +64,7 @@ TEST_CASE("Telegram live host filters senders and groups and resumes its saved c
   REQUIRE(directory);
   auto state = telegram_host::load_state(*directory, "42", "/workspace");
   REQUIRE(state);
-  auto session = state->at("session");
+  auto session = state->session;
   tests::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
     hook::Bus hooks;
     int turns = 0, sends = 0;
@@ -103,8 +105,8 @@ TEST_CASE("Telegram live host filters senders and groups and resumes its saved c
     CHECK(offsets == std::vector<std::int64_t>{0, 11, 12});
     auto reopened = telegram_host::load_state(*directory, "42", "/workspace");
     REQUIRE(reopened);
-    CHECK(reopened->at("session") == session);
-    CHECK(reopened->at("next_update") == 13);
+    CHECK(reopened->session == session);
+    CHECK(reopened->next_update == 13);
     CHECK_FALSE(telegram_host::load_state(*directory, "43", "/workspace"));
     CHECK_FALSE(telegram_host::load_state(*directory, "42", "/other-workspace"));
     state = std::move(reopened);
@@ -134,13 +136,14 @@ TEST_CASE("Telegram live host preserves ambiguous sends and blocks replay after 
     hook::Bus hooks;
     std::vector<std::int64_t> offsets;
     auto failed_api = api({update(10)}, offsets);
+    int sends = 0;
     auto failed = co_await telegram_host::run(
         {.user = "42", .once = true},
         std::move(failed_api),
-        [](channel::Conversation, channel::Request request) -> async::Awaitable<Result<channel::Response>> {
-          if (request.path == "/sendMessage")
+        [&](channel::Conversation, channel::Request request) -> async::Awaitable<Result<channel::Response>> {
+          if (request.path == "/sendMessage" && ++sends == 2)
             co_return std::unexpected(core::Error::network("PRIVATE_URL"));
-          co_return response(true);
+          co_return response(Json{{"message_id", 11}});
         },
         [](channel::Message) -> async::Awaitable<Result<std::string>> { co_return std::string(5000, 'x'); },
         hooks,
@@ -156,16 +159,90 @@ TEST_CASE("Telegram live host preserves ambiguous sends and blocks replay after 
     CHECK(journal.at("pending").at("update").at("update_id") == 10);
     CHECK(journal.at("pending").at("answer").get<std::string>().size() == 5000);
     CHECK(journal.at("pending").at("send_inflight") == true);
+    CHECK(journal.at("pending").at("confirmed_parts") == 1);
     CHECK_FALSE(telegram_host::load_state(*directory, "42", "/workspace"));
     CHECK_FALSE(telegram_host::acknowledge_pending(*directory, 11));
     REQUIRE(telegram_host::acknowledge_pending(*directory, 10));
     auto reconciled = telegram_host::load_state(*directory, "42", "/workspace");
     REQUIRE(reconciled);
-    CHECK(reconciled->at("next_update") == 11);
+    CHECK(reconciled->next_update == 11);
     auto archived = directory->read("handled-10.json", 2 * 1024 * 1024);
     REQUIRE(archived);
     CHECK(Json::parse(**archived).at("pending").at("answer") == std::string(5000, 'x'));
   });
+}
+
+TEST_CASE("Telegram polling retries transient failures but stops competing pollers", "[telegram-host]") {
+  StateDirectory temp;
+  auto directory = io::PrivateDirectory::open(temp.path.string());
+  REQUIRE(directory);
+  auto state = telegram_host::load_state(*directory, "42", "/workspace");
+  REQUIRE(state);
+  tests::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    hook::Bus hooks;
+    std::vector<std::int64_t> offsets;
+    auto normal = api({update(10)}, offsets);
+    unsigned attempts = 0;
+    auto retrying = [&](PollMethod method, std::string payload) -> async::Awaitable<Result<channel::Response>> {
+      if (method == PollMethod::getUpdates && ++attempts <= 2)
+        co_return std::unexpected(core::Error::upstream("PRIVATE").with_retry_after(std::chrono::milliseconds{0}));
+      co_return co_await normal(method, std::move(payload));
+    };
+    auto result = co_await telegram_host::run(
+        {.user = "42", .once = true},
+        retrying,
+        [](channel::Conversation, channel::Request) -> async::Awaitable<Result<channel::Response>> {
+          co_return response(Json{{"message_id", 11}});
+        },
+        [](channel::Message) -> async::Awaitable<Result<std::string>> { co_return "answer"; },
+        hooks,
+        *directory,
+        *state,
+        io.get_executor());
+    REQUIRE(result);
+    CHECK(attempts == 3);
+    CHECK(state->next_update == 11);
+    attempts = 0;
+    auto conflict = [&](PollMethod method, std::string payload) -> async::Awaitable<Result<channel::Response>> {
+      if (method == PollMethod::getUpdates) {
+        ++attempts;
+        co_return channel::Response{409, R"({"ok":false,"description":"PRIVATE"})", {}};
+      }
+      co_return co_await normal(method, std::move(payload));
+    };
+    auto refused = co_await telegram_host::run(
+        {.user = "42"},
+        conflict,
+        [](channel::Conversation, channel::Request) -> async::Awaitable<Result<channel::Response>> {
+          FAIL("unexpected delivery");
+          co_return response(true);
+        },
+        [](channel::Message) -> async::Awaitable<Result<std::string>> { co_return ""; },
+        hooks,
+        *directory,
+        *state,
+        io.get_executor());
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().kind() == core::ErrorKind::conflict);
+    CHECK(attempts == 1);
+  });
+}
+
+TEST_CASE("Telegram recovery rejects a regressing cursor without changing the journal", "[telegram-host]") {
+  StateDirectory temp;
+  auto directory = io::PrivateDirectory::open(temp.path.string());
+  REQUIRE(directory);
+  auto state = telegram_host::load_state(*directory, "42", "/workspace");
+  REQUIRE(state);
+  auto json = telegram_host::encode_state(*state);
+  json["next_update"] = 20;
+  json["pending"] = Json{{"update", update(10)}, {"answer", "saved"}, {"confirmed_parts", 1}, {"send_inflight", true}};
+  const auto bytes = json.dump();
+  REQUIRE(directory->write("state.json", bytes));
+  CHECK_FALSE(telegram_host::acknowledge_pending(*directory, 10));
+  auto saved = directory->read("state.json", 2 * 1024 * 1024);
+  REQUIRE(saved);
+  CHECK(**saved == bytes);
 }
 
 TEST_CASE("Telegram live host refuses webhooks and hides transport failures", "[telegram-host]") {
@@ -190,7 +267,7 @@ TEST_CASE("Telegram live host refuses webhooks and hides transport failures", "[
     CHECK(offsets.empty());
     auto hidden = co_await telegram_host::run(
         {.probe = true},
-        [](channel::Request) -> async::Awaitable<Result<channel::Response>> {
+        [](PollMethod, std::string) -> async::Awaitable<Result<channel::Response>> {
           throw std::runtime_error("PRIVATE_TOKEN");
           co_return response(true);
         },

@@ -67,6 +67,10 @@ struct Dispatcher::Impl {
   std::deque<std::string> completed;
   std::unordered_set<std::string> busy;
 
+  Result<Request> reply(const Message& message, std::string_view text, std::size_t part) const {
+    return options.render_reply ? options.render_reply(message, text, part) : adapter.reply(message, text, part);
+  }
+
   async::Awaitable<Result<void>> authorize(const Message& m, std::string operation, const Request* request) {
     const auto state = co_await asio::this_coro::cancellation_state;
     if (state.cancelled() != asio::cancellation_type::none)
@@ -167,13 +171,13 @@ struct Dispatcher::Impl {
   async::Awaitable<Result<Delivery>> deliver(Entry& entry) {
     // Preflight every part before any send (including QQ's passive-reply limit).
     for (std::size_t i = entry.reply.next_part; i < entry.reply.parts.size(); ++i) {
-      auto request = adapter.reply(entry.message, entry.reply.parts[i], i);
+      auto request = reply(entry.message, entry.reply.parts[i], i);
       if (!request)
         co_return std::unexpected(request.error());
     }
     for (; entry.reply.next_part < entry.reply.parts.size(); ++entry.reply.next_part) {
       const auto part = entry.reply.next_part;
-      auto request = adapter.reply(entry.message, entry.reply.parts[part], part);
+      auto request = reply(entry.message, entry.reply.parts[part], part);
       if (!request)
         co_return std::unexpected(request.error());
       auto receipt = co_await send(entry.message, std::move(*request), "ChannelSend");

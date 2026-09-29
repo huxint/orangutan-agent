@@ -8,8 +8,14 @@
 #include <oran/io/private_directory.hpp>
 
 namespace orangutan::telegram_host {
+class Presentation;
 using Json = nlohmann::json;
-using Api = std::function<async::Awaitable<core::Result<channel::Response>>(channel::Request)>;
+enum class PollMethod {
+  getMe,
+  getWebhookInfo,
+  getUpdates
+};
+using Api = std::function<async::Awaitable<core::Result<channel::Response>>(PollMethod, std::string)>;
 
 struct Options {
   std::string user{};
@@ -17,9 +23,26 @@ struct Options {
   bool once{false};
 };
 
+struct Pending {
+  Json update;
+  std::optional<std::string> answer;
+  std::size_t confirmed_parts{0};
+  bool send_inflight{false};
+};
+
+struct State {
+  std::string bot;
+  std::string user;
+  std::string workspace;
+  core::TurnId session{};
+  std::int64_t next_update{0};
+  std::optional<Pending> pending{};
+};
+
 /// A pending journal is never replayed automatically, including after a crash.
-[[nodiscard]] core::Result<Json>
+[[nodiscard]] core::Result<State>
 load_state(const io::PrivateDirectory& directory, std::string_view user, std::string_view workspace);
+[[nodiscard]] Json encode_state(const State& state);
 /// Explicit operator reconciliation: archive pending data, then skip exactly this update.
 [[nodiscard]] core::Result<void> acknowledge_pending(const io::PrivateDirectory& directory, std::int64_t update);
 [[nodiscard]] bool admits(const channel::Message& message, std::string_view user);
@@ -33,6 +56,7 @@ load_state(const io::PrivateDirectory& directory, std::string_view user, std::st
                                                        channel::RunTurn turn,
                                                        hook::Bus& hooks,
                                                        io::PrivateDirectory& directory,
-                                                       Json& state,
-                                                       asio::any_io_executor worker);
+                                                       State& state,
+                                                       asio::any_io_executor worker,
+                                                       Presentation* presentation = nullptr);
 }  // namespace orangutan::telegram_host

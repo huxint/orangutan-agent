@@ -30,6 +30,12 @@ TEST_CASE("Channel HTTP binding rejects unsafe routes before looking up credenti
     CHECK(lookups == 1);
     CHECK(result.error().kind() == orangutan::core::ErrorKind::auth);
     CHECK_FALSE(result.error().message().contains("SECRET"));
+    for (const std::string path : {"/setMessageReaction", "/sendMessageDraft"}) {
+      auto supported = co_await transport(conversation, {"POST", path, "{}"});
+      REQUIRE_FALSE(supported);
+      CHECK(supported.error().kind() == orangutan::core::ErrorKind::auth);
+    }
+    CHECK(lookups == 3);
     auto cancelled_transport = orangutan::bootstrap::channel_http_transport(
         client,
         [](orangutan::channel::Conversation) -> orangutan::async::Awaitable<orangutan::core::Result<std::string>> {

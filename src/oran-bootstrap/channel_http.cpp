@@ -26,7 +26,8 @@ async::Awaitable<core::Result<channel::Response>> send_channel(http::Client& cli
   bool path_allowed = false;
   switch (conversation.platform) {
     case channel::Platform::telegram:
-      path_allowed = request.path == "/sendMessage" || request.path == "/sendChatAction";
+      path_allowed = request.path == "/sendMessage" || request.path == "/sendChatAction" ||
+                     request.path == "/setMessageReaction" || request.path == "/sendMessageDraft";
       break;
     case channel::Platform::qq:
       path_allowed = request.path.starts_with("/v2/groups/") || request.path.starts_with("/v2/users/");

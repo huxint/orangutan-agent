@@ -18,6 +18,9 @@ connections, read configuration, resolve secrets or start agent turns.
 `Dispatcher` owns admission, deduplication, delivery progress and activity work.
 It borrows its adapter and hook bus and owns its callback values. It has no
 provider, session, HTTP, configuration or storage dependency.
+An optional pure `DispatcherOptions::render_reply` supplies host formatting
+before reply preflight and authorization; rules inspect the final request body.
+Without it, the dispatcher uses the adapter's ordinary text reply conversion.
 
 Conversation identity includes platform, configured account, direct/group kind,
 chat ID and optional thread ID, with length-delimited components. The account
@@ -60,7 +63,9 @@ same host boundary. Acknowledge intake promptly after durable enqueueing; never
 wait for an agent turn inside a webhook acknowledgment deadline.
 
 Bootstrap's `channel_http_transport(Client&, ChannelCredential)` binds outbound
-requests to the existing HTTP client and fixed official HTTPS endpoints. It uses
+requests to the existing HTTP client and fixed official HTTPS endpoints. Supported
+Telegram methods cover sends, typing, reactions and ephemeral drafts; arbitrary
+API paths remain rejected. The binding uses
 a ten-second request timeout and a one-MiB response cap. The credential callback
 returns a current Telegram bot token, QQ access token, or Feishu tenant access
 token on each request. The host owns environment/secret references and token
@@ -119,6 +124,8 @@ it needs only the Telegram credential. `--once` processes one admitted message
 and exits. SIGINT/SIGTERM cancels and joins active work. Polls use a 25-second
 long-poll timeout, a 35-second HTTP bound and a one-MiB response limit. Retryable
 poll failures retry at most four times and respect Telegram rate-limit delays.
+Transient server failures are retryable; competing pollers return a terminal
+conflict. Transport retry metadata survives error redaction.
 Sends and agent turns are never retried automatically by the host.
 
 The DeepSeek example uses the Anthropic-compatible endpoint and the
@@ -127,6 +134,36 @@ selected. It permits durable notes and provider requests. Filesystem writes and
 delegation are not exposed by this example; other configurations retain normal
 session permission decisions. The host provides no interactive approval consumer.
 The model receives plain text; `/start` payloads are stripped before the turn.
+
+The host renders CommonMark with `cmark`, then sends plain text plus Telegram
+native entities. Supported formatting includes emphasis, headings, links, lists,
+quotes, inline code and fenced code with language labels. Raw HTML is literal
+text; image syntax produces a link, not a media upload. GFM tables, strikethrough
+and Telegram custom emoji/sticker payloads are outside this CommonMark surface.
+Entity offsets count UTF-16 code units, including emoji. Long answers split at
+UTF-8 boundaries and clip/rebase entities per part; a code block retains its
+format across messages. Telegram's incompatible code/style overlaps are removed
+without dropping text. The journal retains the original Markdown answer.
+
+Provider deltas update an in-memory preview; one joined worker serializes status
+and preview requests at one-second intervals. `sendMessageDraft` displays the
+latest text page without creating a permanent message. Drafts refresh after
+15 seconds while active; Telegram expires them after 30 seconds. Before returning
+the answer, the admitted turn stops preview scheduling and joins in-flight draft
+requests. Only then may the normal journaled `sendMessage` delivery begin: a late
+draft must never reappear after the final message. Reasoning text and tool
+arguments never enter previews. Provider retries and tool continuations reset
+the preview buffer. Clients that do not show drafts still receive final replies.
+
+After `ChannelReceive` admits the turn, the host uses Telegram-supported reactions:
+👀 received, 🤔 thinking, 👨‍💻 tool activity, ✍ answering, 👍 delivered and 😱 failed
+or cancelled. Short intermediate states may coalesce. Terminal reactions follow
+delivery and remain on the original user message. `ChannelStatus` and
+`ChannelDraft` each require `egress_http` and publish a channel hook decision.
+These advisory failures do not replace the answer. Two failures disable the
+affected feature for that turn, and rate-limit cooldown survives subsequent
+turns. Shutdown joins any in-flight feedback before emitting the terminal state
+and releasing session resources. Existing typing activity remains independent.
 
 Keep state and credentials outside the agent workspace and its extra filesystem
 roots. The host requires a private, locked state directory and rejects a workspace
@@ -137,6 +174,9 @@ conversation history and scoped memory; changing an identity requires a differen
 state directory. Credentials never appear in journal metadata or console output.
 
 `state.json` records the next update and a pending intake before any turn starts.
+Journal JSON is validated at load into typed identity, cursor and pending values;
+the on-disk format and saved session identity remain unchanged. Reconciliation
+rejects a pending update older than the cursor before writing an archive.
 The host saves the generated answer before sending, marks in-flight sends, and
 records confirmed chunks before advancing the cursor. An interrupted or failed
 turn/send stops the host and leaves the pending record intact. Restart refuses to
@@ -198,6 +238,12 @@ The interface split and lifecycle safeguards were informed by OpenClaw's
 [channel plugin contract](https://github.com/openclaw/openclaw/blob/main/src/channels/plugins/types.plugin.ts),
 [typing controller](https://github.com/openclaw/openclaw/blob/main/src/channels/typing.ts)
 and [Feishu typing adapter](https://github.com/openclaw/openclaw/blob/main/extensions/feishu/src/typing.ts).
+The Telegram host's coalesced reactions and serialized previews also draw on
+OpenClaw's [status controller](https://github.com/openclaw/openclaw/blob/main/src/channels/status-reactions.ts),
+[Telegram reaction variants](https://github.com/openclaw/openclaw/blob/main/extensions/telegram/src/status-reaction-variants.ts)
+and [preview lifecycle](https://github.com/openclaw/openclaw/blob/main/extensions/telegram/src/draft-stream.ts).
+The host uses Telegram's native ephemeral drafts, so preview sends do not need
+the persistent-message edit/reconciliation machinery used by that implementation.
 Wire details follow [Telegram Bot API](https://core.telegram.org/bots/api),
 [Tencent's official message types](https://github.com/tencent-connect/botgo/blob/master/dto/message_create.go)
 and [Feishu message API](https://open.feishu.cn/document/server-docs/im-v1/message/reply).

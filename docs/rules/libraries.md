@@ -14,6 +14,7 @@ and measured or estimated compile cost here before adding it to the build.
 | `libsodium` | 1.0.21 | Approval authentication and random keys | ISC | Private to `oran-permission`; low cost. |
 | `catch2` | 3.7.1 | Behavioral tests | BSL-1.0 | Test targets only; moderate cost. |
 | `nanobench` | 4.3.11 | Benchmarks | MIT | Benchmark targets only; low cost. |
+| `cmark` | 0.31.2 | Telegram host CommonMark parsing | BSD-2-Clause | Private C API in the host formatter and its tests; low header cost, estimated under 0.1 s/TU. Runtime libraries do not depend on it. |
 
 Use one library per infrastructure responsibility. Keep optional packages out of
 default builds. Version changes update this table and receive the same boundary

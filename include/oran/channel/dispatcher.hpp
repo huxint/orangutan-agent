@@ -15,6 +15,8 @@ namespace orangutan::channel {
 
 using Transport = std::function<async::Awaitable<core::Result<Response>>(Conversation, Request)>;
 using RunTurn = std::function<async::Awaitable<core::Result<std::string>>(Message)>;
+/// Pure optional host formatting. The returned request is authorized before IO.
+using RenderReply = std::function<core::Result<Request>(const Message&, std::string_view, std::size_t)>;
 
 struct DispatcherOptions {
   permission::RuleSet rules;
@@ -24,6 +26,7 @@ struct DispatcherOptions {
   std::size_t max_reply_bytes{65536};
   std::chrono::milliseconds typing_interval{4000};
   std::chrono::milliseconds typing_ttl{60000};
+  RenderReply render_reply{};
 };
 
 struct Delivery {

@@ -1,4 +1,6 @@
 #include "host.hpp"
+#include "format.hpp"
+#include "presentation.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -40,25 +42,34 @@ async::Awaitable<Result<void>> authorize(hook::Bus& hooks, std::string operation
 }
 
 async::Awaitable<Result<void>> write_state(io::PrivateDirectory& directory, std::string bytes) {
+  const auto cancellation = co_await asio::this_coro::cancellation_state;
+  if (cancellation.cancelled() != asio::cancellation_type::none)
+    co_return std::unexpected(Error::cancelled());
   // PrivateDirectory writes are atomic and fsync both the file and directory.
   co_return directory.write("state.json", bytes);
 }
 
 async::Awaitable<Result<void>>
-persist(io::PrivateDirectory& directory, const Json& state, hook::Bus& hooks, asio::any_io_executor worker) {
+persist(io::PrivateDirectory& directory, const State& state, hook::Bus& hooks, asio::any_io_executor worker) {
   auto allowed = co_await authorize(hooks, "ChannelState", core::Capability::write_file);
   if (!allowed)
     co_return std::unexpected(allowed.error());
-  co_return co_await asio::co_spawn(worker, write_state(directory, state.dump(2) + "\n"), asio::use_awaitable);
+  co_return co_await asio::co_spawn(worker,
+                                    write_state(directory, encode_state(state).dump(2) + "\n"),
+                                    asio::use_awaitable);
 }
 
-async::Awaitable<Result<Json>> request(Api& api, hook::Bus& hooks, std::string path, Json body) {
+async::Awaitable<Result<Json>> request(Api& api, hook::Bus& hooks, PollMethod method, Json body) {
   auto allowed = co_await authorize(hooks, "ChannelPoll", core::Capability::egress_http);
   if (!allowed)
     co_return std::unexpected(allowed.error());
-  auto response = co_await api({"POST", std::move(path), body.dump()});
-  if (!response)
-    co_return std::unexpected(Error{response.error().kind(), "Telegram polling transport failed"});
+  auto response = co_await api(method, body.dump());
+  if (!response) {
+    Error error{response.error().kind(), "Telegram polling transport failed"};
+    if (response.error().retry_after())
+      error.with_retry_after(*response.error().retry_after());
+    co_return std::unexpected(std::move(error));
+  }
   co_return api_result(*response);
 }
 }  // namespace
@@ -70,6 +81,8 @@ bool admits(const channel::Message& message, std::string_view user) {
 }
 
 Result<Json> api_result(const channel::Response& response) {
+  if (response.status == 409)
+    return std::unexpected(Error{core::ErrorKind::conflict, "another Telegram poller is active"});
   auto parsed = Json::parse(response.body, nullptr, false);
   if (response.status < 200 || response.status >= 300 ||
       (parsed.is_object() && parsed.contains("ok") && parsed["ok"] == false)) {
@@ -84,72 +97,23 @@ Result<Json> api_result(const channel::Response& response) {
   return parsed["result"];
 }
 
-Result<Json> load_state(const io::PrivateDirectory& directory, std::string_view user, std::string_view workspace) {
-  auto bytes = directory.read("state.json", 2 * 1024 * 1024);
-  if (!bytes)
-    return std::unexpected(bytes.error());
-  if (!*bytes) {
-    auto id = core::generate_turn_id();
-    if (!id)
-      return std::unexpected(id.error());
-    return Json{{"bot", ""},
-                {"user", user},
-                {"workspace", workspace},
-                {"session", core::format_turn_id_hex(*id)},
-                {"next_update", 0},
-                {"pending", nullptr}};
-  }
-  try {
-    auto state = Json::parse(**bytes);
-    auto id = core::parse_turn_id_hex(state.at("session").get<std::string>());
-    if (state.at("user") != user || state.at("workspace") != workspace || !state.at("bot").is_string() ||
-        !state.at("next_update").is_number_integer() || state.at("next_update").get<std::int64_t>() < 0 || !id ||
-        core::is_zero_turn_id(*id) || !state.at("pending").is_null())
-      return std::unexpected(Error{core::ErrorKind::conflict,
-                                   "state binding mismatch or unresolved pending delivery; inspect state.json"});
-    return state;
-  } catch (const Json::exception&) {
-    return std::unexpected(Error::parsing("invalid Telegram state journal"));
-  }
-}
-
-Result<void> acknowledge_pending(const io::PrivateDirectory& directory, std::int64_t update) {
-  auto bytes = directory.read("state.json", 2 * 1024 * 1024);
-  if (!bytes)
-    return std::unexpected(bytes.error());
-  if (!*bytes || update < 0 || update == std::numeric_limits<std::int64_t>::max())
-    return std::unexpected(Error::invalid_argument("no matching pending update"));
-  try {
-    auto state = Json::parse(**bytes);
-    if (state.at("pending").at("update").at("update_id") != update)
-      return std::unexpected(Error{core::ErrorKind::conflict, "pending update differs from acknowledgment"});
-    auto archived = directory.write("handled-" + std::to_string(update) + ".json", **bytes);
-    if (!archived)
-      return std::unexpected(archived.error());
-    state["next_update"] = update + 1;
-    state["pending"] = nullptr;
-    return directory.write("state.json", state.dump(2) + "\n");
-  } catch (const Json::exception&) {
-    return std::unexpected(Error::parsing("invalid pending update journal"));
-  }
-}
-
 static async::Awaitable<Result<void>> run_impl(Options options,
                                                Api api,
                                                channel::Transport outbound,
                                                channel::RunTurn turn,
                                                hook::Bus& hooks,
                                                io::PrivateDirectory& directory,
-                                               Json& state,
-                                               asio::any_io_executor worker) {
-  auto me = co_await request(api, hooks, "/getMe", Json::object());
+                                               State& state,
+                                               asio::any_io_executor worker,
+                                               Presentation* presentation) {
+  auto me = co_await request(api, hooks, PollMethod::getMe, Json::object());
   if (!me)
     co_return std::unexpected(me.error());
   if (!me->is_object() || !me->value("is_bot", false) || !me->at("id").is_number_integer() ||
       !me->at("username").is_string())
     co_return std::unexpected(Error::parsing("invalid Telegram bot identity"));
   const auto bot = std::to_string(me->at("id").get<std::int64_t>());
-  auto webhook = co_await request(api, hooks, "/getWebhookInfo", Json::object());
+  auto webhook = co_await request(api, hooks, PollMethod::getWebhookInfo, Json::object());
   if (!webhook)
     co_return std::unexpected(webhook.error());
   if (!webhook->at("url").get<std::string>().empty())
@@ -158,30 +122,32 @@ static async::Awaitable<Result<void>> run_impl(Options options,
   std::fflush(stdout);
   if (options.probe)
     co_return Result<void>{};
-  if (state.at("bot") != "" && state.at("bot") != bot)
+  if (!state.bot.empty() && state.bot != bot)
     co_return std::unexpected(Error{core::ErrorKind::conflict, "Telegram bot differs from saved binding"});
-  state["bot"] = bot;
+  state.bot = bot;
   auto saved = co_await persist(directory, state, hooks, worker);
   if (!saved)
     co_return std::unexpected(saved.error());
 
   // Save the answer before sending and every confirmed send before advancing.
   // A crash anywhere in this window leaves pending non-null and blocks restart.
+  std::vector<FormattedText> final_parts;
   channel::Transport delivery = [&](channel::Conversation conversation,
                                     channel::Request outgoing) -> async::Awaitable<Result<channel::Response>> {
     const bool sending = outgoing.path == "/sendMessage";
     if (sending) {
-      state["pending"]["send_inflight"] = true;
+      state.pending->send_inflight = true;
       auto written = co_await persist(directory, state, hooks, worker);
       if (!written)
         co_return std::unexpected(written.error());
     }
     auto response = co_await outbound(std::move(conversation), std::move(outgoing));
-    auto receipt = response ? channel::telegram().accept(*response)
-                            : Result<channel::Receipt>{std::unexpected(Error::network("send failed"))};
-    if (sending && receipt && !receipt->id.empty()) {
-      state["pending"]["confirmed_parts"] = state["pending"].value("confirmed_parts", 0) + 1;
-      state["pending"]["send_inflight"] = false;
+    if (!sending || !response)
+      co_return response;
+    auto receipt = channel::telegram().accept(*response);
+    if (receipt && !receipt->id.empty()) {
+      ++state.pending->confirmed_parts;
+      state.pending->send_inflight = false;
       auto written = co_await persist(directory, state, hooks, worker);
       if (!written)
         co_return std::unexpected(written.error());
@@ -189,18 +155,42 @@ static async::Awaitable<Result<void>> run_impl(Options options,
     co_return response;
   };
   channel::RunTurn execute = [&](channel::Message message) -> async::Awaitable<Result<std::string>> {
+    if (presentation)
+      presentation->accepted();
     auto answer = co_await turn(std::move(message));
+    if (presentation) {
+      auto drained = co_await presentation->prepare_final();
+      if (!drained && answer)
+        co_return std::unexpected(drained.error());
+    }
     if (!answer)
       co_return std::unexpected(answer.error());
-    state["pending"]["answer"] = *answer;
+    state.pending->answer = *answer;
     auto written = co_await persist(directory, state, hooks, worker);
     if (!written)
       co_return std::unexpected(written.error());
-    co_return answer;
+    auto formatted = format_markdown(*answer);
+    if (!formatted)
+      co_return std::unexpected(formatted.error());
+    auto parts = split_formatted(*formatted, channel::telegram().capabilities().text_bytes);
+    if (!parts)
+      co_return std::unexpected(parts.error());
+    final_parts = std::move(*parts);
+    co_return std::move(formatted->text);
   };
   channel::DispatcherOptions dispatcher_options;
   dispatcher_options.rules = rules();
   dispatcher_options.hooks = &hooks;
+  dispatcher_options.render_reply =
+      [&](const channel::Message& message, std::string_view text, std::size_t part) -> Result<channel::Request> {
+    auto request = channel::telegram().reply(message, text, part);
+    if (!request)
+      return std::unexpected(request.error());
+    auto body = Json::parse(request->body);
+    body["entities"] = final_parts[part].entities;
+    request->body = body.dump();
+    return request;
+  };
   auto dispatcher = channel::Dispatcher::create(channel::telegram(),
                                                 std::move(delivery),
                                                 std::move(execute),
@@ -213,15 +203,13 @@ static async::Awaitable<Result<void>> run_impl(Options options,
   for (;;) {
     auto updates = co_await request(api,
                                     hooks,
-                                    "/getUpdates",
-                                    Json{{"offset", state.at("next_update")},
+                                    PollMethod::getUpdates,
+                                    Json{{"offset", state.next_update},
                                          {"limit", 1},
                                          {"timeout", 25},
                                          {"allowed_updates", Json::array({"message"})}});
     if (!updates) {
-      const auto kind = updates.error().kind();
-      if (++failures >= 5 ||
-          (kind != core::ErrorKind::network && kind != core::ErrorKind::rate_limit && kind != core::ErrorKind::timeout))
+      if (++failures >= 5 || !updates.error().retryable())
         co_return std::unexpected(updates.error());
       auto delay = updates.error().retry_after().value_or(std::chrono::seconds{2 * failures});
       auto waited = co_await async::sleep_for(co_await asio::this_coro::executor, delay);
@@ -238,35 +226,31 @@ static async::Awaitable<Result<void>> run_impl(Options options,
     if (!update.at("update_id").is_number_integer())
       co_return std::unexpected(Error::parsing("invalid Telegram update identifier"));
     const auto id = update.at("update_id").get<std::int64_t>();
-    if (id < state.at("next_update").get<std::int64_t>() || id == std::numeric_limits<std::int64_t>::max())
+    if (id < state.next_update || id == std::numeric_limits<std::int64_t>::max())
       co_return std::unexpected(Error::parsing("out-of-order Telegram update"));
     auto message = channel::telegram().decode(update.dump(), {bot, bot});
     if (!message)
       co_return std::unexpected(message.error());
-    if (*message && admits(**message, options.user)) {
-      state["pending"] =
-          Json{{"update", update}, {"answer", nullptr}, {"confirmed_parts", 0}, {"send_inflight", false}};
+    const bool admitted = *message && admits(**message, options.user);
+    if (admitted) {
+      state.pending = Pending{.update = update, .answer = std::nullopt};
       saved = co_await persist(directory, state, hooks, worker);
       if (!saved)
         co_return std::unexpected(saved.error());
-      auto delivered = co_await (*dispatcher)->handle(std::move(**message));
+      auto delivered = presentation ? co_await presentation->deliver(**dispatcher, std::move(**message))
+                                    : co_await (*dispatcher)->handle(std::move(**message));
       if (!delivered)
         co_return std::unexpected(delivered.error());
       std::println("Delivered update {} ({} parts)", id, delivered->parts_sent);
       std::fflush(stdout);
-      state["pending"] = nullptr;
-      state["next_update"] = id + 1;
-      saved = co_await persist(directory, state, hooks, worker);
-      if (!saved)
-        co_return std::unexpected(saved.error());
-      if (options.once)
-        co_return Result<void>{};
-    } else {
-      state["next_update"] = id + 1;
-      saved = co_await persist(directory, state, hooks, worker);
-      if (!saved)
-        co_return std::unexpected(saved.error());
+      state.pending.reset();
     }
+    state.next_update = id + 1;
+    saved = co_await persist(directory, state, hooks, worker);
+    if (!saved)
+      co_return std::unexpected(saved.error());
+    if (admitted && options.once)
+      co_return Result<void>{};
   }
 }
 
@@ -276,8 +260,9 @@ async::Awaitable<Result<void>> run(Options options,
                                    channel::RunTurn turn,
                                    hook::Bus& hooks,
                                    io::PrivateDirectory& directory,
-                                   Json& state,
-                                   asio::any_io_executor worker) {
+                                   State& state,
+                                   asio::any_io_executor worker,
+                                   Presentation* presentation) {
   try {
     co_return co_await run_impl(std::move(options),
                                 std::move(api),
@@ -286,7 +271,8 @@ async::Awaitable<Result<void>> run(Options options,
                                 hooks,
                                 directory,
                                 state,
-                                worker);
+                                worker,
+                                presentation);
   } catch (const Json::exception&) {
     co_return std::unexpected(Error::parsing("invalid Telegram host data"));
   } catch (...) {
