@@ -20,6 +20,10 @@ xmake test -j4
 
 The default build produces the runtime libraries. Tests and benchmarks are
 separate targets: `test-<lib>` and `bench-<lib>`.
+The opt-in `oran-telegram` application hosts a private Telegram conversation;
+[messaging channels](design-docs/messaging-channels.md#telegram-deployment-host)
+owns deployment commands, credentials and recovery. Build it with
+`xmake build -j4 oran-telegram`; ordinary builds and tests never launch it.
 `xmake test` builds test targets before running them.
 The opt-in `eval-context` target runs controlled or explicitly configured live
 working-context evaluations; [testing](rules/testing-and-bench.md#working-context-evaluation)
@@ -44,6 +48,7 @@ and environment as described in [testing-and-bench](rules/testing-and-bench.md).
 | `xmake/options.lua` | Supported configure options. |
 | `xmake/tests.lua`, `xmake/bench.lua` | Test and benchmark buckets. |
 | `xmake/evals.lua` | Opt-in deployment-model evaluation executables. |
+| `xmake/apps.lua` | Opt-in deployment hosts. |
 
 The root selects `oran-gcc` and the `oran.build` rule for every runtime library,
 test and benchmark. Tool discovery prefers `gcc-16`/`g++-16`, then `gcc`/`g++`;

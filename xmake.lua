@@ -25,3 +25,4 @@ includes("xmake/tests.lua")
 includes("xmake/bench.lua")
 
 includes("xmake/evals.lua")
+includes("xmake/apps.lua")

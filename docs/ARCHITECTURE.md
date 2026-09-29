@@ -61,6 +61,11 @@ session identities through `oran-bootstrap`. The host owns process lifetime and
 presentation. Tests and benchmarks exercise these interfaces through their own
 runners. See [BUILD_SYSTEM.md](BUILD_SYSTEM.md).
 
+The opt-in `oran-telegram` application in `apps/telegram/` composes authenticated
+polling, one allowed private user's persistent session and a private delivery
+journal. Its deployment and recovery contract belongs to
+[messaging channels](design-docs/messaging-channels.md#telegram-deployment-host).
+
 Dependencies flow toward domain values and platform primitives. Intentional
 same-layer edges are HTTP/IO/storage → async and tool → permission/hook.
 Config depends only on core values; bootstrap is its only runtime-library

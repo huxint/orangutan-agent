@@ -94,7 +94,69 @@ HTTP client's worker executor and retains all services until every dispatch has
 returned. The bootstrap channel integration test exercises a real `AgentSession`
 with a controlled provider and transport.
 
-## Authority, lifecycle and recovery
+## Telegram deployment host
+
+The opt-in `oran-telegram` executable composes polling, the dispatcher and one
+persistent `AgentSession`. It accepts only the explicitly configured user's
+private chat. Groups, other senders and unsupported updates are skipped. It
+processes one update at a time, keeps Telegram's pending queue intact on startup,
+verifies `getMe`, and refuses an active webhook without changing it. Run only one
+poller per bot token. The state lock excludes another process using the same
+state directory; Telegram rejects competing pollers in different directories.
+
+```sh
+xmake build -j4 oran-telegram
+# Inject ORAN_TELEGRAM_TOKEN and ORAN_TELEGRAM_MODEL_KEY into the environment.
+# Supply the allowed user and host-selected workspace/state directories.
+build/linux/x86_64/release/oran-telegram \
+  --config apps/telegram/deepseek.example.json --allow-user "$TELEGRAM_USER_ID" \
+  --workspace "$WORKSPACE_DIR" --state "$STATE_DIR"
+```
+
+`--token-env NAME` selects a different bot-token reference. `--probe --state DIR`
+checks identity/webhook status without receiving messages or invoking a model;
+it needs only the Telegram credential. `--once` processes one admitted message
+and exits. SIGINT/SIGTERM cancels and joins active work. Polls use a 25-second
+long-poll timeout, a 35-second HTTP bound and a one-MiB response limit. Retryable
+poll failures retry at most four times and respect Telegram rate-limit delays.
+Sends and agent turns are never retried automatically by the host.
+
+The DeepSeek example uses the Anthropic-compatible endpoint and the
+`ORAN_TELEGRAM_MODEL_KEY` reference, with FileRead, MemoryRecall and MemoryRemember
+selected. It permits durable notes and provider requests. Filesystem writes and
+delegation are not exposed by this example; other configurations retain normal
+session permission decisions. The host provides no interactive approval consumer.
+The model receives plain text; `/start` payloads are stripped before the turn.
+
+Keep state and credentials outside the agent workspace and its extra filesystem
+roots. The host requires a private, locked state directory and rejects a workspace
+or extra root containing that directory. It maps configured worker/HTTP bounds,
+trace settings, workspace roots and hook timeouts into bootstrap. State binds the
+bot ID, allowed user, canonical workspace and stable session ID. Reusing it resumes
+conversation history and scoped memory; changing an identity requires a different
+state directory. Credentials never appear in journal metadata or console output.
+
+`state.json` records the next update and a pending intake before any turn starts.
+The host saves the generated answer before sending, marks in-flight sends, and
+records confirmed chunks before advancing the cursor. An interrupted or failed
+turn/send stops the host and leaves the pending record intact. Restart refuses to
+replay it, including the crash window between sending and saving a receipt.
+The session database retains successful turns independently of delivery.
+
+Inspect the pending update, answer and confirmed chunk count, reconcile any
+ambiguous delivery in Telegram, then explicitly retire that exact update:
+
+```sh
+build/linux/x86_64/release/oran-telegram --state "$STATE_DIR" --ack-pending "$UPDATE_ID"
+```
+
+This archives the complete journal as `handled-<update-id>.json` before advancing the
+cursor. It does not rerun the model or resend an answer. Preserve the archive
+when manually handling an unsent response. It needs no credentials and refuses
+a running host or a mismatched update ID. The host favors recoverable intake and
+explicit reconciliation; it does not promise exactly-once remote delivery.
+
+## Dispatcher authority, lifecycle and recovery
 
 `ChannelReceive` must be allowed before invoking the turn callback. `ChannelSend`
 and `ChannelTyping` require `egress_http` for every request. Rules see normalized

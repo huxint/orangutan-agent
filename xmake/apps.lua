@@ -1,0 +1,12 @@
+-- Deployment hosts are opt-in; ordinary builds never start network services.
+local root = os.projectdir()
+target("oran-telegram")
+    set_kind("binary")
+    set_group("oran-apps")
+    set_default(false)
+    add_includedirs(path.join(root, "include"))
+    add_files(path.join(root, "apps/telegram/*.cpp"))
+    add_deps("oran-bootstrap")
+    add_packages("nlohmann_json")
+    set_pcxxheader(path.join(root, "include/oran/_pch.hpp"))
+target_end()

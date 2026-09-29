@@ -14,6 +14,7 @@ local function oran_test(name, deps, extra_packages)
         add_files(path.join(root, "tests", name, "**.cpp"))
         if name == "bootstrap" then
             add_files(path.join(root, "eval/context/scenarios.cpp"), path.join(root, "eval/context/runner.cpp"))
+            add_files(path.join(root, "apps/telegram/host.cpp"))
         end
         add_deps(table.unpack(deps))
         add_packages("catch2")

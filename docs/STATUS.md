@@ -46,6 +46,9 @@ QQ, Telegram and Feishu text adapters expose injected transport and turn ports.
 The channel dispatcher bounds admission/deduplication, retains failed deliveries
 and joins typing-status cleanup. Hosts own authenticated ingress and durable
 outboxes; [messaging channels](design-docs/messaging-channels.md) owns the contract.
+The opt-in `oran-telegram` host supplies authenticated polling for one allowed
+private user, persistent session routing, a durable intake/delivery journal and
+explicit reconciliation after ambiguous failures.
 
 ## Contract Owners
 
