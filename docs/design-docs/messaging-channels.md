@@ -21,6 +21,9 @@ provider, session, HTTP, configuration or storage dependency.
 An optional pure `DispatcherOptions::render_reply` supplies host formatting
 before reply preflight and authorization; rules inspect the final request body.
 Without it, the dispatcher uses the adapter's ordinary text reply conversion.
+An optional pure `split_reply` preserves host formatting across parts. The
+dispatcher rejects empty, invalid UTF-8 or oversized parts before sending; all
+parts still pass adapter preflight and the ordinary send authorization.
 
 Conversation identity includes platform, configured account, direct/group kind,
 chat ID and optional thread ID, with length-delimited components. The account
@@ -32,7 +35,7 @@ its conversation; use sender rules if group members have different authority.
 | Platform | Accepted ingress | Reply | Activity |
 | --- | --- | --- | --- |
 | Telegram | User text, photos and image documents with captions in private/group/supergroup chats | `sendMessage`, original message and forum topic | `sendChatAction`, refreshed every four seconds by default; expires naturally |
-| QQ | `C2C_MESSAGE_CREATE`, `GROUP_AT_MESSAGE_CREATE` dispatch envelopes | Official `/v2/users` or `/v2/groups` passive text reply | C2C `msg_type: 6`, `input_type: 1`, then explicit `input_type: 2` stop; group activity unsupported |
+| QQ | `C2C_MESSAGE_CREATE`, `GROUP_AT_MESSAGE_CREATE` text or image dispatch envelopes, with reference indices | Official `/v2/users` or `/v2/groups` passive text reply; opt-in native Markdown | C2C `msg_type: 6`, `input_type: 1`, then explicit `input_type: 2` stop; group activity unsupported |
 | Feishu | `im.message.receive_v1` user text events | Message reply with nested JSON content and thread routing | Add `Typing` reaction, then delete the exact returned reaction ID |
 
 Bot/self events where the protocol identifies bots, edits, unsupported attachments
@@ -48,8 +51,23 @@ split at code point boundaries using conservative byte limits (Telegram/Feishu
 so direct reply sequences start at 3, group sequences at 1. Reply preflight
 rejects more than five QQ chunks before sending any of them. QQ passive-reply
 windows and platform quotas still apply; hosts must reconcile expired replies.
-Rich media, cards, editing streamed drafts and QQ guild channels are outside this
-text-message contract.
+Media uploads, cards, editing streamed drafts and QQ guild channels are outside
+this reply contract. QQ input preserves the first image attachment, including
+image-only messages; the host downloads it after admission. Bot events are ignored.
+`Message::reference_key` and `ReplyContext::reference_key` preserve Tencent's
+`msg_idx`/`ref_msg_idx` values; quoted message type 103 also supplies `msg_idx`
+through `msg_elements`. Authenticated inline `msg_elements.content` supplies
+quoted text even when no local index entry exists. These indices are not message IDs. QQ input-status success may be an empty object; only actual message delivery
+requires a nonempty receipt ID. Successful QQ message receipts preserve
+`ext_info.ref_idx` separately so a host can durably index the exact outgoing part.
+Reference resolution must stay within the admitted account/conversation. Missing
+references remain explicitly unavailable rather than borrowing nearby history.
+
+`qq_markdown_reply` constructs native `msg_type: 2` / `markdown.content` while
+retaining passive reply identity and sequence rules. The account must support
+native Markdown; callers select ordinary text explicitly when it does not.
+The [QQ live evaluator](../rules/testing-and-bench.md#qq-live-dialogue-evaluation)
+composes these features, bounded image loading and local commands.
 
 ## Hosting and authentication
 

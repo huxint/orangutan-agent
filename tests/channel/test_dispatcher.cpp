@@ -410,3 +410,50 @@ TEST_CASE("Denied outbound effects retain answers without sending and can be ack
     CHECK(sends == 0);
   });
 }
+
+TEST_CASE("Channel rejects invalid host-split parts before sending replies") {
+  orangutan::tests::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    hook::Bus bus;
+    for (const auto& part : {std::string{}, std::string(4001, 'x'), std::string(1, '\xff')}) {
+      auto opts = options(bus);
+      opts.split_reply = [&](std::string_view, std::size_t) -> core::Result<std::vector<std::string>> {
+        return std::vector<std::string>{part};
+      };
+      int replies = 0;
+      auto dispatcher = channel::Dispatcher::create(
+          channel::telegram(),
+          [&](channel::Conversation, channel::Request request) -> async::Awaitable<core::Result<channel::Response>> {
+            if (request.path == "/sendMessage")
+              ++replies;
+            co_return telegram_success();
+          },
+          [](channel::Message) -> async::Awaitable<core::Result<std::string>> { co_return "answer"; },
+          std::move(opts));
+      REQUIRE(dispatcher);
+      auto result = co_await (*dispatcher)->handle(message());
+      CHECK_FALSE(result);
+      CHECK(replies == 0);
+    }
+  });
+}
+
+TEST_CASE("QQ empty status acknowledgments cannot confirm message delivery") {
+  orangutan::tests::run_async([](asio::io_context&) -> async::Awaitable<void> {
+    hook::Bus bus;
+    auto input = message(channel::Platform::qq);
+    input.conversation.kind = channel::ChatKind::group;
+    auto dispatcher = channel::Dispatcher::create(
+        channel::qq(),
+        [](channel::Conversation, channel::Request) -> async::Awaitable<core::Result<channel::Response>> {
+          co_return channel::Response{200, "{}", {}};
+        },
+        [](channel::Message) -> async::Awaitable<core::Result<std::string>> { co_return "answer"; },
+        options(bus));
+    REQUIRE(dispatcher);
+    auto result = co_await (*dispatcher)->handle(input);
+    CHECK_FALSE(result);
+    auto pending = (*dispatcher)->pending(input);
+    REQUIRE(pending);
+    CHECK(pending->next_part == 0);
+  });
+}

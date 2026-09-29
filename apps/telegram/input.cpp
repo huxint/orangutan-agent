@@ -1,4 +1,5 @@
 #include "input.hpp"
+#include "../shared/image.hpp"
 #include "host.hpp"
 
 #include <algorithm>
@@ -45,29 +46,6 @@ bool relative_file(std::string_view path) {
          });
 }
 
-Result<core::ImageContent> image_content(std::string_view bytes) {
-  if (bytes.size() > image_max_bytes)
-    return std::unexpected(Error::invalid_argument("image exceeds 5 MiB"));
-  std::string media;
-  if (bytes.starts_with("\x89PNG\r\n\x1a\n"))
-    media = "image/png";
-  else if (bytes.starts_with("\xff\xd8\xff"))
-    media = "image/jpeg";
-  else if (bytes.starts_with("GIF87a") || bytes.starts_with("GIF89a"))
-    media = "image/gif";
-  else if (bytes.size() >= 12 && bytes.starts_with("RIFF") && bytes.substr(8, 4) == "WEBP")
-    media = "image/webp";
-  else
-    return std::unexpected(Error::invalid_argument("unsupported image format"));
-  std::string base64(sodium_base64_encoded_len(bytes.size(), sodium_base64_VARIANT_ORIGINAL), '\0');
-  sodium_bin2base64(base64.data(),
-                    base64.size(),
-                    reinterpret_cast<const unsigned char*>(bytes.data()),
-                    bytes.size(),
-                    sodium_base64_VARIANT_ORIGINAL);
-  base64.pop_back();  // The library includes the terminating NUL in its encoded length.
-  return core::ImageContent{std::move(media), std::move(base64)};
-}
 }  // namespace
 
 async::Awaitable<Result<core::ImageContent>> load_image(const channel::Message& message,
@@ -98,7 +76,7 @@ async::Awaitable<Result<core::ImageContent>> load_image(const channel::Message& 
     auto bytes = co_await download(std::move(path));
     if (!bytes)
       co_return std::unexpected(Error{bytes.error().kind(), "Telegram image download failed"});
-    co_return image_content(*bytes);
+    co_return chat_host::image_content(*bytes, image_max_bytes);
   } catch (const Json::exception&) {
     co_return std::unexpected(Error::parsing("invalid Telegram image metadata"));
   } catch (...) {

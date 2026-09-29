@@ -54,7 +54,10 @@ and scoped token refresh. Public QQ ingress, queue/outbox deployment and account
 configuration remain host responsibilities in the messaging contract.
 The opt-in `oran-qq-login` obtains credentials by official QR authorization,
 stores the binding privately without overwriting existing accounts, and probes
-saved credentials. It does not start QQ message ingress.
+saved credentials. It does not start QQ message ingress. The opt-in `eval-qq` runner and bounded
+Gateway harness exercise owner-only live dialogue, persisted references, images,
+native Markdown, typing and local commands through the existing contracts;
+[testing](rules/testing-and-bench.md#qq-live-dialogue-evaluation) owns their limits.
 
 ## Contract Owners
 

@@ -27,6 +27,8 @@ struct DispatcherOptions {
   std::chrono::milliseconds typing_interval{4000};
   std::chrono::milliseconds typing_ttl{60000};
   RenderReply render_reply{};
+  /// Pure host splitting; each nonempty UTF-8 part must fit the adapter limit.
+  std::function<core::Result<std::vector<std::string>>(std::string_view, std::size_t)> split_reply{};
 };
 
 struct Delivery {

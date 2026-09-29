@@ -19,7 +19,7 @@ local function oran_test(name, deps, extra_packages)
             add_files(path.join(root, "apps/telegram/format.cpp"), path.join(root, "apps/telegram/presentation.cpp"))
             add_files(path.join(root, "apps/telegram/input.cpp"))
             add_files(path.join(root, "apps/telegram/commands.cpp"))
-            add_files(path.join(root, "apps/qq/login.cpp"))
+            add_files(path.join(root, "apps/qq/login.cpp"), path.join(root, "apps/qq/chat.cpp"))
         end
         add_deps(table.unpack(deps))
         add_packages("catch2")

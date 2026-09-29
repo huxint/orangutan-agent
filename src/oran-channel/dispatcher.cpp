@@ -229,9 +229,17 @@ struct Dispatcher::Impl {
       co_return std::unexpected(cancelled ? Error::cancelled() : safe_error(answer.error()));
     if (answer->size() > options.max_reply_bytes)
       co_return std::unexpected(Error::invalid_argument("channel reply exceeds byte limit"));
-    auto parts = split_text(*answer, adapter.capabilities(entry.message.conversation.kind).text_bytes);
+    const auto limit = adapter.capabilities(entry.message.conversation.kind).text_bytes;
+    auto parts = options.split_reply ? options.split_reply(*answer, limit) : split_text(*answer, limit);
     if (!parts)
       co_return std::unexpected(parts.error());
+    if ((!answer->empty() && parts->empty()) || parts->size() > options.max_reply_bytes)
+      co_return std::unexpected(Error::invalid_argument("invalid channel reply parts"));
+    for (const auto& part : *parts) {
+      auto valid = split_text(part, limit);
+      if (part.empty() || !valid || valid->size() != 1)
+        co_return std::unexpected(Error::invalid_argument("invalid channel reply part"));
+    }
     entry.reply.parts = std::move(*parts);
     entry.generated = true;
     if (cancelled)

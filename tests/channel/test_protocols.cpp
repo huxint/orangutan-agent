@@ -129,7 +129,9 @@ TEST_CASE("Channel API failures do not echo upstream bodies and preserve retry d
   CHECK_FALSE(channel::feishu().accept({200, R"({"code":999,"msg":"SECRET"})", {}}));
   CHECK_FALSE(channel::qq().accept({200, R"({"code":123,"message":"SECRET"})", {}}));
   CHECK_FALSE(channel::telegram().accept({200, R"({"ok":"true"})", {}}));
-  CHECK_FALSE(channel::qq().accept({200, "{}", {}}));
+  auto status = channel::qq().accept({200, "{}", {}});
+  REQUIRE(status);
+  CHECK(status->id.empty());
 }
 
 TEST_CASE("Telegram receives the largest photo and image documents with captions") {
@@ -216,4 +218,61 @@ TEST_CASE("Channel text splitting preserves Unicode and rejects malformed UTF-8"
   CHECK_FALSE(channel::split_text(std::string{"\xed\xa0\x80", 3}, 4));
   CHECK_FALSE(channel::split_text(std::string{"\xf4\x90\x80\x80", 4}, 4));
   CHECK_FALSE(channel::split_text("x", 0));
+}
+
+TEST_CASE("QQ image-only events and official reference indices survive decoding") {
+  Json event{{"op", 0},
+             {"t", "C2C_MESSAGE_CREATE"},
+             {"d",
+              {{"id", "message"},
+               {"content", ""},
+               {"author", {{"user_openid", "owner"}}},
+               {"attachments",
+                Json::array({{{"content_type", "image/jpeg"},
+                              {"size", 42},
+                              {"url", "//multimedia.nt.qq.com.cn/download?fileid=fixture"}}})},
+               {"message_scene", {{"ext", {"msg_idx=own-index", "ref_msg_idx=previous-index"}}}}}}};
+  auto result = channel::qq().decode(event.dump(), {"app", {}});
+  REQUIRE(result);
+  REQUIRE(*result);
+  CHECK((**result).text.empty());
+  REQUIRE((**result).image);
+  CHECK((**result).image->file_id == "https://multimedia.nt.qq.com.cn/download?fileid=fixture");
+  CHECK((**result).image->file_size == 42);
+  CHECK((**result).reference_key == "own-index");
+  REQUIRE((**result).reply_to);
+  CHECK((**result).reply_to->reference_key == "previous-index");
+  event["d"]["message_type"] = 103;
+  event["d"]["msg_elements"] = Json::array({{{"msg_idx", "quoted-index"}, {"content", "inline quoted text"}}});
+  result = channel::qq().decode(event.dump(), {"app", {}});
+  REQUIRE(result);
+  REQUIRE(*result);
+  CHECK((**result).reply_to->reference_key == "quoted-index");
+  CHECK((**result).reply_to->text == "inline quoted text");
+  event["d"]["author"]["bot"] = true;
+  result = channel::qq().decode(event.dump(), {"app", {}});
+  REQUIRE(result);
+  CHECK_FALSE(*result);
+}
+
+TEST_CASE("QQ native Markdown retains passive sequencing and confirmed reference indices") {
+  Json event{{"op", 0},
+             {"t", "C2C_MESSAGE_CREATE"},
+             {"d", {{"id", "message"}, {"content", "hello"}, {"author", {{"user_openid", "owner"}}}}}};
+  auto decoded = channel::qq().decode(event.dump(), {"app", {}});
+  REQUIRE(decoded);
+  REQUIRE(*decoded);
+  auto request = channel::qq_markdown_reply(**decoded, "**bold**", 0);
+  REQUIRE(request);
+  auto body = Json::parse(request->body);
+  CHECK(body.at("msg_type") == 2);
+  CHECK(body.at("markdown").at("content") == "**bold**");
+  CHECK(body.at("msg_seq") == 3);
+  CHECK(body.at("msg_id") == "message");
+  CHECK_FALSE(body.contains("content"));
+  CHECK_FALSE(channel::qq_markdown_reply(**decoded, "text", 5));
+  auto receipt = channel::qq().accept({200, R"({"id":"delivered","ext_info":{"ref_idx":"reference"}})", {}});
+  REQUIRE(receipt);
+  CHECK(receipt->id == "delivered");
+  CHECK(receipt->reference_key == "reference");
 }

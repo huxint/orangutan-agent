@@ -97,7 +97,6 @@ with the deployment model and inspect failed answers and checkpoints before
 changing memory policy. Grader negatives, budget exhaustion and controlled
 end-to-end execution are covered by `test-bootstrap`.
 
-
 ## QQ Live Dialogue Evaluation
 
 `eval-qq` processes one authenticated QQ event supplied by a trusted local ingress
@@ -116,28 +115,80 @@ build/linux/x86_64/release/eval-qq "$CONFIG" "$WORKSPACE" "$QQ_STATE_DIR"
 The private state directory must already contain `qq-credentials.json` from
 `oran-qq-login` and the trusted harness's `event.json` (at most 1 MiB). The event
 file is not independently authenticated; never feed untrusted local files or
-public HTTP bodies to this entry point. Only direct text from the saved scanning
-user is admitted. Missing owner identity fails closed. State must be outside the
+public HTTP bodies to this entry point. Only direct text/images from the saved
+scanning user are admitted. Missing owner identity fails closed. State must be outside the
 workspace; extra filesystem roots are refused. Provider credentials use the
-configuration's ordinary environment references. The runner grants no typing
-status requests and disables child delegation; model/tool permissions still
-come from the supplied configuration.
+configuration's ordinary environment references. `eval/qq/deepseek.example.json`
+uses `ORAN_QQ_MODEL_KEY` and the existing DeepSeek Anthropic-compatible route.
+The runner enables joined QQ typing status and native Markdown; `--no-typing`
+and `--plain-text` explicitly disable them. Child delegation is disabled;
+model/tool permissions still come from the supplied configuration.
 
 `live-journal.json` binds the app, user, workspace and persistent session ID.
 It saves input before the model runs, answer before sending, and each confirmed
 receipt. A failed or ambiguous operation leaves `pending` intact and blocks the
 next invocation. Preserve and inspect it before any manual reconciliation;
 there is no automatic retry or acknowledgment command. Delivered event IDs
-suppress duplicates. Each evaluation is limited to 16 delivered events; the
-runner never evicts them. Private `live-sessions.db`, `live-memory.db` and
+suppress duplicates. The journal is limited to 4 MiB on both read and write;
+reaching that bound stops the evaluator without evicting deliveries. Private
+`live-sessions.db`, `live-memory.db` and
 `live-audit.db` preserve runtime history independently of the delivery journal.
 Do not delete user records to restart an evaluation.
 
 SIGINT/SIGTERM requests cancellation and joins active work. The evaluation runner
 is a bounded local test entry point, not a durable production Gateway service.
 The CLI regression check covers foreign/missing owner, binding changes, pending
-preservation, duplicate suppression, the turn limit and denied-provider recovery.
+preservation, duplicate suppression, the journal byte bound and denied-provider recovery.
 Live acceptance additionally requires user-originated QQ messages, real provider
 responses, remote send receipts and confirmation in the user's QQ client. A
 correct answer after a second process opens the same session verifies that
 specific continuation case, not general long-term-memory quality.
+
+The QQ evaluator resolves quoted incoming messages and confirmed outgoing chunks
+from this conversation's journal, including quoted images. Authenticated inline
+`msg_elements.content` is also preserved, so a quote can work before a local
+reference index exists. Unknown references
+are marked unavailable in the typed prompt. Images use credential-free HTTPS
+requests only to `multimedia.nt.qq.com.cn`, `gchat.qpic.cn` or `c2cpicdw.qpic.cn`;
+redirects are disabled. `ChannelAttachment` authorizes each request. Requests are
+bounded to 20 seconds and 5 MiB, and PNG/JPEG/GIF/WebP signatures are checked before
+base64 encoding. One current and one referenced image can enter the prompt.
+Download failures return a useful resend instruction. Model visual capability
+is still required; transport support alone does not establish image understanding.
+The Telegram and QQ hosts share the same image byte/signature conversion.
+
+Native Markdown splitting preserves UTF-8, closes/reopens ordinary three-character
+fenced code blocks and preflights QQ's five-part limit. Overlong answers receive
+a shorter-request suggestion; the successful model transcript remains preserved.
+`/help` (`/start`), `/status` and `/new` are model-free and journaled like ordinary
+replies. Status shows the configured model, stored message count and session ID.
+New-session identity and its confirmation persist together; old transcripts and
+conversation-scoped memory remain. Commands in quoted messages or image captions
+do not execute. Unexpected standalone commands/arguments return help.
+
+For an interactive local Gateway experiment, Node 22+ supplies the built-in
+WebSocket and fetch APIs; no npm dependency is installed:
+
+```sh
+node scripts/qq-live.mjs build/linux/x86_64/release/eval-qq "$CONFIG" "$WORKSPACE" "$QQ_STATE_DIR"
+```
+
+This harness authenticates the saved bot, subscribes to direct messages from the
+scanning user and fsyncs each received envelope before invoking the native runner.
+It holds an exclusive `gateway-eval.lock` and snapshots the runner executable so
+a rebuild cannot interrupt message startup. It runs for at most 15 minutes, with
+at most 16 queued messages; the native journal byte bound still applies. Heartbeat failure,
+reconnect requests or runner failure stop the experiment without automatic replay.
+Private received envelopes remain for inspection. A stale lock after a crash
+requires operator inspection before removal. It is an evaluation harness, not
+a production reconnecting Gateway service.
+
+Reference behavior follows Tencent's [QQ plugin feature catalogue](https://github.com/tencent-connect/openclaw-qqbot#readme)
+and [`qqbot-nodejs` protocol implementation](https://www.npmjs.com/package/@tencent-connect/qqbot-nodejs),
+plus the Telegram command/input lifecycle implemented in this repository.
+
+The QQ overlay explicitly explains that attached images are native visual input,
+not files requiring another tool. It asks for visible details and calibrated
+uncertainty. This follows the visual-content framing in the reviewed
+[Claude Code image-read prompt](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/tool-description-readfile-compact.md),
+adapted to already-attached chat images rather than claiming a nonexistent tool.

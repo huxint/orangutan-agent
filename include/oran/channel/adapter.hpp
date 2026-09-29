@@ -55,6 +55,7 @@ struct ReplyContext {
   std::string text;
   std::string quote;
   std::optional<ImageAttachment> image{};
+  std::string reference_key{};
 };
 
 struct Message {
@@ -65,6 +66,8 @@ struct Message {
   std::string text;
   std::optional<ImageAttachment> image{};
   std::optional<ReplyContext> reply_to{};
+  /// Provider reference index, distinct from its delivery/message ID.
+  std::string reference_key{};
 };
 
 /// Account and bot identity come from trusted host configuration, not the event.
@@ -88,6 +91,7 @@ struct Response {
 
 struct Receipt {
   std::string id;
+  std::string reference_key{};
 };
 
 /// Stateless protocol strategy. Ingress must already be authenticated by the host.
@@ -110,6 +114,8 @@ public:
 [[nodiscard]] const Adapter& telegram() noexcept;
 [[nodiscard]] const Adapter& qq() noexcept;
 [[nodiscard]] const Adapter& feishu() noexcept;
+/// QQ native Markdown, retaining passive-reply sequence and size checks.
+[[nodiscard]] core::Result<Request> qq_markdown_reply(const Message& message, std::string_view text, std::size_t part);
 [[nodiscard]] std::string conversation_key(const Conversation& conversation);
 /// Validate UTF-8 and split conservatively by bytes, never inside a code point.
 [[nodiscard]] core::Result<std::vector<std::string>> split_text(std::string_view text, std::size_t max_bytes);

@@ -51,7 +51,7 @@ class Admission(unittest.TestCase):
 
     def run_event(self):
         return subprocess.run(
-            [BINARY, str(self.config), str(self.workspace), str(self.state)],
+            [BINARY, str(self.config), str(self.workspace), str(self.state), "--no-typing"],
             env={**os.environ, "ORAN_QQ_TEST_KEY": "fixture"},
             capture_output=True, text=True, timeout=20)
 
@@ -86,10 +86,12 @@ class Admission(unittest.TestCase):
         self.write("live-journal.json", self.journal)
         self.assertEqual(self.run_event().returncode, 1)
 
-    def test_turn_limit_is_enforced(self):
-        self.journal["delivered"] = [{"id": str(i)} for i in range(16)]
+    def test_oversized_journal_is_preserved(self):
+        self.journal["delivered"] = [{"id": "earlier", "text": "x" * (4 * 1024 * 1024)}]
         self.write("live-journal.json", self.journal)
+        before = (self.state / "live-journal.json").read_bytes()
         self.assertEqual(self.run_event().returncode, 1)
+        self.assertEqual((self.state / "live-journal.json").read_bytes(), before)
 
     def test_denied_provider_preserves_intake_and_blocks_replay(self):
         # The strict default provider permission fails before any model HTTP.
