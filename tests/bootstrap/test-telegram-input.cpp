@@ -248,9 +248,5 @@ TEST_CASE("Telegram text replies and partial quotes need no attachment permissio
     auto plain = co_await telegram_host::prepare_prompt(message, transport, download, hooks, rules);
     REQUIRE(plain);
     CHECK(plain->prompt == message.text);
-    message.text = "/start private-payload";
-    auto start = co_await telegram_host::prepare_prompt(message, transport, download, hooks, rules);
-    REQUIRE(start);
-    CHECK(start->prompt == "/start");
   });
 }

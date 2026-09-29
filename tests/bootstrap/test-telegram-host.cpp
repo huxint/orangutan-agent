@@ -1,3 +1,4 @@
+#include "../../apps/telegram/commands.hpp"
 #include "../../apps/telegram/host.hpp"
 #include "../test-helpers/run_async.hpp"
 
@@ -8,7 +9,11 @@
 #include <asio/cancellation_signal.hpp>
 #include <asio/post.hpp>
 #include <oran/async/sleep.hpp>
+#include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/hook/bus.hpp>
+#include <oran/memory/session.hpp>
+#include <oran/provider/system.hpp>
+#include <oran/storage/trace_repository.hpp>
 
 namespace {
 using namespace orangutan;
@@ -48,6 +53,11 @@ telegram_host::Api api(std::vector<Json> updates, std::vector<std::int64_t>& off
       co_return response(Json{{"is_bot", true}, {"id", 123}, {"username", "fixture_bot"}});
     if (method == PollMethod::getWebhookInfo)
       co_return response(Json{{"url", webhook ? "https://example.test/hook" : ""}});
+    if (method == PollMethod::setMyCommands) {
+      const auto menu = Json::parse(payload);
+      CHECK(menu.at("scope") == Json{{"type", "chat"}, {"chat_id", "42"}});
+      co_return response(true);
+    }
     REQUIRE(method == PollMethod::getUpdates);
     auto body = Json::parse(payload);
     CHECK(body.at("limit") == 1);
@@ -57,6 +67,216 @@ telegram_host::Api api(std::vector<Json> updates, std::vector<std::int64_t>& off
   };
 }
 }  // namespace
+
+TEST_CASE("Telegram parses standalone commands without interpreting paths or quoted prose", "[telegram-host]") {
+  auto command = telegram_host::parse_command(" \n/NEW@Fixture_Bot \t", "fixture_bot");
+  REQUIRE(command);
+  CHECK(command->name == "new");
+  CHECK(command->addressed_here);
+  CHECK_FALSE(command->has_arguments);
+  command = telegram_host::parse_command("/new follow-up", "fixture_bot");
+  REQUIRE(command);
+  CHECK(command->has_arguments);
+  command = telegram_host::parse_command("/status@another_bot", "fixture_bot");
+  REQUIRE(command);
+  CHECK_FALSE(command->addressed_here);
+  for (const auto* text : {"请解释 /new", "> /new", "`/new`", "/home/user/file.cpp", "普通文本", "/"})
+    CHECK_FALSE(telegram_host::parse_command(text, "fixture_bot"));
+}
+
+TEST_CASE("Telegram new session is durable before delivery and local commands bypass the model", "[telegram-host]") {
+  StateDirectory temp;
+  auto directory = io::PrivateDirectory::open(temp.path.string());
+  REQUIRE(directory);
+  auto state = telegram_host::load_state(*directory, "42", "/workspace");
+  REQUIRE(state);
+  const auto previous = state->session;
+  tests::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    hook::Bus hooks;
+    std::vector<std::int64_t> offsets;
+    int turns = 0, reads = 0;
+    std::vector<std::string> answers;
+    channel::RunTurn turn = [&](channel::Message) -> async::Awaitable<Result<std::string>> {
+      ++turns;
+      co_return "model";
+    };
+    channel::Transport send = [&](channel::Conversation,
+                                  channel::Request request) -> async::Awaitable<Result<channel::Response>> {
+      if (request.path == "/sendMessage") {
+        answers.push_back(Json::parse(request.body).at("text").get<std::string>());
+        auto saved = directory->read("state.json", 2 * 1024 * 1024);
+        REQUIRE(saved);
+        CHECK(Json::parse(**saved).at("session") == core::format_turn_id_hex(state->session));
+        CHECK_FALSE(Json::parse(**saved).at("pending").at("answer").is_null());
+      }
+      co_return response(Json{{"message_id", 100}});
+    };
+    int id = 10;
+    for (const auto* command :
+         {"/help", "/start private-payload", "/whoami", "/status", "/new arg", "/new@fixture_bot"}) {
+      auto item = update(id++);
+      item["message"]["text"] = command;
+      auto normal_api = api({item}, offsets);
+      auto menu_may_fail = [&](PollMethod method, std::string payload) -> async::Awaitable<Result<channel::Response>> {
+        if (method == PollMethod::setMyCommands && std::string_view{command} == "/help")
+          co_return std::unexpected(core::Error::network("private transport detail"));
+        co_return co_await normal_api(method, std::move(payload));
+      };
+      auto result = co_await telegram_host::run({.user = "42", .once = true},
+                                                menu_may_fail,
+                                                send,
+                                                turn,
+                                                hooks,
+                                                *directory,
+                                                *state,
+                                                io.get_executor(),
+                                                nullptr,
+                                                [&](core::TurnId session) -> async::Awaitable<Result<std::string>> {
+                                                  ++reads;
+                                                  CHECK(session == state->session);
+                                                  co_return "fixture status";
+                                                });
+      REQUIRE(result);
+      if (std::string_view{command} != "/new@fixture_bot")
+        CHECK(state->session == previous);
+    }
+    CHECK(turns == 0);
+    CHECK(reads == 1);
+    REQUIRE(answers.size() == 6);
+    CHECK(answers[0].contains("/new"));
+    CHECK(answers[2].contains("42"));
+    CHECK(answers[3].contains("fixture status"));
+    CHECK(answers[4].contains("不附带参数"));
+    CHECK(state->session != previous);
+    auto reopened = telegram_host::load_state(*directory, "42", "/workspace");
+    REQUIRE(reopened);
+    CHECK(reopened->session == state->session);
+    CHECK_FALSE(reopened->pending);
+  });
+}
+
+TEST_CASE("Telegram new never executes for another sender, bot, or image caption", "[telegram-host]") {
+  StateDirectory temp;
+  auto directory = io::PrivateDirectory::open(temp.path.string());
+  REQUIRE(directory);
+  auto state = telegram_host::load_state(*directory, "42", "/workspace");
+  REQUIRE(state);
+  const auto previous = state->session;
+  tests::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    hook::Bus hooks;
+    std::vector<std::int64_t> offsets;
+    auto foreign_user = update(10, 9), foreign_bot = update(11), caption = update(12);
+    foreign_user["message"]["text"] = "/new";
+    foreign_bot["message"]["text"] = "/new@another_bot";
+    caption["message"].erase("text");
+    caption["message"]["caption"] = "/new";
+    caption["message"]["photo"] = Json::array({{{"file_id", "photo"}, {"width", 10}, {"height", 10}}});
+    int turns = 0;
+    auto result = co_await telegram_host::run(
+        {.user = "42", .once = true},
+        api({foreign_user, foreign_bot, caption}, offsets),
+        [](channel::Conversation, channel::Request) -> async::Awaitable<Result<channel::Response>> {
+          co_return response(Json{{"message_id", 100}});
+        },
+        [&](channel::Message message) -> async::Awaitable<Result<std::string>> {
+          ++turns;
+          CHECK(message.image.has_value());
+          co_return "image caption";
+        },
+        hooks,
+        *directory,
+        *state,
+        io.get_executor());
+    REQUIRE(result);
+    CHECK(turns == 1);
+    CHECK(state->session == previous);
+    CHECK(offsets == std::vector<std::int64_t>{0, 11, 12});
+  });
+}
+
+TEST_CASE("Telegram keeps the new session identity when its acknowledgment delivery is ambiguous", "[telegram-host]") {
+  StateDirectory temp;
+  auto directory = io::PrivateDirectory::open(temp.path.string());
+  REQUIRE(directory);
+  auto state = telegram_host::load_state(*directory, "42", "/workspace");
+  REQUIRE(state);
+  const auto previous = state->session;
+  tests::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    hook::Bus hooks;
+    std::vector<std::int64_t> offsets;
+    auto item = update(10);
+    item["message"]["text"] = "/new";
+    auto result = co_await telegram_host::run(
+        {.user = "42", .once = true},
+        api({item}, offsets),
+        [](channel::Conversation, channel::Request request) -> async::Awaitable<Result<channel::Response>> {
+          if (request.path == "/sendMessage")
+            co_return std::unexpected(core::Error::network("ambiguous send"));
+          co_return response(true);
+        },
+        {},
+        hooks,
+        *directory,
+        *state,
+        io.get_executor());
+    REQUIRE_FALSE(result);
+    CHECK(state->session != previous);
+    const auto rotated = state->session;
+    CHECK_FALSE(telegram_host::load_state(*directory, "42", "/workspace"));
+    REQUIRE(telegram_host::acknowledge_pending(*directory, 10));
+    auto reopened = telegram_host::load_state(*directory, "42", "/workspace");
+    REQUIRE(reopened);
+    CHECK(reopened->session == rotated);
+  });
+}
+
+TEST_CASE("Telegram status reads scoped persisted facts and leaves earlier sessions intact", "[telegram-host]") {
+  StateDirectory temp;
+  std::filesystem::create_directories(temp.path);
+  tests::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    auto assembly = bootstrap::RuntimeAssembly::build(temp.path.string(), io.get_executor());
+    REQUIRE(assembly);
+    auto old_id = core::generate_turn_id(), new_id = core::generate_turn_id(), turn_id = core::generate_turn_id();
+    REQUIRE(old_id);
+    REQUIRE(new_id);
+    REQUIRE(turn_id);
+    auto* store = assembly->session_store();
+    auto saved = co_await store->append({core::format_turn_id_hex(*old_id)},
+                                        {"telegram"},
+                                        core::Message::user_text("private content"));
+    REQUIRE(saved);
+    auto traced = co_await assembly->trace_repository()->append_turn({.turn_id = *turn_id,
+                                                                      .session_id = *old_id,
+                                                                      .agent_key = "telegram",
+                                                                      .origin = "telegram",
+                                                                      .route_profile = "test",
+                                                                      .route_model = "served-model",
+                                                                      .started_at_ns = 1,
+                                                                      .finished_at_ns = 2,
+                                                                      .stop_reason = "end_turn",
+                                                                      .cache_read_tokens = 8,
+                                                                      .input_tokens = 11,
+                                                                      .output_tokens = 7});
+    REQUIRE(traced);
+    provider::Route route{
+        .primary = {.profile = "test", .model = "configured-model", .thinking_budget = {}, .cache = {}},
+        .fallbacks = {}};
+    auto old_status = co_await telegram_host::session_status(*assembly, route, *old_id, io.get_executor());
+    REQUIRE(old_status);
+    CHECK(old_status->contains("已保存消息：1 条"));
+    CHECK(old_status->contains("served-model"));
+    CHECK(old_status->contains("输入 11 / 输出 7"));
+    CHECK_FALSE(old_status->contains("private content"));
+    auto new_status = co_await telegram_host::session_status(*assembly, route, *new_id, io.get_executor());
+    REQUIRE(new_status);
+    CHECK(new_status->contains("已保存消息：0 条"));
+    CHECK(new_status->contains("暂无记录"));
+    auto original = co_await store->load({core::format_turn_id_hex(*old_id)}, {"telegram"});
+    REQUIRE(original);
+    REQUIRE(original->size() == 1);
+    CHECK(original->front().blocks == core::Message::user_text("private content").blocks);
+  });
+}
 
 TEST_CASE("Telegram live host filters senders and groups and resumes its saved cursor", "[telegram-host]") {
   StateDirectory temp;

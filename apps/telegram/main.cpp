@@ -1,3 +1,4 @@
+#include "commands.hpp"
 #include "host.hpp"
 #include "input.hpp"
 #include "presentation.hpp"
@@ -156,6 +157,7 @@ int main(int argc, char** argv) try {
   std::optional<bootstrap::HttpProviderBackend> provider;
   std::optional<bootstrap::RuntimeAssembly> assembly;
   std::unique_ptr<bootstrap::AgentSession> session;
+  core::TurnId active_session{};
   if (config) {
     auto built = bootstrap::HttpProviderBackend::build(
         *config,
@@ -239,6 +241,10 @@ int main(int argc, char** argv) try {
                   {hook::Event::provider_request, hook::Event::tool_before, hook::Event::tool_after});
   channel::RunTurn turn =
       [&, image_transport = outbound](channel::Message message) -> async::Awaitable<core::Result<std::string>> {
+    if (active_session != state->session) {
+      session.reset();
+      active_session = state->session;
+    }
     auto prompt = co_await telegram_host::prepare_prompt(message, image_transport, download, hooks, image_rules);
     if (!prompt) {
       if (prompt.error().kind() == core::ErrorKind::cancelled)
@@ -260,8 +266,7 @@ int main(int argc, char** argv) try {
       settings.identity = options.user;
       settings.origin = "telegram";
       settings.max_child_runs = 0;
-      settings.per_agent_overlay = "You are responding in a private Telegram chat. Reply in the user's language. "
-                                   "For /start, briefly confirm you are ready to help.";
+      settings.per_agent_overlay = "You are responding in a private Telegram chat. Reply in the user's language.";
       auto created = bootstrap::AgentSession::create(std::move(settings));
       if (!created)
         co_return std::unexpected(created.error());
@@ -284,15 +289,19 @@ int main(int argc, char** argv) try {
   int exit_code = 1;
   asio::co_spawn(
       strand,
-      telegram_host::run(options,
-                         std::move(api),
-                         std::move(outbound),
-                         std::move(turn),
-                         hooks,
-                         *directory,
-                         *state,
-                         runtime.cpu_executor(),
-                         presentation.get()),
+      telegram_host::run(
+          options,
+          std::move(api),
+          std::move(outbound),
+          std::move(turn),
+          hooks,
+          *directory,
+          *state,
+          runtime.cpu_executor(),
+          presentation.get(),
+          [&](core::TurnId id) -> async::Awaitable<core::Result<std::string>> {
+            co_return co_await telegram_host::session_status(*assembly, provider->route(), id, runtime.cpu_executor());
+          }),
       asio::bind_cancellation_slot(cancellation.slot(), [&](std::exception_ptr exception, core::Result<void> result) {
         exit_code = !exception && (result || (stopping && result.error().kind() == core::ErrorKind::cancelled)) ? 0 : 1;
         if (exception || !result)

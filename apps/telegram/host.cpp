@@ -1,8 +1,11 @@
 #include "host.hpp"
+#include "commands.hpp"
 #include "format.hpp"
 #include "presentation.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <format>
 #include <limits>
 #include <print>
 
@@ -20,7 +23,13 @@ using core::Result;
 
 permission::RuleSet rules() {
   permission::RuleSet result;
-  for (const auto* operation : {"ChannelPoll", "ChannelState", "ChannelReceive", "ChannelSend", "ChannelTyping"})
+  for (const auto* operation : {"ChannelPoll",
+                                "ChannelMenu",
+                                "ChannelState",
+                                "ChannelInspect",
+                                "ChannelReceive",
+                                "ChannelSend",
+                                "ChannelTyping"})
     result.push_back({.verdict = permission::Verdict::allow, .tool_pattern = operation});
   return result;
 }
@@ -60,7 +69,9 @@ persist(io::PrivateDirectory& directory, const State& state, hook::Bus& hooks, a
 }
 
 async::Awaitable<Result<Json>> request(Api& api, hook::Bus& hooks, PollMethod method, Json body) {
-  auto allowed = co_await authorize(hooks, "ChannelPoll", core::Capability::egress_http);
+  auto allowed = co_await authorize(hooks,
+                                    method == PollMethod::setMyCommands ? "ChannelMenu" : "ChannelPoll",
+                                    core::Capability::egress_http);
   if (!allowed)
     co_return std::unexpected(allowed.error());
   auto response = co_await api(method, body.dump());
@@ -105,7 +116,9 @@ static async::Awaitable<Result<void>> run_impl(Options options,
                                                io::PrivateDirectory& directory,
                                                State& state,
                                                asio::any_io_executor worker,
-                                               Presentation* presentation) {
+                                               Presentation* presentation,
+                                               StatusReader status) {
+  const auto started = std::chrono::steady_clock::now();
   auto me = co_await request(api, hooks, PollMethod::getMe, Json::object());
   if (!me)
     co_return std::unexpected(me.error());
@@ -128,6 +141,12 @@ static async::Awaitable<Result<void>> run_impl(Options options,
   auto saved = co_await persist(directory, state, hooks, worker);
   if (!saved)
     co_return std::unexpected(saved.error());
+  const auto username = me->at("username").get<std::string>();
+  auto menu = co_await request(api, hooks, PollMethod::setMyCommands, command_menu(options.user));
+  if (!menu && menu.error().kind() == core::ErrorKind::cancelled)
+    co_return std::unexpected(menu.error());
+  if (!menu || *menu != true)
+    std::println(stderr, "Telegram command menu unavailable; text commands remain enabled");
 
   // Save the answer before sending and every confirmed send before advancing.
   // A crash anywhere in this window leaves pending non-null and blocks restart.
@@ -157,7 +176,47 @@ static async::Awaitable<Result<void>> run_impl(Options options,
   channel::RunTurn execute = [&](channel::Message message) -> async::Awaitable<Result<std::string>> {
     if (presentation)
       presentation->accepted();
-    auto answer = co_await turn(std::move(message));
+    std::optional<core::TurnId> next_session;
+    auto resolve = [&]() -> async::Awaitable<Result<std::string>> {
+      const auto command = message.image ? std::nullopt : parse_command(message.text, username);
+      if (!command)
+        co_return co_await turn(std::move(message));
+      if (command->has_arguments && command->name != "start")
+        co_return "请单独发送命令，不附带参数。用 /help 查看可用命令。";
+      if (command->name == "help" || command->name == "start" || command->name == "commands")
+        co_return command_help();
+      if (command->name == "whoami")
+        co_return std::format("Telegram 用户 ID：`{}`\n聊天 ID：`{}`", message.sender, message.conversation.chat);
+      if (command->name == "new") {
+        auto id = core::generate_turn_id();
+        if (!id)
+          co_return std::unexpected(id.error());
+        next_session = *id;
+        co_return "已开启新会话。旧聊天记录和长期记忆已保留。\n直接发送下一条消息开始；/status 可查看状态。";
+      }
+      if (command->name == "status") {
+        auto allowed = co_await authorize(hooks, "ChannelInspect", core::Capability::read_file);
+        if (!allowed)
+          co_return std::unexpected(allowed.error());
+        const auto seconds =
+            std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - started).count();
+        std::string result = std::format("当前会话：`{}`\n本次服务运行：{} 分 {} 秒\n",
+                                         core::format_turn_id_hex(state.session),
+                                         seconds / 60,
+                                         seconds % 60);
+        if (status) {
+          auto detail = co_await status(state.session);
+          if (!detail && detail.error().kind() == core::ErrorKind::cancelled)
+            co_return std::unexpected(detail.error());
+          result += detail ? *detail : "运行统计暂不可用";
+        } else {
+          result += "运行统计未接入";
+        }
+        co_return result;
+      }
+      co_return "未知命令。用 /help 查看可用命令。";
+    };
+    auto answer = co_await resolve();
     if (presentation) {
       auto drained = co_await presentation->prepare_final();
       if (!drained && answer)
@@ -165,10 +224,14 @@ static async::Awaitable<Result<void>> run_impl(Options options,
     }
     if (!answer)
       co_return std::unexpected(answer.error());
-    state.pending->answer = *answer;
-    auto written = co_await persist(directory, state, hooks, worker);
+    auto next = state;
+    if (next_session)
+      next.session = *next_session;
+    next.pending->answer = *answer;
+    auto written = co_await persist(directory, next, hooks, worker);
     if (!written)
       co_return std::unexpected(written.error());
+    state = std::move(next);
     auto formatted = format_markdown(*answer);
     if (!formatted)
       co_return std::unexpected(formatted.error());
@@ -231,7 +294,8 @@ static async::Awaitable<Result<void>> run_impl(Options options,
     auto message = channel::telegram().decode(update.dump(), {bot, bot});
     if (!message)
       co_return std::unexpected(message.error());
-    const bool admitted = *message && admits(**message, options.user);
+    const auto command = *message && !(**message).image ? parse_command((**message).text, username) : std::nullopt;
+    const bool admitted = *message && admits(**message, options.user) && (!command || command->addressed_here);
     if (admitted) {
       state.pending = Pending{.update = update, .answer = std::nullopt};
       saved = co_await persist(directory, state, hooks, worker);
@@ -262,7 +326,8 @@ async::Awaitable<Result<void>> run(Options options,
                                    io::PrivateDirectory& directory,
                                    State& state,
                                    asio::any_io_executor worker,
-                                   Presentation* presentation) {
+                                   Presentation* presentation,
+                                   StatusReader status) {
   try {
     co_return co_await run_impl(std::move(options),
                                 std::move(api),
@@ -272,7 +337,8 @@ async::Awaitable<Result<void>> run(Options options,
                                 directory,
                                 state,
                                 worker,
-                                presentation);
+                                presentation,
+                                std::move(status));
   } catch (const Json::exception&) {
     co_return std::unexpected(Error::parsing("invalid Telegram host data"));
   } catch (...) {

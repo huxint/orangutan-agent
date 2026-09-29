@@ -158,8 +158,46 @@ The DeepSeek example uses the Anthropic-compatible endpoint and the
 selected. It permits durable notes and provider requests. Filesystem writes and
 delegation are not exposed by this example; other configurations retain normal
 session permission decisions. The host provides no interactive approval consumer.
-The model receives typed text and image blocks; `/start` payloads are stripped
-before the turn.
+The model receives typed text and image blocks. Local host commands are handled
+before any model call or attachment download.
+
+### Chat commands
+
+| Command | Result |
+| --- | --- |
+| `/new` | Persist a fresh session ID and acknowledge it without calling the model. The next prompt uses a new AgentSession. Existing transcript/checkpoint rows and conversation-scoped long-term notes remain intact. |
+| `/status` | Show the active session ID, service uptime, configured model, saved message count, summary coverage and the most recent traced model/token usage for this session. Missing or disabled statistics are explicit. |
+| `/help` | Show the supported command catalogue and input guidance. `/start` and `/commands` are aliases; `/start` accepts Telegram's onboarding payload. |
+| `/whoami` | Show the admitted Telegram user and chat IDs. |
+
+Commands must be sent alone; unexpected arguments do not execute them. Command
+names and this bot's `@username` suffix are case-insensitive. Commands addressed
+to another bot are skipped. Only the current text is parsed: quoted text and
+image captions never execute commands. Embedded mentions of commands and tokens
+containing path separators remain ordinary input. Unknown standalone commands
+return help guidance without invoking the model.
+
+After bot/webhook/binding checks, `ChannelMenu` authorizes `setMyCommands` for a
+menu scoped to the allowed private chat. Failure is advisory; typed commands
+remain available. Probe mode never changes the menu. Command replies use the
+same receive/send gates, joined presentation and durable delivery journal as
+model replies; commands themselves are not model transcript entries.
+
+`/new` saves the new identity and confirmation together in the pending journal
+before sending. An ambiguous confirmation still requires normal reconciliation;
+restart never rotates the session again. The cached AgentSession is replaced
+at the next model prompt. `/status` requires `ChannelInspect` and reads bounded
+metadata and one trace record on the worker executor, without exposing transcript
+contents, credential references or filesystem paths. Token figures describe the
+last recorded turn, not a live context occupancy estimate.
+
+The host polls serially, so commands wait behind an active turn. This command
+surface does not yet interrupt a running turn, change models or force compaction.
+Local handling, a native menu and model-free new-session acknowledgments follow
+OpenClaw's [slash commands](https://github.com/openclaw/openclaw/blob/main/docs/tools/slash-commands.md)
+and [reset handler](https://github.com/openclaw/openclaw/blob/main/src/auto-reply/reply/commands-reset.ts).
+
+### Presentation and persistence
 
 The host renders CommonMark with `cmark`, then sends plain text plus Telegram
 native entities. Supported formatting includes emphasis, headings, links, lists,

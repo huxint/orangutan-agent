@@ -13,9 +13,11 @@ using Json = nlohmann::json;
 enum class PollMethod {
   getMe,
   getWebhookInfo,
-  getUpdates
+  getUpdates,
+  setMyCommands
 };
 using Api = std::function<async::Awaitable<core::Result<channel::Response>>(PollMethod, std::string)>;
+using StatusReader = std::function<async::Awaitable<core::Result<std::string>>(core::TurnId)>;
 
 struct Options {
   std::string user{};
@@ -58,5 +60,6 @@ load_state(const io::PrivateDirectory& directory, std::string_view user, std::st
                                                        io::PrivateDirectory& directory,
                                                        State& state,
                                                        asio::any_io_executor worker,
-                                                       Presentation* presentation = nullptr);
+                                                       Presentation* presentation = nullptr,
+                                                       StatusReader status = {});
 }  // namespace orangutan::telegram_host

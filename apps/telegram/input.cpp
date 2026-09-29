@@ -118,7 +118,7 @@ async::Awaitable<Result<agent::PromptRequest>> prepare_prompt(const channel::Mes
   const auto cancellation = co_await asio::this_coro::cancellation_state;
   if (cancellation.cancelled() != asio::cancellation_type::none)
     co_return std::unexpected(Error::cancelled());
-  agent::PromptRequest prompt{.prompt = message.text.starts_with("/start ") ? "/start" : message.text};
+  agent::PromptRequest prompt{.prompt = message.text};
   if (prompt.prompt.empty() && message.image)
     prompt.prompt = "请查看这张图片，结合我们的对话说明图片内容或帮助我处理图中的问题。";
   Json context;
