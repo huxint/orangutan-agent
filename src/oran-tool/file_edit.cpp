@@ -32,14 +32,16 @@ namespace orangutan::tool {
 namespace {
 
 constexpr std::string_view kFileEditSchema =
-    R"({"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},)"
-    R"("new_string":{"type":"string"},"replace_all":{"type":"boolean"},)"
-    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216},)"
-    R"("expected_version":{"type":"string"}},)"
+    R"({"type":"object","properties":{)"
+    R"("path":{"type":"string","minLength":1,"description":"Absolute or workspace-relative file path."},)"
+    R"("old_string":{"type":"string","minLength":1,"description":"Exact text to replace, including whitespace."},)"
+    R"("new_string":{"type":"string","description":"Replacement text; empty deletes the match. Must differ from old_string."},)"
+    R"("replace_all":{"type":"boolean","default":false,"description":"Replace every non-overlapping match."},)"
+    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216,"default":16777216,"description":"Maximum bytes in both source and edited file."},)"
+    R"("expected_version":{"type":"string","description":"Fingerprint from FileRead; rejects a changed file."}},)"
     R"("required":["path","old_string","new_string"],"additionalProperties":false})";
 
 struct FileEditRequest {
-  std::string path;
   std::string old_string;
   std::string new_string;
   bool replace_all;
@@ -98,7 +100,7 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
 
 [[nodiscard]] async::Awaitable<core::Result<Output>> file_edit_handler(FileEditRequest request,
                                                                       DispatchContext& ctx) {
-  auto& [input_path, old_string, new_string, replace_all, max_bytes, expected_version] = request;
+  auto& [old_string, new_string, replace_all, max_bytes, expected_version] = request;
   if (!ctx.resolved_path.has_value() || !ctx.resolved_path->authority.has_value()) {
     co_return std::unexpected(core::Error::internal("FileEdit requires a resolved workspace authority"));
   }
@@ -135,24 +137,20 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
     }
   }
 
-  core::Result<std::string> contents;
   auto read = co_await io::read_text_file_ranged(ctx.executor,
                                                  std::move(*authorized_file),
                                                  io::ReadTextOptions{.max_bytes = max_bytes});
-  if (read && read->truncated) {
-    contents = std::unexpected(core::Error::invalid_argument("file exceeds max_bytes")
-                                   .with("path", path)
-                                   .with("max_bytes", std::to_string(max_bytes)));
-  } else if (read) {
-    contents = std::move(read->text);
-  } else {
-    contents = std::unexpected(std::move(read).error());
+  if (!read) {
+    co_return std::unexpected(std::move(read).error());
   }
-  if (!contents) {
-    co_return std::unexpected(std::move(contents).error());
+  if (read->truncated) {
+    co_return std::unexpected(core::Error::invalid_argument("file exceeds max_bytes")
+                                 .with("path", path)
+                                 .with("max_bytes", std::to_string(max_bytes)));
   }
+  const auto& contents = read->text;
 
-  const auto positions = find_occurrences(*contents, old_string);
+  const auto positions = find_occurrences(contents, old_string);
   if (positions.empty()) {
     co_return std::unexpected(
         core::Error::not_found("FileEdit: `old_string` does not occur in the file").with("path", path));
@@ -166,7 +164,7 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
   }
 
   const auto applied = positions.size();
-  auto output_size = replacement_size(contents->size(), old_string.size(), new_string.size(), positions.size());
+  auto output_size = replacement_size(contents.size(), old_string.size(), new_string.size(), positions.size());
   if (!output_size) {
     co_return std::unexpected(std::move(output_size).error().with("path", path));
   }
@@ -177,7 +175,7 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
                                   .with("max_bytes", std::to_string(max_bytes)));
   }
 
-  auto replaced = apply_replacements(*contents, old_string, new_string, positions);
+  auto replaced = apply_replacements(contents, old_string, new_string, positions);
   const auto replaced_bytes = replaced.size();
   io::WriteTextOptions write_opts{.mode = io::WriteMode::truncate, .atomic = true};
   if (expected_version) {
@@ -192,10 +190,10 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
   }
 
   co_return Output{
-      .text = std::format("edited {}: {} replacement{}", input_path, applied, applied == 1U ? "" : "s"),
+      .text = std::format("edited {}: {} replacement{}", path, applied, applied == 1U ? "" : "s"),
       .usage =
           ToolUsage{
-              .bytes_read = contents->size(),
+              .bytes_read = contents.size(),
               .bytes_written = replaced_bytes,
               .files_touched = 1,
               .match_count = applied,
@@ -257,7 +255,7 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
 
   return PreparedCall{
       .path = PathRequest{.path = *path_field, .intent = PathIntent::write},
-      .execute = [request = FileEditRequest{std::move(*path_field), std::move(old_string), std::move(new_string),
+      .execute = [request = FileEditRequest{std::move(old_string), std::move(new_string),
                                           replace_all, *max_bytes, std::move(expected_version)}](
                      DispatchContext& ctx) mutable { return file_edit_handler(std::move(request), ctx); },
   };
@@ -268,17 +266,10 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
 core::Result<void> register_file_edit(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kFileEditName},
-      .description = "Edit a UTF-8 text file by replacing `old_string` with `new_string`. Input: "
-                     "{\"path\": <string>, \"old_string\": <string>, \"new_string\": <string>, "
-                     "\"replace_all\"?: bool (default false), \"max_bytes\"?: positive integer "
-                     "<= 16777216 (default 16777216), \"expected_version\"?: <version token "
-                     "from a prior `FileRead`>}. By default the call fails with `conflict` "
-                     "if `old_string` is not unique; pass `replace_all=true` to rewrite every "
-                     "occurrence. When `expected_version` is supplied the call fails with "
-                     "`conflict` (reason=stale_fingerprint, current `fingerprint` in context) "
-                     "if the file's current version differs. Returns a brief confirmation "
-                     "listing the number of replacements applied and fills usage with "
-                     "bytes_read, bytes_written, files_touched, and match_count.",
+      .description = "Perform an exact string replacement in an existing UTF-8 file. Read the file first and "
+                     "preserve whitespace. old_string must match exactly once unless replace_all is true. "
+                     "On missing or ambiguous matches, read again and include more surrounding text. "
+                     "Use expected_version from FileRead to reject a stale edit; re-read on conflict.",
       .input_schema_json = std::string{kFileEditSchema},
       .required_capabilities = {core::Capability::edit_file},
   };

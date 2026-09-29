@@ -115,14 +115,46 @@ authority; writes and edits use mutation authority and conflict checks. Write an
 edit must not act on a target replaced after authorization. Exact filesystem
 semantics live in [io-runtime](io-runtime.md).
 
-Their preparers validate required fields, field types, known options, positive
-integer bounds and read-range combinations. Paths must be non-empty and contain
+Their preparers validate required fields, field types, known options and positive
+integer bounds. Paths must be non-empty and contain
 no NUL bytes. Write content limits and invalid edit substitutions are checked
 without filesystem access. Unknown fields are rejected as their schemas declare.
 File existence, current version, source content and resulting edit size remain
 checks after path admission; preparation cannot predict state after a queued writer.
 Workspace write intent only carries parent-creation permission. Write modes belong
 to the typed write request and the IO operation.
+
+FileRead accepts `path`, optional 1-based `offset` (default 1), `limit` (1–2000,
+default 2000), `max_bytes` (1–16777216, default 16777216) and
+`allow_outside_workspace` (default false; requires approval). Both absolute and
+workspace-relative paths use ordinary admission. Every call reads current bytes.
+The model interface exposes line windows only; the IO layer retains byte ranges.
+The result starts with path, line span, fingerprint and returned-byte metadata,
+followed by exact source text without line-number decoration. The header says
+end of file when proven, otherwise gives the next offset. A full window can end
+exactly at EOF; the next read then returns an empty body and an EOF hint.
+Byte truncation instead requests a smaller limit or larger byte cap: a partial
+line must not be skipped by following a guessed continuation offset. Host output
+caps can further shorten the result. Files with a single line exceeding the byte
+cap cannot be read completely through this model interface.
+
+Native property descriptions own parameter meaning and defaults; tool descriptions
+explain when to use the operation and how to recover. Read before changing an
+existing file; prefer FileEdit's exact `old_string` / `new_string` replacement to
+a complete rewrite. `replace_all` explicitly permits multiple matches. Pass the
+read fingerprint as `expected_version` for stale-write protection; on conflict,
+read again rather than removing the guard. These tokens are metadata fingerprints,
+not content hashes. FileWrite retains explicit append, overwrite and create-only
+modes, with overwrite as the default.
+
+The bounded-window and edit guidance follows the collected
+[Claude Code Read](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/tool-description-readfile-compact.md),
+[Edit](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/tool-description-edit.md)
+and [Write](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/tool-description-write.md)
+descriptions, and DeepSeek's official
+[read renderer](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/fs/tool-fs/src/read-render.ts).
+Orangutan keeps its existing tool names and `path` authority contract; it does
+not advertise image/PDF reading, shell commands or plugin capabilities it lacks.
 
 MemoryRecall, MemoryRemember and MemoryForget receive a host-bound scope through
 injected handlers. They cannot select another scope in tool JSON. Their JSON shape,

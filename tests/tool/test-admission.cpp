@@ -436,9 +436,10 @@ TEST_CASE("File preparation rejects invalid input before approval or authority",
         {{"max_bytes", 16777217}}, {{"max_bytes", 18446744073709551615ULL}}, {{"unexpected", true}}};
     if (name == std::string_view{"FileRead"}) {
       for (auto change : std::vector<nlohmann::json>{
-               {{"start_line", 1}}, {{"length_bytes", 2}}, {{"offset_bytes", 1}},
-               {{"line_count", 1}, {"length_bytes", 1}}, {{"line_count", 0}}, {{"line_count", -1}},
-               {{"line_count", "1"}}, {{"if_version", 7}}, {{"allow_outside_workspace", "yes"}}}) {
+               {{"offset", 0}}, {{"offset", -1}}, {{"offset", "1"}}, {{"offset", 1.5}},
+               {{"limit", 0}}, {{"limit", -1}}, {{"limit", "1"}}, {{"limit", 1.5}},
+               {{"limit", 2001}}, {{"limit", 18446744073709551615ULL}},
+               {{"allow_outside_workspace", "yes"}}}) {
         changes.push_back(std::move(change));
       }
     } else if (name == std::string_view{"FileWrite"}) {
@@ -547,7 +548,7 @@ TEST_CASE("File preparation executes repaired hook input and options",
   std::string expected;
   SECTION("read range") {
     name = "FileRead";
-    input = R"({"path":"shared.txt","start_line":2,"line_count":1})";
+    input = R"({"path":"shared.txt","offset":2,"limit":1})";
     expected = "second\n";
   }
   SECTION("append") {

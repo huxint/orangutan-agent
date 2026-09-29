@@ -895,10 +895,7 @@ TEST_CASE("FileRead returns text fallback and structured metadata", "[unit][tool
     const auto input = std::string{R"({"path":")"} + file.string() + R"("})";
     auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
     REQUIRE(result.has_value());
-    // v2 surface wraps the body in a `<path>:<start>-<end> fingerprint=<token>
-    // bytes=<n>[ truncated]\n<body>` envelope; the legacy verbatim payload
-    // is still available after the header line so callers can split on the
-    // first newline and recover the original contents.
+    // The metadata header is separate from the exact source bytes.
     const auto newline = result->text.find('\n');
     REQUIRE(newline != std::string::npos);
     const auto header = std::string_view{result->text}.substr(0, newline);
@@ -981,7 +978,7 @@ TEST_CASE("FileRead line range returns only the requested span", "[unit][tool][f
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
 
-    const auto input = std::format(R"({{"path":"{}","start_line":2,"line_count":2}})", file.string());
+    const auto input = std::format(R"({{"path":"{}","offset":2,"limit":2}})", file.string());
     auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
     REQUIRE(result.has_value());
     auto [header, body] = split_file_read_envelope(result->text);
@@ -1000,11 +997,14 @@ TEST_CASE("FileRead line range returns only the requested span", "[unit][tool][f
   });
 }
 
-TEST_CASE("FileRead byte range returns the requested byte span", "[unit][tool][file_read][range]") {
-  TempFile file{"byte-range"};
-  file.write("0123456789ABCDEF");
-
-  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
+TEST_CASE("FileRead windows have defaults and lossless continuation", "[unit][tool][file_read][range]") {
+  TempFile file{"paged"};
+  std::string prefix;
+  for (int i = 0; i < 2000; ++i) {
+    prefix += "line\n";
+  }
+  file.write(prefix + "last line");
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_file_read(registry).has_value());
     auto rules = single_rule(permission::Rule{
@@ -1014,22 +1014,52 @@ TEST_CASE("FileRead byte range returns the requested byte span", "[unit][tool][f
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    auto first = co_await registry.dispatch(tool::kFileReadName,
+        nlohmann::json{{"path", file.string()}}.dump(), ctx);
+    REQUIRE(first.has_value());
+    auto [header, body] = split_file_read_envelope(first->text);
+    REQUIRE(header.contains("continue with offset=2001"));
+    REQUIRE(body == prefix);
+    auto next = co_await registry.dispatch(tool::kFileReadName,
+        nlohmann::json{{"path", file.string()}, {"offset", 2001}}.dump(), ctx);
+    REQUIRE(next.has_value());
+    REQUIRE(split_file_read_envelope(next->text).second == "last line");
+    REQUIRE(split_file_read_envelope(next->text).first.contains("end of file"));
+    auto end = co_await registry.dispatch(tool::kFileReadName,
+        nlohmann::json{{"path", file.string()}, {"offset", 2002}, {"limit", 1}}.dump(), ctx);
+    REQUIRE(end.has_value());
+    REQUIRE(split_file_read_envelope(end->text).second.empty());
+    REQUIRE(split_file_read_envelope(end->text).first.contains("end of file"));
+    auto limited = co_await registry.dispatch(tool::kFileReadName,
+        nlohmann::json{{"path", file.string()}, {"limit", 1}}.dump(), ctx);
+    REQUIRE(limited.has_value());
+    REQUIRE(split_file_read_envelope(limited->text).second == "line\n");
+  });
+}
 
-    const auto input = std::format(R"({{"path":"{}","offset_bytes":3,"length_bytes":5}})", file.string());
-    auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
-    REQUIRE(result.has_value());
-    auto [header, body] = split_file_read_envelope(result->text);
-    REQUIRE(header.contains("bytes=5"));
-    // `offset_bytes` is the byte skip count from the start of the file — the
-    // first read byte sits at zero-based index `offset_bytes`.
-    REQUIRE(body == "34567");
-    REQUIRE(result->data_json.has_value());
-    const auto data = nlohmann::json::parse(*result->data_json);
-    REQUIRE(data["text"] == "34567");
-    REQUIRE(data["start_line"] == 1);
-    REQUIRE(data["end_line"] == 0);
-    REQUIRE(data["returned_bytes"] == 5);
-    REQUIRE(data["truncated"] == false);
+TEST_CASE("FileRead observes same-size rewrites even with unchanged mtime", "[unit][tool][file_read]") {
+  TempFile file{"fresh"};
+  file.write("first");
+  const auto mtime = std::filesystem::last_write_time(file.string());
+  test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    tool::Registry registry;
+    REQUIRE(tool::register_file_read(registry).has_value());
+    auto rules = single_rule(permission::Rule{
+        .verdict = permission::Verdict::allow,
+        .tool_pattern = std::string{tool::kFileReadName},
+        .capability = core::Capability::read_file,
+    });
+    permission::RecordingAuditSink sink;
+    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
+    const auto input = nlohmann::json{{"path", file.string()}}.dump();
+    auto first = co_await registry.dispatch(tool::kFileReadName, input, ctx);
+    REQUIRE(first.has_value());
+    REQUIRE(split_file_read_envelope(first->text).second == "first");
+    file.write("fresh");
+    std::filesystem::last_write_time(file.string(), mtime);
+    auto next = co_await registry.dispatch(tool::kFileReadName, input, ctx);
+    REQUIRE(next.has_value());
+    REQUIRE(split_file_read_envelope(next->text).second == "fresh");
   });
 }
 
@@ -1064,70 +1094,6 @@ TEST_CASE("FileRead max_bytes reports truncation in data_json and usage", "[unit
     REQUIRE(result->usage.files_touched.has_value());
     REQUIRE(*result->usage.files_touched == std::uint32_t{1});
     REQUIRE(result->usage.truncated);
-  });
-}
-
-TEST_CASE("FileRead rejects mixing line and byte range", "[unit][tool][file_read][range]") {
-  TempFile file{"mixed-range"};
-  file.write("contents");
-
-  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_read(registry).has_value());
-    auto rules = single_rule(permission::Rule{
-        .verdict = permission::Verdict::allow,
-        .tool_pattern = std::string{tool::kFileReadName},
-        .capability = core::Capability::read_file,
-    });
-    permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
-
-    const auto input = std::format(R"({{"path":"{}","start_line":1,"line_count":1,"offset_bytes":1,"length_bytes":1}})",
-                                   file.string());
-    auto result = co_await registry.dispatch(tool::kFileReadName, input, ctx);
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::invalid_argument);
-  });
-}
-
-TEST_CASE("FileRead if_version short-circuits unchanged files as not_modified", "[unit][tool][file_read][if_version]") {
-  TempFile file{"if-version"};
-  file.write("payload");
-
-  test::run_async([&file](asio::io_context& io) -> async::Awaitable<void> {
-    tool::Registry registry;
-    REQUIRE(tool::register_file_read(registry).has_value());
-    auto rules = single_rule(permission::Rule{
-        .verdict = permission::Verdict::allow,
-        .tool_pattern = std::string{tool::kFileReadName},
-        .capability = core::Capability::read_file,
-    });
-    permission::RecordingAuditSink sink;
-    auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
-
-    const auto base_input = std::format(R"({{"path":"{}"}})", file.string());
-    auto first = co_await registry.dispatch(tool::kFileReadName, base_input, ctx);
-    REQUIRE(first.has_value());
-    auto [header, body] = split_file_read_envelope(first->text);
-    REQUIRE(body == "payload");
-    const auto token = extract_token(header);
-    REQUIRE(token.starts_with("v1:"));
-
-    // Same fingerprint on the follow-up read → `not_modified`.
-    const auto cached_input = std::format(R"({{"path":"{}","if_version":"{}"}})", file.string(), token);
-    auto cached = co_await registry.dispatch(tool::kFileReadName, cached_input, ctx);
-    REQUIRE_FALSE(cached.has_value());
-    REQUIRE(cached.error().kind() == core::ErrorKind::not_modified);
-    REQUIRE(context_has(cached.error(), "fingerprint", token));
-
-    // Stale token (one off) re-sends the body.
-    const auto stale_token = std::string{"v1:0000000000000000000000000000000000000000000000000000000000000000:7:0"};
-    const auto fresh_input = std::format(R"({{"path":"{}","if_version":"{}"}})", file.string(), stale_token);
-    auto fresh = co_await registry.dispatch(tool::kFileReadName, fresh_input, ctx);
-    REQUIRE(fresh.has_value());
-    auto [hdr2, body2] = split_file_read_envelope(fresh->text);
-    REQUIRE(body2 == "payload");
-    REQUIRE(extract_token(hdr2) == token);
   });
 }
 

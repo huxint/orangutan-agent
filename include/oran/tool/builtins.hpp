@@ -31,20 +31,9 @@ inline constexpr std::string_view AGENT_RUN_NAME{"AgentRun"};
 /// the runner on DispatchContext; each call requires spawn_agent authority.
 [[nodiscard]] core::Result<void> register_agent_run(Registry& registry, std::span<const std::string> agent_names);
 
-/// Register the `FileRead` tool. Reads UTF-8 content using `oran-io`'s
-/// coroutine helper; when `DispatchContext::workspace` is set, the input path
-/// is first resolved through `tool::Workspace`. Capability `read_file` is
-/// required. Input shape: `{"path": <string>, "start_line"?, "line_count"?,
-/// "offset_bytes"?, "length_bytes"?, "max_bytes"? (<= 16 MiB), "if_version"?,
-/// "allow_outside_workspace"?: bool}`. `allow_outside_workspace=true` is a
-/// one-off read/list escape that must be approved at dispatch time.
-/// Line and byte ranges are mutually exclusive. Output is a header line
-/// `<path>:<start>-<end> fingerprint=<token> bytes=<n>[ truncated]` followed
-/// by the requested file slice on the next line. `if_version` matching the
-/// current fingerprint short-circuits to `Error::not_modified`. Successful
-/// reads also fill `Output::data_json` with the requested text plus
-/// range/fingerprint metadata, and fill `Output::usage.bytes_read`,
-/// `files_touched`, and `truncated`.
+/// Register the bounded UTF-8 line reader. Requires read_file authority;
+/// workspace dispatch resolves and pins the requested path. Input and output
+/// semantics are owned by docs/design-docs/tool-runtime.md.
 [[nodiscard]] core::Result<void> register_file_read(Registry& registry);
 
 /// Register the `FileWrite` tool. Writes UTF-8 content through the resolved

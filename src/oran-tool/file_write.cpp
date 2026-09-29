@@ -29,10 +29,13 @@ namespace orangutan::tool {
 namespace {
 
 constexpr std::string_view kFileWriteSchema =
-    R"({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},)"
-    R"("mode":{"type":"string","enum":["truncate","append","fail_if_exists"]},)"
-    R"("create_parents":{"type":"boolean"},"max_bytes":{"type":"integer","minimum":1,"maximum":16777216},)"
-    R"("expected_version":{"type":"string"}},)"
+    R"({"type":"object","properties":{)"
+    R"("path":{"type":"string","minLength":1,"description":"Absolute or workspace-relative file path."},)"
+    R"("content":{"type":"string","description":"Text to write."},)"
+    R"("mode":{"type":"string","enum":["truncate","append","fail_if_exists"],"default":"truncate","description":"Replace, append, or create only if absent."},)"
+    R"("create_parents":{"type":"boolean","default":false,"description":"Create missing parent directories."},)"
+    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216,"default":16777216,"description":"Maximum bytes in content."},)"
+    R"("expected_version":{"type":"string","description":"Fingerprint from FileRead; rejects a changed or missing file."}},)"
     R"("required":["path","content"],"additionalProperties":false})";
 
 struct FileWriteRequest {
@@ -177,17 +180,10 @@ struct FileWriteRequest {
 core::Result<void> register_file_write(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kFileWriteName},
-      .description = "Write UTF-8 text content to a host filesystem path. Input: "
-                     "{\"path\": <string>, \"content\": <string>, \"mode\"?: "
-                     "\"truncate\"|\"append\"|\"fail_if_exists\" (default truncate), "
-                     "\"create_parents\"?: bool (default false), \"max_bytes\"?: "
-                     "positive integer <= 16777216 (default 16777216), "
-                     "\"expected_version\"?: <version token from a prior `FileRead`>}. "
-                     "When `expected_version` is supplied the call fails with "
-                     "`conflict` (reason=stale_fingerprint, current `fingerprint` in "
-                     "context) if the file's current version differs. Returns a brief "
-                     "confirmation listing the number of bytes written and fills usage "
-                     "with bytes_written plus files_touched.",
+      .description = "Create or replace a UTF-8 text file. The default mode overwrites existing content; "
+                     "prefer FileEdit for targeted changes. Read existing files first and pass their fingerprint "
+                     "as expected_version to reject stale writes. Use fail_if_exists when creating a new file "
+                     "without overwriting another file. Returns the written byte count.",
       .input_schema_json = std::string{kFileWriteSchema},
       .required_capabilities = {core::Capability::write_file},
   };
