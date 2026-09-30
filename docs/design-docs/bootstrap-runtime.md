@@ -52,6 +52,10 @@ image-only prompt does not introduce an empty text block. Combined encoded image
 input is limited to 14 MiB per prompt. Continuation reads 16-MiB forward pages so a
 saved image larger than the ordinary browsing page still resumes correctly.
 
+An optional `PromptRequest::parent_turn_id` overrides the session's default trace
+parent for that prompt. Reused child sessions supply the turn that initiated each
+assignment or correction; this metadata does not alter conversation or cache keys.
+
 `run_prompt` admits one prompt per session on the coordinating strand. A second
 in-flight prompt returns `conflict` before effects; the guard covers context
 loading, child/tool cleanup and persistence and releases on every exit. This

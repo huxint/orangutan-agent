@@ -15,8 +15,8 @@
 namespace orangutan::bootstrap {
 
 [[nodiscard]] bool task_terminal(TaskState state);
+[[nodiscard]] bool team_task_active(TeamTaskState state);
 [[nodiscard]] core::Result<permission::RuleSet> copy_child_rules(std::span<const permission::Rule> rules);
-[[nodiscard]] core::Result<tool::Output> team_output(const TeamSnapshot& snapshot, tool::TeamGetRequest request = {});
 
 struct BackgroundTasks::Impl : std::enable_shared_from_this<Impl> {
   struct Child {
@@ -28,7 +28,6 @@ struct BackgroundTasks::Impl : std::enable_shared_from_this<Impl> {
       TeamMemberSnapshot snapshot;
       std::string instructions{};
       std::shared_ptr<Child> child{};
-      std::string active_run{};
       bool initialized{false};
     };
     struct Work {
@@ -42,10 +41,15 @@ struct BackgroundTasks::Impl : std::enable_shared_from_this<Impl> {
       bool acknowledged{false};
     };
     TaskOwner owner;
-    TeamSnapshot snapshot;
+    std::string id;
+    std::string goal;
+    bool stopped{false};
     std::vector<Member> members{};
     std::vector<Work> work{};
     std::vector<Message> messages{};
+
+    [[nodiscard]] bool has_active_work(std::string_view member = {}) const;
+    [[nodiscard]] std::size_t pending_messages() const;
   };
   struct Job {
     explicit Job(asio::any_io_executor executor) : deadline{std::move(executor)} {}
@@ -104,10 +108,13 @@ struct BackgroundTasks::Impl : std::enable_shared_from_this<Impl> {
   update_team_task(Team& team, tool::TeamTaskUpdateRequest request, std::optional<core::TurnId> parent_turn);
   void stop_team(Team& team);
   void pump_teams();
-  void finish_team_job(const Job& job);
+  void update_team_job(const Job& job);
   [[nodiscard]] core::Result<tool::Output>
   send_team_message(Team& team, std::string sender, tool::TeamMessageRequest request);
   void bind_team_inbox(AgentSessionOptions& options, const std::shared_ptr<Team>& team, std::string member);
 };
+
+[[nodiscard]] core::Result<tool::Output>
+team_output(const BackgroundTasks::Impl::Team& team, bool automatic_delivery, tool::TeamGetRequest request = {});
 
 }  // namespace orangutan::bootstrap

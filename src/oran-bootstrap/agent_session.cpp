@@ -352,7 +352,7 @@ public:
           .repository = trace,
           .blocking_executor = options_.blocking_executor,
           .session_id = options_.session_id,
-          .parent_turn_id = options_.parent_turn_id,
+          .parent_turn_id = request.parent_turn_id ? request.parent_turn_id : options_.parent_turn_id,
           .agent_key = options_.agent_key,
           .origin = origin,
           .context_json = options_.trace_context_json,

@@ -22,25 +22,28 @@ Json task_value(const TeamTaskSnapshot& task) {
 }
 }  // namespace
 
-core::Result<tool::Output> team_output(const TeamSnapshot& snapshot, tool::TeamGetRequest request) {
+core::Result<tool::Output>
+team_output(const BackgroundTasks::Impl::Team& team, bool automatic_delivery, tool::TeamGetRequest request) {
   Json data{{"kind", "agent_team"},
-            {"team_id", snapshot.team_id},
-            {"stopped", snapshot.stopped},
-            {"completion_delivery", snapshot.automatic_delivery ? "automatic" : "query_only"},
+            {"team_id", team.id},
+            {"stopped", team.stopped},
+            {"completion_delivery", automatic_delivery ? "automatic" : "query_only"},
             {"survives_restart", false},
-            {"sent_messages", snapshot.sent_messages},
-            {"pending_messages", snapshot.pending_messages},
+            {"sent_messages", team.messages.size()},
+            {"pending_messages", team.pending_messages()},
             {"tasks", Json::array()}};
   if (request.key.empty()) {
     data["members"] = Json::array();
-    for (const auto& member : snapshot.members)
-      data["members"].push_back({{"name", member.name}, {"tools", member.tools}});
-    for (const auto& task : snapshot.tasks)
-      data["tasks"].push_back(task_value(task));
+    for (const auto& member : team.members)
+      data["members"].push_back({{"name", member.snapshot.name}, {"tools", member.snapshot.tools}});
+    for (const auto& work : team.work)
+      data["tasks"].push_back(task_value(work.snapshot));
   } else {
-    const auto task = std::ranges::find(snapshot.tasks, request.key, &TeamTaskSnapshot::key);
-    if (task == snapshot.tasks.end())
+    const auto work =
+        std::ranges::find_if(team.work, [&request](const auto& value) { return value.snapshot.key == request.key; });
+    if (work == team.work.end())
       return std::unexpected(core::Error::not_found("team task is unavailable"));
+    const auto* task = &work->snapshot;
     if (request.offset > task->report.size() ||
         (request.offset < task->report.size() &&
          (static_cast<unsigned char>(task->report[request.offset]) & 0xc0U) == 0x80U))
@@ -57,12 +60,13 @@ core::Result<tool::Output> team_output(const TeamSnapshot& snapshot, tool::TeamG
     value["next_offset"] = next < task->report.size() ? Json(next) : Json(nullptr);
     data["tasks"].push_back(std::move(value));
   }
-  auto text = data.dump();
+  auto encoded = data.dump();
+  auto text = encoded;
   text += "\nA reported task awaits your review. Only accepting its current attempt unlocks dependents. "
           "Waiting can mean unaccepted dependencies, a busy member, or shared task capacity. "
           "Use TeamGet with a task key for evidence; capped reports are incomplete.";
-  text += snapshot.automatic_delivery ? " Completion arrives automatically; do not poll just to wait."
-                                      : " This host does not send automatic completion; inspect when needed.";
-  return tool::Output{.text = std::move(text), .data_json = data.dump()};
+  text += automatic_delivery ? " Completion arrives automatically; do not poll just to wait."
+                             : " This host does not send automatic completion; inspect when needed.";
+  return tool::Output{.text = std::move(text), .data_json = std::move(encoded)};
 }
 }  // namespace orangutan::bootstrap

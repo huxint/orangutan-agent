@@ -93,7 +93,8 @@ class Fixture {
 public:
   explicit Fixture(asio::any_io_executor executor,
                    bootstrap::BackgroundTaskOptions limits = {.automatic_delivery = true, .enable_teams = true},
-                   std::string_view configuration = R"({"permissions":{"allow":[{"tool_pattern":"*"}]}})")
+                   std::string_view configuration = R"({"permissions":{"allow":[{"tool_pattern":"*"}]}})",
+                   bool trace = false)
       : executor{executor} {
     auto id = core::generate_turn_id();
     REQUIRE(id.has_value());
@@ -105,7 +106,7 @@ public:
     auto built = bootstrap::RuntimeAssembly::build(
         path.string(),
         executor,
-        {.audit_enabled = false, .trace_enabled = false, .longterm_memory_enabled = false});
+        {.audit_enabled = trace, .trace_enabled = trace, .longterm_memory_enabled = false});
     REQUIRE(built.has_value());
     assembly.emplace(std::move(*built));
     auto service = bootstrap::BackgroundTasks::create(executor, *assembly, *config, limits);
@@ -140,7 +141,8 @@ public:
   Fixture(const Fixture&) = delete;
   Fixture& operator=(const Fixture&) = delete;
 
-  core::Result<tool::Output> command(tool::TeamCommand command) {
+  core::Result<tool::Output> command(tool::TeamCommand command,
+                                     std::optional<core::TurnId> parent_turn = std::nullopt) {
     if (auto* update = std::get_if<tool::TeamTaskUpdateRequest>(&command); update && update->team_id.empty())
       update->team_id = board().team_id;
     auto context = tool::DispatchContext::for_now(executor,
@@ -150,6 +152,7 @@ public:
                                                   options.agent_key,
                                                   options.identity);
     context.mode = options.mode;
+    context.parent_turn_id = parent_turn;
     return tasks->team_command(options, std::move(command), context);
   }
   bootstrap::TeamSnapshot board() {

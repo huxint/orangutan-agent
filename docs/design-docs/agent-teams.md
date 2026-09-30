@@ -80,7 +80,9 @@ edits or resolve semantic conflicts. Assign disjoint write ownership.
 
 Jobs retain member sessions through joined cleanup. TeamStop closes admission,
 cancels waiting tasks, requests cancellation of running jobs and suppresses their
-pending notifications. Running work remains `cancelling` until cleanup joins.
+pending notifications, including superseded attempts. Running work remains
+`cancelling` until cleanup joins. Job transitions update task execution state;
+member admission derives from that state rather than a separate busy flag.
 Replacement requires a stopped team with no in-flight work. Parent cancellation
 targets tasks created/revised by that turn; owner cancellation also closes its
 team. Service shutdown closes all teams and joins shared jobs.
@@ -137,7 +139,9 @@ return up to 8192 bytes and reject interior UTF-8 offsets. Dependency input incl
 only relevant accepted reports, with 1024-byte previews, 512-byte review notes and explicit
 truncation. Specialists inspect referenced artifacts when previews are incomplete.
 Corrections keep the objective and add feedback; retained conversation supplies
-earlier work.
+earlier work. Starting a correction clears the board's previous report immediately,
+including while the new attempt waits for admission. Each member turn's trace
+references the parent turn that assigned or revised that work.
 
 The completion inbox coalesces up to four finished runs into one leader turn.
 Reports identify team, task and attempt; the leader checks current state before

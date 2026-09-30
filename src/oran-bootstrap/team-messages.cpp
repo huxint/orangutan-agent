@@ -7,11 +7,16 @@
 
 namespace orangutan::bootstrap {
 
+std::size_t BackgroundTasks::Impl::Team::pending_messages() const {
+  return static_cast<std::size_t>(
+      std::ranges::count_if(messages, [](const auto& message) { return !message.acknowledged; }));
+}
+
 core::Result<tool::Output>
 BackgroundTasks::Impl::send_team_message(Team& team, std::string sender, tool::TeamMessageRequest request) {
   if (auto valid = tool::validate_team_command(request); !valid)
     return std::unexpected(std::move(valid).error());
-  if (closed || team.snapshot.stopped)
+  if (closed || team.stopped)
     return std::unexpected(core::Error{core::ErrorKind::conflict, "team messaging is closed"});
   const auto recipient = std::ranges::find_if(team.members, [&request](const auto& member) {
     return member.snapshot.name == request.recipient;
@@ -22,16 +27,8 @@ BackgroundTasks::Impl::send_team_message(Team& team, std::string sender, tool::T
     return std::unexpected(core::Error::not_found("team recipient or task is unavailable"));
   if (request.recipient == sender)
     return std::unexpected(core::Error::invalid_argument("send team messages to another member"));
-  if (sender != "leader") {
-    const auto member =
-        std::ranges::find_if(team.members, [&sender](const auto& value) { return value.snapshot.name == sender; });
-    if (member == team.members.end() || member->active_run.empty() || task->snapshot.member != sender ||
-        task->snapshot.run_id != member->active_run)
-      return std::unexpected(core::Error::permission_denied("members can message only about their active task"));
-    const auto job = find(team.owner, member->active_run);
-    if (!job || job->snapshot.state != TaskState::running)
-      return std::unexpected(core::Error::permission_denied("the sending task is no longer running"));
-  }
+  if (sender != "leader" && (task->snapshot.member != sender || task->snapshot.state != TeamTaskState::running))
+    return std::unexpected(core::Error::permission_denied("members can message only about their active task"));
   const auto pending = std::ranges::count_if(team.messages, [&request](const auto& message) {
     return message.recipient == request.recipient && !message.acknowledged;
   });

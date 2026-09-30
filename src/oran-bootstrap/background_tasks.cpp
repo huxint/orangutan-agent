@@ -130,18 +130,20 @@ void BackgroundTasks::Impl::cancel_job(const std::shared_ptr<Job>& job, bool tim
     job->finished = std::chrono::steady_clock::now();
     job->deadline.cancel();
     job->child.reset();
-    finish_team_job(*job);
+    update_team_job(*job);
     job->team.reset();
     job->prompt.clear();
   } else {
     job->snapshot.state = TaskState::cancelling;
+    update_team_job(*job);
     job->group->request_stop();
   }
   static_cast<void>(changed.try_send(0));
 }
 
 async::Awaitable<Result<void>> BackgroundTasks::Impl::execute(std::shared_ptr<Job> job) {
-  job->outcome = co_await job->child->session->run_prompt({.prompt = std::move(job->prompt)});
+  job->outcome =
+      co_await job->child->session->run_prompt({.prompt = std::move(job->prompt), .parent_turn_id = job->parent_turn});
   co_return Result<void>{};
 }
 
@@ -183,7 +185,7 @@ async::Awaitable<void> BackgroundTasks::Impl::monitor(std::shared_ptr<Impl> self
   job->snapshot.result_bytes = job->result.size();
   job->finished = std::chrono::steady_clock::now();
   job->outcome.reset();
-  self->finish_team_job(*job);
+  self->update_team_job(*job);
   job->team.reset();
   job->child.reset();
   job->group.reset();
@@ -208,6 +210,7 @@ void BackgroundTasks::Impl::pump() {
     job->group.emplace(std::move(*group));
     job->snapshot.state = TaskState::running;
     job->snapshot.updated_at = core::time::now_utc();
+    update_team_job(*job);
     ++active;
     auto started = job->group->spawn(job->snapshot.task_id, [job] { return execute(job); });
     if (!started) {

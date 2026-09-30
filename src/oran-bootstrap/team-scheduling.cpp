@@ -8,11 +8,21 @@
 
 namespace orangutan::bootstrap {
 
+bool team_task_active(TeamTaskState state) {
+  return state == TeamTaskState::queued || state == TeamTaskState::running || state == TeamTaskState::cancelling;
+}
+
+bool BackgroundTasks::Impl::Team::has_active_work(std::string_view member) const {
+  return std::ranges::any_of(work, [member](const auto& task) {
+    return (member.empty() || task.snapshot.member == member) && team_task_active(task.snapshot.state);
+  });
+}
+
 void BackgroundTasks::Impl::pump_teams() {
   if (closed)
     return;
   for (const auto& team : teams) {
-    if (team->snapshot.stopped)
+    if (team->stopped)
       continue;
     for (auto& work : team->work) {
       auto& task = work.snapshot;
@@ -27,7 +37,7 @@ void BackgroundTasks::Impl::pump_teams() {
         continue;
       auto member = std::ranges::find_if(team->members,
                                          [&task](const auto& value) { return value.snapshot.name == task.member; });
-      if (member == team->members.end() || !member->active_run.empty())
+      if (member == team->members.end() || team->has_active_work(task.member))
         continue;
       if (!has_capacity(true))
         return;
@@ -47,7 +57,7 @@ void BackgroundTasks::Impl::pump_teams() {
       job->snapshot.label = core::str::truncate_to_code_point(task.member + ": " + task.key, 120);
       job->snapshot.created_at = job->snapshot.updated_at = core::time::now_utc();
       job->snapshot.automatic_delivery = options.automatic_delivery;
-      job->snapshot.team_id = team->snapshot.team_id;
+      job->snapshot.team_id = team->id;
       job->snapshot.team_task_key = task.key;
       job->snapshot.team_attempt = task.attempt;
       nlohmann::json evidence{{"task", task.key},
@@ -56,7 +66,7 @@ void BackgroundTasks::Impl::pump_teams() {
                               {"feedback", task.feedback},
                               {"dependencies", nlohmann::json::array()}};
       if (!member->initialized) {
-        evidence["goal"] = team->snapshot.goal;
+        evidence["goal"] = team->goal;
         evidence["specialist"] = member->snapshot.name;
         evidence["remit"] = member->instructions;
       }
@@ -90,14 +100,11 @@ void BackgroundTasks::Impl::pump_teams() {
       }
       task.state = TeamTaskState::queued;
       task.run_id = job->snapshot.task_id;
-      task.report.clear();
-      task.report_truncated = false;
-      member->active_run = job->snapshot.task_id;
     }
   }
 }
 
-void BackgroundTasks::Impl::finish_team_job(const Job& job) {
+void BackgroundTasks::Impl::update_team_job(const Job& job) {
   if (!job.team)
     return;
   auto& team = *job.team;
@@ -108,17 +115,32 @@ void BackgroundTasks::Impl::finish_team_job(const Job& job) {
   if (work == team.work.end())
     return;
   auto& task = work->snapshot;
+  switch (job.snapshot.state) {
+    case TaskState::queued:
+      task.state = TeamTaskState::queued;
+      return;
+    case TaskState::running:
+      task.state = TeamTaskState::running;
+      return;
+    case TaskState::cancelling:
+      task.state = TeamTaskState::cancelling;
+      return;
+    case TaskState::succeeded:
+      task.state = TeamTaskState::in_review;
+      break;
+    case TaskState::failed:
+      task.state = TeamTaskState::failed;
+      break;
+    case TaskState::cancelled:
+      task.state = TeamTaskState::cancelled;
+      break;
+  }
   const auto member =
       std::ranges::find_if(team.members, [&task](const auto& value) { return value.snapshot.name == task.member; });
-  if (member != team.members.end() && member->active_run == job.snapshot.task_id) {
-    member->active_run.clear();
+  if (member != team.members.end())
     member->initialized = member->initialized || job.snapshot.state == TaskState::succeeded;
-  }
   task.error_kind = job.snapshot.error_kind;
   task.report = core::str::truncate_to_code_point(job.result, 65536);
   task.report_truncated = job.snapshot.result_truncated || task.report.size() < job.result.size();
-  task.state = job.snapshot.state == TaskState::succeeded   ? TeamTaskState::in_review
-               : job.snapshot.state == TaskState::cancelled ? TeamTaskState::cancelled
-                                                            : TeamTaskState::failed;
 }
 }  // namespace orangutan::bootstrap
