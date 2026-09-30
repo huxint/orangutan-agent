@@ -80,10 +80,11 @@ cover denied effects, atomic persistence, scoped recall, fallback attribution,
 cost, stable prompt snapshots and joined cancellation. These checks establish
 runtime behavior, not spontaneous memory use or service-side cache hits.
 
-[Live debt](exec-plans/tech-debt-tracker.md) tracks broader memory import mappings,
-durable-note provenance, shell execution, real-model memory/context evaluation,
+[Live debt](exec-plans/tech-debt-tracker.md) tracks durable-note provenance,
+shell execution, real-model memory/context evaluation,
 hosted quality jobs and reference-hardware compile budgets. SQLite snapshots and
-explicit session imports support recovery without rewriting original records.
+explicit session and whole-scope memory imports support recovery without rewriting
+original records. Memory imports rebuild search and reject occupied destinations.
 
 The opt-in `eval-context` runner compares full-history and compacted sessions
 using synthetic retention tasks, reopening and fixed tool output. Controlled

@@ -5,7 +5,6 @@ slice in an execution plan before implementation.
 
 | Area | Remaining obligation | Closure evidence |
 | --- | --- | --- |
-| Persistence | Extend explicit session backup/import support to long-term-memory ownership/scope mappings before changing that data format. | Scoped memory import and collision integrity tests. |
 | Memory behavior | Evaluate spontaneous consultation and durable learning with the deployment model and explicitly supplied credentials. Controlled-provider tests establish the runtime path only. | Unhinted correction and fresh-session cases, one-off instructions, obsolete-note replacement, refusal handling and measured false writes; cases live in the memory contract. |
 | Working context | Keep incidental inspection logs out of actionable completed/pending state and preserve task identifiers through repeated summaries; DeepSeek Flash synthetic runs exposed both failures. Extend `eval-context` to varied tasks and distinguish exact-label compliance from semantic retention. Add host-supplied provenance for new durable notes. | Measured summary drift and context-pressure behavior; durable-note sources are traceable. |
 | Shell execution | Add an explicitly authorized subprocess boundary with bounded output, cancellation and child authority constraints. | Controlled subprocess and denied-effect tests. |

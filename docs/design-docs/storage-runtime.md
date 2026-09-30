@@ -39,7 +39,8 @@ Backups before schema changes and explicit ownership/scope import mappings are
 required before a data-format migration is introduced. Runtime reductions may
 drop derived views and indexes but leave persisted user rows intact. The explicit
 backup and session-import APIs below support this boundary; broader long-term
-memory import mappings remain [live debt](../exec-plans/tech-debt-tracker.md).
+memory backup and explicit scope imports are owned by the
+[memory contract](memory-system.md#long-term-memory-recovery).
 
 The session skill table (`session_skill_activations`) remains accessible through
 SQLite for compatibility. Audit migration 6 drops the derived

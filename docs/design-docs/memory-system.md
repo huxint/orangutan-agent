@@ -104,6 +104,37 @@ own dispatch contract and are not rolled back with a failed transcript commit.
 Session import maps source and destination session/agent keys explicitly through
 the storage repository; it does not import or remap long-term memory scopes.
 
+## Long-Term Memory Recovery
+
+`Fts5Backend::backup_to` captures the whole memory database using the verified
+SQLite snapshot operation, including committed WAL data and unrelated tables.
+The destination must be a new path; existing backups are never overwritten.
+The [storage contract](storage-runtime.md#backup-and-session-import) owns snapshot
+mechanics and incomplete-backup handling.
+
+`Fts5Backend::import_scope` requires a source snapshot path and explicit source
+and destination scope keys. It opens the source read-only and pins its schema
+and records in a read transaction. The supported source schema is version 1.
+All records in that scope, including shadow rows, are copied into one empty
+destination scope. IDs, linked IDs, kinds, text, timestamps, importance and raw
+JSON metadata are preserved; only `scope_key` changes. Linked IDs continue to
+refer within the mapped scope, and unresolved links remain unresolved.
+
+The destination transaction streams records and rebuilds their FTS entries from
+record content, including tags. It does not trust or copy the source search index.
+Any existing destination record or orphan FTS entry causes a conflict, even when
+its ID differs from the imported IDs. Missing source scopes, unsupported schemas,
+SQL failures and observed cancellation abort without committing records or index
+rows. Source records, unrelated scopes, optional tables and migration history
+remain untouched. This is whole-scope recovery, not a merge or ID-remapping API.
+
+Both operations are explicit host maintenance APIs, outside the model tool
+catalogue. The host supplies authorized scope mappings, owns private and stable
+source/destination directories, and runs the operation on the blocking executor.
+Snapshot paths remain host-controlled throughout the import. No session, approval,
+audit or trace authority is imported. A user-data format migration still requires
+a verified backup before applying it; these APIs do not migrate formats.
+
 ## Working Context
 
 `Store::load_context` reads a fixed history end and the optional working checkpoint

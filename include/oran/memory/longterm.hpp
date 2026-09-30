@@ -153,6 +153,12 @@ public:
 
   [[nodiscard]] async::Awaitable<core::Result<storage::MigrationReport>> migrate();
 
+  /// Host maintenance on the caller's blocking executor. Backup requires a new
+  /// private path; import copies one explicit scope into an empty destination.
+  [[nodiscard]] async::Awaitable<core::Result<void>> backup_to(std::string destination);
+  [[nodiscard]] async::Awaitable<core::Result<void>>
+  import_scope(std::string source_path, std::string source_scope, std::string destination_scope);
+
   [[nodiscard]] async::Awaitable<core::Result<Record>> get(RecordKey key) override;
   [[nodiscard]] async::Awaitable<core::Result<std::vector<SearchHit>>> search(Query query, std::size_t limit) override;
   [[nodiscard]] async::Awaitable<core::Result<std::vector<IndexEntry>>> list(IndexRequest request) override;
