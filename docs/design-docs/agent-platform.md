@@ -152,7 +152,7 @@ Repeated summarization can lose meaning; controlled tests prove the runtime path
 while deployment-model evaluation must measure task/constraint retention.
 
 Automatic memory orientation uses the same
-authorized dispatch path as model-requested reads. Model-directed exact-ID reads,
+runtime dispatch path as model-requested reads. Model-directed exact-ID reads,
 topic search and same-turn correction writes use the ordinary tool loop; the
 [memory contract](memory-system.md) owns their behavior. Do not add mutable application registries or
 cross-agent state to the loop.
@@ -183,11 +183,23 @@ Parent cancellation propagates through child provider and tool work; context-spe
 session releases borrowed services. An unrelated session does not extend that
 join.
 
-Parent and child rule decisions intersect at every tool dispatch, including
-rewritten inputs and automatic recall. The permission contract owns precedence
-and approval limits. The self-contained task and returned final-report shape
+Parent and child rule decisions intersect at external tool dispatch, including
+rewritten inputs. Internal memory uses the inherited scope and memory write
+gates. The permission contract owns precedence and approval limits. The self-contained task and returned final-report shape
 follows the reference [Agent usage notes](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/tool-description-agent-usage-notes.md).
 
 [Tools](tool-runtime.md), [memory](memory-system.md),
 [permissions](permissions-and-hooks.md), [providers](api-portability.md) and
 [async ownership](async-model.md) own their respective contracts.
+
+## Background Child Continuation
+
+Hosts may bind the bootstrap background service to let AgentRun return a task
+receipt while its child runs independently. Other foreground prompts can proceed
+on the parent session. The scheduler still awaits each tool batch; the start
+operation itself completes quickly, rather than detaching arbitrary handlers.
+TaskGet and TaskCancel operate on the caller's own retained tasks. Completion
+input uses a dedicated session entry point and cannot overlap another parent
+turn. The [bootstrap contract](bootstrap-runtime.md#background-tasks) owns the
+service, acknowledgment and shutdown semantics; ordinary child execution above
+retains its awaited lifetime.

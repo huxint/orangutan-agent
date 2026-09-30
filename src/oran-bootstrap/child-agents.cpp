@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <oran/bootstrap/agent_session.hpp>
+#include <oran/bootstrap/background_tasks.hpp>
 #include <oran/config/config.hpp>
 #include <oran/tool/registry.hpp>
 
@@ -28,6 +29,15 @@ async::Awaitable<core::Result<tool::Output>> run_child_agent(tool::AgentRunReque
             .with("reason", "child_limit")
             .with("limit", std::to_string(parent.max_child_runs)));
   }
+  if (request.background) {
+    if (!parent.background_tasks)
+      co_return std::unexpected(core::Error::permission_denied("background tasks are unavailable in this host"));
+    auto started = parent.background_tasks->start(parent, std::move(request), context);
+    if (!started)
+      co_return std::unexpected(std::move(started).error());
+    ++child_runs;
+    co_return task_output(*started);
+  }
   auto session_id = core::generate_turn_id();
   if (!session_id) {
     co_return std::unexpected(std::move(session_id).error());
@@ -45,6 +55,7 @@ async::Awaitable<core::Result<tool::Output>> run_child_agent(tool::AgentRunReque
   options.per_agent_overlay.clear();
   options.trace_context_json = "{}";
   options.event_sink = nullptr;
+  options.background_tasks = nullptr;
   options.registry = &registry;
   options.scheduler = &scheduler;
   auto child = AgentSession::create(std::move(options));
@@ -64,6 +75,27 @@ async::Awaitable<core::Result<tool::Output>> run_child_agent(tool::AgentRunReque
 }
 
 }  // namespace
+
+void bind_task_tools(tool::DispatchContext& context, const AgentSessionOptions& options) {
+  if (!options.background_tasks || options.parent_policy)
+    return;
+  const auto owner = task_owner(options);
+  auto* tasks = options.background_tasks;
+  context.task_get = [tasks, owner](tool::TaskRequest request,
+                                    tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+    auto result = tasks->get(owner, request.task_id, request.offset, request.max_bytes);
+    if (!result)
+      co_return std::unexpected(std::move(result).error());
+    co_return task_output(*result);
+  };
+  context.task_cancel = [tasks, owner](tool::TaskRequest request,
+                                       tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+    auto result = tasks->cancel(owner, request.task_id);
+    if (!result)
+      co_return std::unexpected(std::move(result).error());
+    co_return task_output(*result);
+  };
+}
 
 void bind_child_agents(tool::DispatchContext& context,
                        const AgentSessionOptions& options,

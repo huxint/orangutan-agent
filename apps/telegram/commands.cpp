@@ -13,6 +13,8 @@ namespace {
 constexpr std::array catalogue{
     std::pair{"new", "开启新会话，保留旧记录和长期记忆"},
     std::pair{"status", "查看当前会话、模型和最近用量"},
+    std::pair{"tasks", "查看当前会话的后台任务"},
+    std::pair{"stop", "停止当前会话的后台任务"},
     std::pair{"help", "查看命令和使用说明"},
     std::pair{"whoami", "查看自己的 Telegram 用户和聊天 ID"},
 };

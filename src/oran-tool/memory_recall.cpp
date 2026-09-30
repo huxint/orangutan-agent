@@ -188,18 +188,22 @@ core::Result<void> register_memory_recall(Registry& registry) {
                      "topic words or browse if wording misses. Index cues are incomplete; read applicable notes "
                      "before relying on them. Follow next_offset with the same filters. The host supplies scope.",
       .input_schema_json = std::string{kMemoryRecallSchema},
-      .required_capabilities = {core::Capability::read_memory},
+      .required_capabilities = {},
   };
 
-  return registry.add_prepared(std::move(def), [](std::string_view input_json) -> core::Result<PreparedCall> {
-    auto parsed = parse_recall(input_json);
-    if (!parsed) {
-      return std::unexpected(std::move(parsed).error());
-    }
-    return PreparedCall{.path = std::nullopt, .execute = [request = std::move(*parsed)](DispatchContext& ctx) mutable {
-                          return memory_recall_handler(std::move(request), ctx);
-                        }};
-  });
+  return registry.add_prepared(
+      std::move(def),
+      [](std::string_view input_json) -> core::Result<PreparedCall> {
+        auto parsed = parse_recall(input_json);
+        if (!parsed) {
+          return std::unexpected(std::move(parsed).error());
+        }
+        return PreparedCall{.path = std::nullopt,
+                            .execute = [request = std::move(*parsed)](DispatchContext& ctx) mutable {
+                              return memory_recall_handler(std::move(request), ctx);
+                            }};
+      },
+      DispatchPolicy::runtime);
 }
 
 }  // namespace orangutan::tool

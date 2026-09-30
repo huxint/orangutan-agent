@@ -120,14 +120,20 @@ hundreds.
 **Enforcement:** planned hosted `xmake check clang.tidy` step; currently review
 plus local/editor analysis.
 
-## C10. Every effectful action is permissioned
+## C10. External tool effects are permissioned; internal state is scoped
 
-Any code path that touches the filesystem, network, subprocess, memory store,
-provider API, or another agent goes through `permission::evaluate` and
-publishes a hook event. Bypassing this is a rule violation, not a shortcut.
+Tool effects on workspace files, external network services, subprocesses and
+loaded executable code go through `permission::evaluate` and publish hook events.
+Internal memory, task bookkeeping and configured-agent coordination instead use
+explicit runtime dispatch: host-bound scope, functional enablement, validation,
+admission limits and domain hooks. They do not enter generic allow/deny/ask.
+Child agents inherit constraints on their external effects; delegation cannot
+bypass them. Provider and storage services remain explicit host-owned resources,
+not permission prompts for internal housekeeping.
 
-**Why:** the permission story is what makes the runtime safe to use as a coding
-assistant. Bypasses defeat it silently.
+**Why:** authority belongs at the boundary of the actual external effect.
+Internal coordination remains usable without an approval consumer while
+preserving ownership and user data.
 
 **Enforcement:** code review and behavioral regressions for authorization and
 denied effects.

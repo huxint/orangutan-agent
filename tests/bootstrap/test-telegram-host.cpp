@@ -69,6 +69,170 @@ telegram_host::Api api(std::vector<Json> updates, std::vector<std::int64_t>& off
 }
 }  // namespace
 
+TEST_CASE("Telegram prioritizes users and journals automatic completion without advancing updates",
+          "[telegram-host][background]") {
+  bool ambiguous = false;
+  SECTION("successful notification") {}
+  SECTION("ambiguous notification") {
+    ambiguous = true;
+  }
+  StateDirectory temp;
+  auto directory = io::PrivateDirectory::open(temp.path.string());
+  REQUIRE(directory);
+  auto state = telegram_host::load_state(*directory, "42", "/workspace");
+  REQUIRE(state);
+  const std::string task_id = "00000000000000000000000000000001";
+  tests::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    hook::Bus hooks;
+    int polls = 0, turns = 0, completions = 0, sends = 0;
+    std::vector<std::int64_t> offsets;
+    auto ordinary = api({update(10)}, offsets);
+    telegram_host::Api polling = [&](PollMethod method,
+                                     std::string payload) -> async::Awaitable<Result<channel::Response>> {
+      if (method != PollMethod::getUpdates)
+        co_return co_await ordinary(method, std::move(payload));
+      ++polls;
+      if (polls == 1) {
+        CHECK(Json::parse(payload).at("timeout") == 2);
+        co_return co_await ordinary(method, std::move(payload));
+      }
+      CHECK(Json::parse(payload).at("offset") == 11);
+      if (polls == 2)
+        co_return response(Json::array());
+      co_return std::unexpected(core::Error::cancelled());
+    };
+    telegram_host::BackgroundPort background;
+    background.active = [](core::TurnId) {
+      return true;
+    };
+    background.next = [&](core::TurnId id) -> std::optional<std::string> {
+      CHECK(id == state->session);
+      return completions == 0 ? std::optional{task_id} : std::nullopt;
+    };
+    background.complete = [&](core::TurnId id, std::string task) -> async::Awaitable<Result<std::string>> {
+      ++completions;
+      CHECK(turns == 1);
+      CHECK(id == state->session);
+      CHECK(task == task_id);
+      auto bytes = directory->read("state.json", 2 * 1024 * 1024);
+      REQUIRE(bytes);
+      const auto journal = Json::parse(**bytes);
+      CHECK(journal.at("pending").at("task_id") == task_id);
+      CHECK(journal.at("pending").at("answer").is_null());
+      co_return "reviewed result";
+    };
+    auto result = co_await telegram_host::run(
+        {.user = "42"},
+        polling,
+        [&](channel::Conversation, channel::Request request) -> async::Awaitable<Result<channel::Response>> {
+          if (request.path == "/sendMessage") {
+            ++sends;
+            const auto body = Json::parse(request.body);
+            auto bytes = directory->read("state.json", 2 * 1024 * 1024);
+            REQUIRE(bytes);
+            const auto journal = Json::parse(**bytes);
+            CHECK(journal.at("pending").at("send_inflight") == true);
+            if (sends == 2) {
+              CHECK(body.at("text") == "reviewed result");
+              CHECK_FALSE(body.contains("reply_parameters"));
+              CHECK(journal.at("next_update") == 11);
+              CHECK(journal.at("pending").at("task_id") == task_id);
+              CHECK(journal.at("pending").at("answer") == "reviewed result");
+              if (ambiguous)
+                co_return std::unexpected(core::Error::network("ambiguous send"));
+            }
+          }
+          co_return response(Json{{"message_id", 100}});
+        },
+        [&](channel::Message message) -> async::Awaitable<Result<std::string>> {
+          ++turns;
+          CHECK(message.text == "hello");
+          CHECK(completions == 0);
+          co_return "foreground answer";
+        },
+        hooks,
+        *directory,
+        *state,
+        io.get_executor(),
+        nullptr,
+        {},
+        std::move(background));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(turns == 1);
+    CHECK(completions == 1);
+    CHECK(sends == 2);
+    CHECK(state->next_update == 11);
+    if (ambiguous) {
+      REQUIRE(state->pending);
+      CHECK(state->pending->task_id == task_id);
+      CHECK(state->pending->send_inflight);
+      CHECK_FALSE(telegram_host::load_state(*directory, "42", "/workspace"));
+      REQUIRE(telegram_host::acknowledge_pending(*directory, 11));
+      auto archive = directory->read("handled-task-" + task_id + ".json", 2 * 1024 * 1024);
+      REQUIRE(archive);
+      REQUIRE(archive->has_value());
+      CHECK(Json::parse(**archive).at("pending").at("answer") == "reviewed result");
+    } else {
+      CHECK(result.error().kind() == core::ErrorKind::cancelled);
+      CHECK_FALSE(state->pending);
+    }
+    auto reopened = telegram_host::load_state(*directory, "42", "/workspace");
+    REQUIRE(reopened);
+    CHECK(reopened->next_update == 11);
+    CHECK_FALSE(reopened->pending);
+  });
+}
+
+TEST_CASE("Telegram task commands bypass the model and new cancels the old session", "[telegram-host][background]") {
+  StateDirectory temp;
+  auto directory = io::PrivateDirectory::open(temp.path.string());
+  REQUIRE(directory);
+  auto state = telegram_host::load_state(*directory, "42", "/workspace");
+  REQUIRE(state);
+  const auto previous = state->session;
+  tests::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
+    hook::Bus hooks;
+    int turns = 0, lists = 0, stops = 0, index = 10;
+    std::vector<std::int64_t> offsets;
+    for (const auto* command : {"/tasks", "/stop", "/new"}) {
+      auto item = update(index++);
+      item["message"]["text"] = command;
+      telegram_host::BackgroundPort background;
+      background.control = [&](core::TurnId id, telegram_host::TaskCommand operation) -> Result<std::string> {
+        CHECK(id == previous);
+        CHECK(state->session == previous);
+        if (operation == telegram_host::TaskCommand::list)
+          ++lists;
+        else
+          ++stops;
+        return "task status";
+      };
+      auto result = co_await telegram_host::run(
+          {.user = "42", .once = true},
+          api({item}, offsets),
+          [](channel::Conversation, channel::Request) -> async::Awaitable<Result<channel::Response>> {
+            co_return response(Json{{"message_id", 100}});
+          },
+          [&](channel::Message) -> async::Awaitable<Result<std::string>> {
+            ++turns;
+            co_return "model";
+          },
+          hooks,
+          *directory,
+          *state,
+          io.get_executor(),
+          nullptr,
+          {},
+          std::move(background));
+      REQUIRE(result);
+    }
+    CHECK(turns == 0);
+    CHECK(lists == 1);
+    CHECK(stops == 2);
+    CHECK(state->session != previous);
+  });
+}
+
 TEST_CASE("Telegram parses standalone commands without interpreting paths or quoted prose", "[telegram-host]") {
   auto command = telegram_host::parse_command(" \n/NEW@Fixture_Bot \t", "fixture_bot");
   REQUIRE(command);

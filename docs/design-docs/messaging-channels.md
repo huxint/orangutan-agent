@@ -170,18 +170,21 @@ build/linux/x86_64/release/oran-telegram \
 `--token-env NAME` selects a different bot-token reference. `--probe --state DIR`
 checks identity/webhook status without receiving messages or invoking a model;
 it needs only the Telegram credential. `--once` processes one admitted message
-and exits. SIGINT/SIGTERM cancels and joins active work. Polls use a 25-second
-long-poll timeout, a 35-second HTTP bound and a one-MiB response limit. Retryable
+and exits without advertising background tasks. SIGINT/SIGTERM cancels and joins
+active work. Polls use a 25-second long-poll timeout, shortened to two seconds
+while background tasks or completions are pending, a 35-second HTTP bound and a
+one-MiB response limit. Retryable
 poll failures retry at most four times and respect Telegram rate-limit delays.
 Transient server failures are retryable; competing pollers return a terminal
 conflict. Transport retry metadata survives error redaction.
 Sends and agent turns are never retried automatically by the host.
 
 The DeepSeek example uses the Anthropic-compatible endpoint and the
-`ORAN_TELEGRAM_MODEL_KEY` reference, with FileRead, MemoryRecall and MemoryRemember
-selected. It permits durable notes and provider requests. Filesystem writes and
-delegation are not exposed by this example; other configurations retain normal
-session permission decisions. The host provides no interactive approval consumer.
+`ORAN_TELEGRAM_MODEL_KEY` reference, with FileRead, MemoryRecall, MemoryRemember,
+AgentRun, TaskGet and TaskCancel selected. It configures a worker and permits
+provider requests. Memory and delegation use their functional runtime boundaries. Filesystem writes are not
+exposed by this example; other configurations retain normal session permission
+decisions. The host provides no interactive approval consumer.
 The model receives typed text and image blocks. Local host commands are handled
 before any model call or attachment download.
 
@@ -191,6 +194,8 @@ before any model call or attachment download.
 | --- | --- |
 | `/new` | Persist a fresh session ID and acknowledge it without calling the model. The next prompt uses a new AgentSession. Existing transcript/checkpoint rows and conversation-scoped long-term notes remain intact. |
 | `/status` | Show the active session ID, service uptime, configured model, saved message count, summary coverage and the most recent traced model/token usage for this session. Missing or disabled statistics are explicit. |
+| `/tasks` | List retained tasks in the current session with their labels, authoritative state and elapsed time, without a model call. |
+| `/stop` | Request cancellation of the current session's background tasks and suppress their pending automatic notifications. Running cleanup stays visible as cancelling; results remain inspectable. |
 | `/help` | Show the supported command catalogue and input guidance. `/start` and `/commands` are aliases; `/start` accepts Telegram's onboarding payload. |
 | `/whoami` | Show the admitted Telegram user and chat IDs. |
 
@@ -207,13 +212,43 @@ remain available. Probe mode never changes the menu. Command replies use the
 same receive/send gates, joined presentation and durable delivery journal as
 model replies; commands themselves are not model transcript entries.
 
-`/new` saves the new identity and confirmation together in the pending journal
+`/new` requests cancellation of the old session's background tasks before switching,
+then saves the new identity and confirmation together in the pending journal
 before sending. An ambiguous confirmation still requires normal reconciliation;
 restart never rotates the session again. The cached AgentSession is replaced
 at the next model prompt. `/status` requires `ChannelInspect` and reads bounded
 metadata and one trace record on the worker executor, without exposing transcript
 contents, credential references or filesystem paths. Token figures describe the
 last recorded turn, not a live context occupancy estimate.
+
+### Background completion
+
+The retained host binds bootstrap's [background task service](bootstrap-runtime.md#background-tasks)
+when configured agents exist and at least two blocking workers are configured.
+It caps running background children at `min(4, workers - 1)`, leaving capacity
+for foreground provider requests and channel polling because HTTP calls occupy
+blocking workers. `--once`, a one-worker Telegram host and the one-event QQ
+evaluator do not bind it. AgentRun can acknowledge an accepted task and release the foreground turn;
+later user turns continue while the child runs. Native TaskGet/TaskCancel and
+host task controls use owner matching and channel observations without generic tool approval.
+
+Polling gives real user updates priority. An empty poll can dispatch one pending
+completion through `AgentSession::run_completion`, which consolidates up to four
+ready reports into one parent continuation. A completion is runtime evidence,
+never a fabricated user request or approval. Its deterministic event key is
+`background-<task-id>`. There is no source Telegram message, so the host sends no
+reaction, draft or reply reference for that event; ordinary typing and the final
+answer use the channel dispatcher. Child tool events do not update foreground
+presentation. `/tasks` obtains a fresh scoped snapshot instead of replaying events.
+
+Before invoking the parent, the journal records the anchor `task_id`. It then
+uses the same answer-before-send and per-part receipt path as ordinary replies.
+The parent continuation commits before the in-process completion acknowledgment;
+external delivery settles separately. Failed turns or ambiguous sends retain the
+journal for explicit reconciliation, without rerunning child work. Background
+delivery never advances the Telegram update cursor. Task jobs and completion
+claims do not survive process restart; child transcripts and saved pending
+answers do. Unavailable old task IDs must not be presented as still running.
 
 The host polls serially, so commands wait behind an active turn. This command
 surface does not yet interrupt a running turn, change models or force compaction.
@@ -279,7 +314,9 @@ build/linux/x86_64/release/oran-telegram --state "$STATE_DIR" --ack-pending "$UP
 ```
 
 This archives the complete journal as `handled-<update-id>.json` before advancing the
-cursor. It does not rerun the model or resend an answer. Preserve the archive
+cursor. For a pending background notification, use its recorded `update_id`;
+the archive is `handled-task-<task-id>.json` and the cursor stays unchanged.
+It does not rerun the model or resend an answer. Preserve the archive
 when manually handling an unsent response. It needs no credentials and refuses
 a running host or a mismatched update ID. The host favors recoverable intake and
 explicit reconciliation; it does not promise exactly-once remote delivery.
@@ -301,7 +338,7 @@ test vector. This authenticates ingress; it does not replace sender permissions.
 
 `accept_qq_webhook` handles signed URL validation (op 13) and heartbeat (op 1).
 It decodes supported dispatch events only after verification, then authorizes
-`QQInbox` with `write_memory`; rules can inspect conversation, sender and event ID.
+the unscoped `QQInbox` operation; ingress rules can inspect conversation, sender and event ID.
 The injected `QQEnqueue` must durably and idempotently record accepted messages
 before returning success. Only then does the callback return `{"op":12,"d":0}`.
 Enqueue failure returns `d:1` for QQ retry. Cancellation propagates; authentication,

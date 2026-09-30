@@ -18,6 +18,16 @@ enum class PollMethod {
 };
 using Api = std::function<async::Awaitable<core::Result<channel::Response>>(PollMethod, std::string)>;
 using StatusReader = std::function<async::Awaitable<core::Result<std::string>>(core::TurnId)>;
+enum class TaskCommand {
+  list,
+  stop
+};
+struct BackgroundPort {
+  std::function<bool(core::TurnId)> active;
+  std::function<std::optional<std::string>(core::TurnId)> next;
+  std::function<async::Awaitable<core::Result<std::string>>(core::TurnId, std::string)> complete;
+  std::function<core::Result<std::string>(core::TurnId, TaskCommand)> control;
+};
 
 struct Options {
   std::string user{};
@@ -30,6 +40,7 @@ struct Pending {
   std::optional<std::string> answer;
   std::size_t confirmed_parts{0};
   bool send_inflight{false};
+  std::string task_id{};
 };
 
 struct State {
@@ -61,5 +72,6 @@ load_state(const io::PrivateDirectory& directory, std::string_view user, std::st
                                                        State& state,
                                                        asio::any_io_executor worker,
                                                        Presentation* presentation = nullptr,
-                                                       StatusReader status = {});
+                                                       StatusReader status = {},
+                                                       BackgroundPort background = {});
 }  // namespace orangutan::telegram_host

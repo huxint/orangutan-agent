@@ -31,9 +31,6 @@
       {
         "tool_pattern": "*",
         "capability": "egress_http"
-      },
-      {
-        "tool_pattern": "MemoryRemember"
       }
     ]
   }

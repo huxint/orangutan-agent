@@ -132,7 +132,7 @@ core::ToolDef effect_tool() {
       .name = "RecordEffect",
       .description = "Record a controlled effect",
       .input_schema_json = R"({"type":"object","additionalProperties":false})",
-      .required_capabilities = {core::Capability::write_memory},
+      .required_capabilities = {core::Capability::write_file},
   };
 }
 

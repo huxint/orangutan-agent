@@ -141,8 +141,8 @@ struct SessionFixture {
   }
 
   std::int64_t worker_session_count() const {
-    auto connection = storage::Connection::open({.path = std::string{assembly.sessions_path()},
-                                                 .mode = storage::OpenMode::read_only});
+    auto connection = storage::Connection::open(
+        {.path = std::string{assembly.sessions_path()}, .mode = storage::OpenMode::read_only});
     REQUIRE(connection.has_value());
     auto statement = connection->prepare("SELECT COUNT(*) FROM sessions WHERE agent_key = 'worker'");
     REQUIRE(statement.has_value());
@@ -287,7 +287,7 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
   });
 }
 
-TEST_CASE("a child memory index cannot exceed its parent's read permission",
+TEST_CASE("child memory uses the inherited scope instead of generic tool permissions",
           "[integration][bootstrap][collaboration][memory]") {
   orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     SessionFixture fixture{
@@ -312,8 +312,8 @@ TEST_CASE("a child memory index cannot exceed its parent's read permission",
     REQUIRE(provider.requests.size() == 3);
     for (const auto& request : provider.requests) {
       REQUIRE(request.system_prompt.has_value());
-      CHECK(request.system_prompt->contains("Memory index unavailable (permission_denied)"));
-      CHECK_FALSE(request.system_prompt->contains("PARENT_PRIVATE_MEMORY"));
+      CHECK_FALSE(request.system_prompt->contains("Memory index unavailable"));
+      CHECK(request.system_prompt->contains("PARENT_PRIVATE_MEMORY"));
     }
     auto after = co_await fixture.assembly.longterm_memory_backend()->get(note.key);
     REQUIRE(after.has_value());
@@ -362,12 +362,12 @@ TEST_CASE("AgentRun child writes obey both parent and child policy", "[integrati
   });
 }
 
-TEST_CASE("AgentRun refuses spawning without the parent's capability", "[integration][bootstrap][collaboration]") {
+TEST_CASE("AgentRun uses functional admission instead of generic tool permissions",
+          "[integration][bootstrap][collaboration]") {
   orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
-    SessionFixture fixture{
-        io.get_executor(),
-        policies(R"({"allow":[{"tool_pattern":"*"}],"deny":[{"tool_pattern":"*","capability":"spawn_agent"}]})",
-                 R"({"allow":[{"tool_pattern":"*"}]})")};
+    SessionFixture fixture{io.get_executor(),
+                           policies(R"({"allow":[{"tool_pattern":"*"}],"deny":[{"tool_pattern":"AgentRun"}]})",
+                                    R"({"allow":[{"tool_pattern":"*"}]})")};
     ScriptedProvider provider{{calls({call("child-1", "AgentRun", R"({"agent":"worker","prompt":"inspect"})")}),
                                answer("done"),
                                answer("done")}};
@@ -376,10 +376,10 @@ TEST_CASE("AgentRun refuses spawning without the parent's capability", "[integra
 
     auto result = co_await (*session)->run_prompt({.prompt = "delegate"});
 
-    REQUIRE(provider.requests.size() == 2);
+    REQUIRE(provider.requests.size() == 3);
     REQUIRE(result.has_value());
-    REQUIRE(result_in(provider.requests[1], "child-1").is_error);
-    REQUIRE(fixture.worker_session_count() == 0);
+    REQUIRE_FALSE(result_in(provider.requests[2], "child-1").is_error);
+    REQUIRE(fixture.worker_session_count() == 1);
   });
 }
 
@@ -645,21 +645,22 @@ TEST_CASE("AgentRun child writes proceed after bounded approval", "[integration]
   });
 }
 
-TEST_CASE("AgentSession rejects overlapping prompts and releases admission after completion", "[bootstrap][collaboration]") {
+TEST_CASE("AgentSession rejects overlapping prompts and releases admission after completion",
+          "[bootstrap][collaboration]") {
   orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     SessionFixture fixture{io.get_executor()};
     ScriptedProvider provider{{answer("first"), answer("second")}};
     auto session = bootstrap::AgentSession::create(fixture.options(provider));
     REQUIRE(session);
     std::optional<core::Result<agent::PromptResult>> nested;
-    fixture.assembly.hook_bus().subscribe({
-        .id = "reenter-session",
-        .observe = [&](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> {
-          if (!nested) {
-            nested = std::unexpected(core::Error::internal("pending"));
-            nested = co_await (*session)->run_prompt({.prompt = "overlap"});
-          }
-        }}, {hook::Event::provider_request});
+    fixture.assembly.hook_bus().subscribe({.id = "reenter-session",
+                                           .observe = [&](hook::Event, hook::PayloadPtr) -> async::Awaitable<void> {
+                                             if (!nested) {
+                                               nested = std::unexpected(core::Error::internal("pending"));
+                                               nested = co_await (*session)->run_prompt({.prompt = "overlap"});
+                                             }
+                                           }},
+                                          {hook::Event::provider_request});
     auto first = co_await (*session)->run_prompt({.prompt = "first prompt"});
     REQUIRE(first);
     REQUIRE(nested);
@@ -681,10 +682,10 @@ TEST_CASE("AgentRun can dispatch child tools with one parallel slot", "[bootstra
     const auto names = std::array{std::string{"worker"}};
     REQUIRE(tool::register_agent_run(registry, names));
     agent::ToolScheduler scheduler{io.get_executor(), registry, {.max_parallel_tools = 1}};
-    ScriptedProvider provider{{
-        calls({call("child", "AgentRun", R"({"agent":"worker","prompt":"write a file"})")}),
-        calls({call("write", "FileWrite", R"({"path":"single-slot.txt","content":"done"})")}),
-        answer("child done"), answer("parent done")}};
+    ScriptedProvider provider{{calls({call("child", "AgentRun", R"({"agent":"worker","prompt":"write a file"})")}),
+                               calls({call("write", "FileWrite", R"({"path":"single-slot.txt","content":"done"})")}),
+                               answer("child done"),
+                               answer("parent done")}};
     auto options = fixture.options(provider);
     options.registry = &registry;
     options.scheduler = &scheduler;
@@ -705,7 +706,8 @@ TEST_CASE("AgentSession releases prompt admission after provider failure", "[boo
   public:
     async::Awaitable<core::Result<provider::Response>>
     send(provider::Request, provider::ModelTarget, provider::EventSink* = nullptr) const override {
-      if (attempts++ == 0) co_return std::unexpected(core::Error::upstream("controlled failure"));
+      if (attempts++ == 0)
+        co_return std::unexpected(core::Error::upstream("controlled failure"));
       co_return answer("recovered");
     }
     mutable int attempts{0};

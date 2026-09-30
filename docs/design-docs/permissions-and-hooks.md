@@ -4,6 +4,13 @@ The policy core computes a decision from explicit rules, mode, tool, input and
 capabilities. It does not prompt, perform IO or execute the tool. Dispatch owns
 those effects after the decision.
 
+This generic policy governs external tool effects. Internal memory, task state
+and configured-agent coordination use explicit runtime registration instead.
+Their boundaries are host-selected availability, scope, validation and resource
+limits, with memory-specific write gates. They never evaluate allow/deny/ask,
+even in strict mode. An internal operation grants no authority for an external
+operation attempted by a child.
+
 ## Decisions
 
 `RuleSet` is an owned sequence of rule values; dispatch borrows a const span.
@@ -11,12 +18,13 @@ those effects after the decision.
 capability scope and optional RE2 input expression. For each required capability,
 precedence is explicit deny, then allow, then ask; the mode supplies the unmatched
 default. Within a verdict, the first matching rule supplies its reason and
-approval policy. An unscoped rule applies to the whole tool.
+approval policy. An unscoped rule applies to the whole permissioned tool.
 
 Every required capability must be authorized. Combine capability decisions as
 deny, then ask, then allow; a read grant cannot authorize a tool's write effect.
-Combined asks use the smallest replay budget and shortest lifetime. A tool with
-no declared capabilities still requires an unscoped rule or the mode default.
+Combined asks use the smallest replay budget and shortest lifetime. A
+permissioned tool with no declared capabilities still requires an unscoped rule
+or the mode default.
 
 Strict and sandboxed modes deny unmatched effects. Default mode asks for unmatched
 effects and installs read-side allow rules. Permissive mode allows unmatched
@@ -32,11 +40,11 @@ input and every required capability, then applies `permission::intersect`.
 Deny dominates ask, which dominates allow. When both decisions ask, the replay
 budget and approval lifetime use their respective minima. An allow in one policy
 cannot satisfy an unmatched or denied requirement in the other. Scheduler context
-snapshots retain this parent policy, so hook rewrites and automatic recall obey
-the same restriction.
+snapshots retain this parent policy, so rewritten external effects obey the
+same restriction. Automatic recall uses the inherited memory scope instead.
 
-`AgentRun` itself requires `spawn_agent`. The host assigns a fresh child approval
-identity and does not forward parent grants; any child approval binds that child
+`AgentRun` uses configured names, functional enablement and admission bounds.
+The host assigns a fresh child approval identity and does not forward parent grants; any child approval binds that child
 and the exact final input.
 
 ## Approvals
@@ -115,3 +123,32 @@ enum class Event {
 
 [tool-runtime](tool-runtime.md) owns dispatch order;
 [async-model](async-model.md) owns cancellation and borrowed state.
+
+## Coordination And Task Ownership
+
+AgentRun, TaskGet and TaskCancel are runtime operations without generic tool
+approval. Background execution owns a copy of the parent's rules (recompiling
+regex values) and creates the child's own rules before returning the receipt.
+Child external effects still intersect these policies after hook rewrites, even
+after the parent session is destroyed. Approval grants and parent event sinks
+are not forwarded.
+
+The service matches parent session ID, scope, agent and identity for every task
+lookup/control operation. Possession of an ID never grants access. Host task
+commands follow authenticated channel admission and publish `channel_action`;
+model calls retain validation, audit and hook observations. Team messaging, skill
+activation and scheduling have no current runtime tools; future implementations
+must define their concrete functional boundaries.
+External messages to people remain subject to channel/transport authorization.
+
+This separation is Orangutan's product contract, not a claim that every agent
+uses it. Claude Code's [subagent documentation](https://code.claude.com/docs/en/sub-agents)
+allows disabling Agent through permission rules, and its
+[permission reference](https://code.claude.com/docs/en/permissions) documents Agent
+parameter rules. Its [auto memory](https://code.claude.com/docs/en/memory#auto-memory)
+is enabled and scoped as a feature. OpenCode's
+[task implementation](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/task.ts)
+consults `ctx.ask`, while its
+[default agent policy](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/agent/agent.ts)
+defaults to allow. Configurability is distinct from prompting for every internal
+operation; Orangutan deliberately uses functional controls for these operations.

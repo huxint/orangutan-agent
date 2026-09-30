@@ -154,7 +154,7 @@ private:
 }
 
 [[nodiscard]] core::Result<void> admit_tool_use_ids(std::span<const core::ToolUseContent> uses,
-                                                   std::unordered_set<std::string>& seen) {
+                                                    std::unordered_set<std::string>& seen) {
   for (std::size_t i = 0; i < uses.size(); ++i) {
     const auto& id = uses[i].id;
     if (id.empty() || !seen.insert(id).second) {
@@ -185,15 +185,20 @@ void add_usage(provider::Usage& total, const provider::Usage& next) {
 
 class ScopedDispatchContext {
 public:
-  ScopedDispatchContext(tool::DispatchContext& context, std::optional<core::TurnId> parent_turn_id) noexcept
-      : context_{&context}, previous_parent_turn_id_{context.parent_turn_id}, previous_now_{context.now} {
+  ScopedDispatchContext(tool::DispatchContext& context,
+                        std::optional<core::TurnId> parent_turn_id,
+                        std::optional<std::span<const std::string>> active_tools) noexcept
+      : context_{&context}, previous_parent_turn_id_{context.parent_turn_id}, previous_now_{context.now},
+        previous_active_tools_{context.active_tools} {
     context.parent_turn_id = std::move(parent_turn_id);
     context.now = core::time::now_utc();
+    context.active_tools = active_tools;
   }
 
   ~ScopedDispatchContext() {
     context_->parent_turn_id = std::move(previous_parent_turn_id_);
     context_->now = previous_now_;
+    context_->active_tools = previous_active_tools_;
   }
 
   ScopedDispatchContext(const ScopedDispatchContext&) = delete;
@@ -201,8 +206,10 @@ public:
 
 private:
   tool::DispatchContext* context_;
+  // The caller retains the tool selection through dispatch cleanup.
   std::optional<core::TurnId> previous_parent_turn_id_;
   core::Time previous_now_;
+  std::optional<std::span<const std::string>> previous_active_tools_;
 };
 
 [[nodiscard]] std::string render_tool_error(const core::Error& error) {
@@ -433,24 +440,24 @@ public:
       // A complete tool block can still belong to a truncated or cancelled
       // response. Check completion before admitting any effects or transcript.
       if (response->stop_reason == core::StopReason::cancelled) {
-        co_return std::unexpected(co_await observer.fail(
-            with_cancellation_phase(core::Error::cancelled(), "provider_complete"),
-            "provider_complete", progress()));
+        co_return std::unexpected(
+            co_await observer.fail(with_cancellation_phase(core::Error::cancelled(), "provider_complete"),
+                                   "provider_complete",
+                                   progress()));
       }
       if (response->stop_reason != core::StopReason::end_turn &&
           response->stop_reason != core::StopReason::stop_sequence &&
           response->stop_reason != core::StopReason::tool_use) {
         auto error = core::Error::upstream(response->stop_reason == core::StopReason::max_tokens
-                                              ? "model output limit reached before response completion"
-                                              : "provider response did not complete")
+                                               ? "model output limit reached before response completion"
+                                               : "provider response did not complete")
                          .with("stop_reason", std::string{core::enum_name(response->stop_reason)});
         co_return std::unexpected(co_await observer.fail(std::move(error), "provider_complete", progress()));
       }
 
       const auto tool_uses = tool_uses_in(response->blocks);
       if (auto admitted = admit_tool_use_ids(tool_uses, tool_use_ids); !admitted) {
-        co_return std::unexpected(
-            co_await observer.fail(std::move(admitted).error(), "provider_complete", progress()));
+        co_return std::unexpected(co_await observer.fail(std::move(admitted).error(), "provider_complete", progress()));
       }
       if (response->stop_reason == core::StopReason::tool_use || !tool_uses.empty()) {
         if (inputs.tools == nullptr || inputs.dispatch_context == nullptr) {
@@ -495,7 +502,9 @@ public:
         core::Result<std::vector<ToolBatchResult>> batch_result =
             std::unexpected(core::Error::internal("agent loop: scheduler produced no batch result"));
         {
-          ScopedDispatchContext dispatch_context{*inputs.dispatch_context, dispatch_parent_turn_id(inputs)};
+          ScopedDispatchContext dispatch_context{*inputs.dispatch_context,
+                                                 dispatch_parent_turn_id(inputs),
+                                                 inputs.active_tools};
           batch_result = co_await scheduler->run_batch(std::move(batch), *inputs.dispatch_context);
         }
 

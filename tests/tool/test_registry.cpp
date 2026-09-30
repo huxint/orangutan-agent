@@ -491,27 +491,25 @@ TEST_CASE("register_file_read advertises a `read_file` capability and a path sch
   REQUIRE(def->input_schema_json.contains("\"path\""));
 }
 
-TEST_CASE("register_memory_recall advertises read_memory and its input schema", "[unit][tool][memory_recall]") {
+TEST_CASE("register_memory_recall advertises a scoped runtime read schema", "[unit][tool][memory_recall]") {
   tool::Registry registry;
   REQUIRE(tool::register_memory_recall(registry).has_value());
   REQUIRE(registry.size() == 1);
   const auto* def = registry.find(tool::kMemoryRecallName);
   REQUIRE(def != nullptr);
-  REQUIRE(def->required_capabilities.size() == 1);
-  REQUIRE(def->required_capabilities[0] == core::Capability::read_memory);
+  REQUIRE(def->required_capabilities.empty());
   REQUIRE(def->input_schema_json.contains("\"query\""));
   REQUIRE(def->input_schema_json.contains("\"limit\""));
   REQUIRE(def->input_schema_json.contains("\"kinds\""));
 }
 
-TEST_CASE("register_memory_remember advertises write_memory and its input schema", "[unit][tool][memory_remember]") {
+TEST_CASE("register_memory_remember advertises a scoped runtime write schema", "[unit][tool][memory_remember]") {
   tool::Registry registry;
   REQUIRE(tool::register_memory_remember(registry).has_value());
   REQUIRE(registry.size() == 1);
   const auto* def = registry.find(tool::kMemoryRememberName);
   REQUIRE(def != nullptr);
-  REQUIRE(def->required_capabilities.size() == 1);
-  REQUIRE(def->required_capabilities[0] == core::Capability::write_memory);
+  REQUIRE(def->required_capabilities.empty());
   REQUIRE(def->input_schema_json.contains("\"id\""));
   REQUIRE(def->input_schema_json.contains("\"kind\""));
   REQUIRE(def->input_schema_json.contains("\"title\""));
@@ -519,14 +517,13 @@ TEST_CASE("register_memory_remember advertises write_memory and its input schema
   REQUIRE(def->input_schema_json.contains("\"importance\""));
 }
 
-TEST_CASE("register_memory_forget advertises write_memory and its input schema", "[unit][tool][memory_forget]") {
+TEST_CASE("register_memory_forget advertises a scoped runtime write schema", "[unit][tool][memory_forget]") {
   tool::Registry registry;
   REQUIRE(tool::register_memory_forget(registry).has_value());
   REQUIRE(registry.size() == 1);
   const auto* def = registry.find(tool::kMemoryForgetName);
   REQUIRE(def != nullptr);
-  REQUIRE(def->required_capabilities.size() == 1);
-  REQUIRE(def->required_capabilities[0] == core::Capability::write_memory);
+  REQUIRE(def->required_capabilities.empty());
   REQUIRE(def->input_schema_json.contains("\"id\""));
 }
 
@@ -548,7 +545,6 @@ TEST_CASE("MemoryRecall delegates parsed query through DispatchContext", "[unit]
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kMemoryRecallName},
-        .capability = core::Capability::read_memory,
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
@@ -588,7 +584,6 @@ TEST_CASE("MemoryRecall reports missing runtime service as a model-repairable er
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kMemoryRecallName},
-        .capability = core::Capability::read_memory,
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
@@ -611,7 +606,6 @@ TEST_CASE("MemoryRecall exposes index browsing and exact note reads", "[unit][to
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kMemoryRecallName},
-        .capability = core::Capability::read_memory,
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
@@ -646,7 +640,6 @@ TEST_CASE("ambiguous or malformed memory selectors fail before approval", "[unit
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::ask,
         .tool_pattern = std::string{tool::kMemoryRecallName},
-        .capability = core::Capability::read_memory,
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
@@ -683,7 +676,6 @@ TEST_CASE("MemoryRemember delegates parsed record fields through DispatchContext
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kMemoryRememberName},
-        .capability = core::Capability::write_memory,
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
@@ -729,7 +721,6 @@ TEST_CASE("MemoryRemember reports missing runtime service as a model-repairable 
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kMemoryRememberName},
-        .capability = core::Capability::write_memory,
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
@@ -756,7 +747,6 @@ TEST_CASE("MemoryRemember rejects malformed input as invalid_argument", "[unit][
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kMemoryRememberName},
-        .capability = core::Capability::write_memory,
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
@@ -795,7 +785,6 @@ TEST_CASE("MemoryForget delegates parsed id through DispatchContext", "[unit][to
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kMemoryForgetName},
-        .capability = core::Capability::write_memory,
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
@@ -831,7 +820,6 @@ TEST_CASE("MemoryForget reports missing runtime service as a model-repairable er
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kMemoryForgetName},
-        .capability = core::Capability::write_memory,
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
@@ -855,7 +843,6 @@ TEST_CASE("MemoryForget rejects malformed input as invalid_argument", "[unit][to
     auto rules = single_rule(permission::Rule{
         .verdict = permission::Verdict::allow,
         .tool_pattern = std::string{tool::kMemoryForgetName},
-        .capability = core::Capability::write_memory,
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
@@ -1014,24 +1001,27 @@ TEST_CASE("FileRead windows have defaults and lossless continuation", "[unit][to
     });
     permission::RecordingAuditSink sink;
     auto ctx = make_ctx(io, rules, sink, permission::Mode::strict);
-    auto first = co_await registry.dispatch(tool::kFileReadName,
-        nlohmann::json{{"path", file.string()}}.dump(), ctx);
+    auto first = co_await registry.dispatch(tool::kFileReadName, nlohmann::json{{"path", file.string()}}.dump(), ctx);
     REQUIRE(first.has_value());
     auto [header, body] = split_file_read_envelope(first->text);
     REQUIRE(header.contains("continue with offset=2001"));
     REQUIRE(body == prefix);
     auto next = co_await registry.dispatch(tool::kFileReadName,
-        nlohmann::json{{"path", file.string()}, {"offset", 2001}}.dump(), ctx);
+                                           nlohmann::json{{"path", file.string()}, {"offset", 2001}}.dump(),
+                                           ctx);
     REQUIRE(next.has_value());
     REQUIRE(split_file_read_envelope(next->text).second == "last line");
     REQUIRE(split_file_read_envelope(next->text).first.contains("end of file"));
-    auto end = co_await registry.dispatch(tool::kFileReadName,
-        nlohmann::json{{"path", file.string()}, {"offset", 2002}, {"limit", 1}}.dump(), ctx);
+    auto end =
+        co_await registry.dispatch(tool::kFileReadName,
+                                   nlohmann::json{{"path", file.string()}, {"offset", 2002}, {"limit", 1}}.dump(),
+                                   ctx);
     REQUIRE(end.has_value());
     REQUIRE(split_file_read_envelope(end->text).second.empty());
     REQUIRE(split_file_read_envelope(end->text).first.contains("end of file"));
     auto limited = co_await registry.dispatch(tool::kFileReadName,
-        nlohmann::json{{"path", file.string()}, {"limit", 1}}.dump(), ctx);
+                                              nlohmann::json{{"path", file.string()}, {"limit", 1}}.dump(),
+                                              ctx);
     REQUIRE(limited.has_value());
     REQUIRE(split_file_read_envelope(limited->text).second == "line\n");
   });

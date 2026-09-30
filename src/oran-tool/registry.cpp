@@ -229,6 +229,9 @@ DispatchContext DispatchContext::for_now(const DispatchContext& prototype, bool 
       .memory_remember = prototype.memory_remember,
       .memory_forget = prototype.memory_forget,
       .agent_run = prototype.agent_run,
+      .task_get = prototype.task_get,
+      .task_cancel = prototype.task_cancel,
+      .active_tools = prototype.active_tools,
       .workspace = prototype.workspace,
       .path_locks = prototype.path_locks,
       .resolved_path = std::nullopt,
@@ -257,13 +260,15 @@ core::Result<void> Registry::add(core::ToolDef def, Handler handler) {
   return add_prepared(std::move(def), std::move(prepare));
 }
 
-core::Result<void> Registry::add_prepared(core::ToolDef def, Preparer prepare) {
+core::Result<void> Registry::add_prepared(core::ToolDef def, Preparer prepare, DispatchPolicy policy) {
   if (def.name.empty()) {
     return std::unexpected(core::Error::invalid_argument("tool definition must have a non-empty name"));
   }
   if (!prepare) {
     return std::unexpected(core::Error::invalid_argument("tool preparer must not be empty").with("tool", def.name));
   }
+  if (policy == DispatchPolicy::runtime && !def.required_capabilities.empty())
+    return std::unexpected(core::Error::invalid_argument("runtime tools cannot declare external capabilities"));
   if (auto valid_schema = detail::validate_input_schema(def.name, def.input_schema_json); !valid_schema) {
     return std::unexpected(std::move(valid_schema).error());
   }
@@ -273,6 +278,7 @@ core::Result<void> Registry::add_prepared(core::ToolDef def, Preparer prepare) {
   }
   it->second.def = std::move(def);
   it->second.prepare = std::move(prepare);
+  it->second.policy = policy;
   it->second.insertion_index = next_index_++;
   return {};
 }
@@ -312,6 +318,9 @@ std::vector<core::ToolDef> Registry::catalog() const {
 async::Awaitable<core::Result<Output>>
 Registry::dispatch(std::string_view name, std::string_view input_json, DispatchContext& ctx) const {
   ctx.resolved_path.reset();
+  if (ctx.active_tools && !std::ranges::contains(*ctx.active_tools, name))
+    co_return std::unexpected(
+        core::Error::not_found("tool is not enabled for this turn").with("tool", std::string{name}));
   const auto it = entries_.find(name);
   if (it == entries_.end()) {
     co_return std::unexpected(make_lookup_error(name));
@@ -352,6 +361,10 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
           break;
         case hook::HookDecisionKind::require_approval:
           hook_reason = hook_decision_reason(hook_decision, "hook require_approval");
+          if (entry.policy == DispatchPolicy::runtime) {
+            hook_blocked = true;
+            hook_reason = "runtime tools do not support approval escalation";
+          }
           break;
       }
     }
@@ -375,14 +388,16 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
     if (prepared && !prepared->execute) {
       prepared = std::unexpected(core::Error::internal("tool preparation returned no executor"));
     }
+    if (prepared && prepared->path && entry.policy == DispatchPolicy::runtime)
+      prepared = std::unexpected(core::Error::invalid_argument("runtime tools cannot request filesystem authority"));
   }
 
   core::Result<detail::PathLockGuard> path_lock;
   if (prepared && prepared->path && ctx.workspace != nullptr && ctx.path_locks != nullptr) {
     if (auto direction = detail::path_lock_direction(entry.def.required_capabilities)) {
       if (auto key = ctx.workspace->lock_key(prepared->path->path, *direction)) {
-        const auto mode = *direction == LockDirection::read ? detail::PathLockMode::shared
-                                                            : detail::PathLockMode::exclusive;
+        const auto mode =
+            *direction == LockDirection::read ? detail::PathLockMode::shared : detail::PathLockMode::exclusive;
         const auto wait_started = std::chrono::steady_clock::now();
         path_lock = co_await ctx.path_locks->table_->acquire(ctx.executor, std::move(*key), mode);
         ctx.now = core::Time{ctx.now.to_system_time_point() + std::chrono::duration_cast<core::Time::clock::duration>(
@@ -411,12 +426,14 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
                                                                                 : hook_veto_error(name, hook_reason));
     }
   } else if (!prepared) {
-    auto event = build_event(
-        name, effective_input,
-        permission::Decision{.verdict = permission::Verdict::deny,
-                             .reason = prepared.error().kind() == core::ErrorKind::invalid_argument
-                                           ? "invalid_tool_input" : "tool_preparation_failed"},
-        ctx, with_hook_facts("{}"));
+    auto event = build_event(name,
+                             effective_input,
+                             permission::Decision{.verdict = permission::Verdict::deny,
+                                                  .reason = prepared.error().kind() == core::ErrorKind::invalid_argument
+                                                                ? "invalid_tool_input"
+                                                                : "tool_preparation_failed"},
+                             ctx,
+                             with_hook_facts("{}"));
     if (auto recorded = co_await ctx.audit.record(std::move(event)); !recorded) {
       result = std::unexpected(std::move(recorded).error());
     } else {
@@ -427,8 +444,11 @@ Registry::dispatch(std::string_view name, std::string_view input_json, DispatchC
                                ? detail::resolve_tool_path(*ctx.workspace, *prepared->path)
                                : detail::PathResolutionReport{};
     ctx.resolved_path = std::move(path_resolution.path);
-    auto decision = permission::evaluate(ctx.rules, name, effective_input, entry.def.required_capabilities, ctx.mode);
-    if (ctx.parent_policy) {
+    auto decision = permission::Decision{.verdict = permission::Verdict::allow, .reason = "runtime_tool"};
+    if (entry.policy == DispatchPolicy::permissioned) {
+      decision = permission::evaluate(ctx.rules, name, effective_input, entry.def.required_capabilities, ctx.mode);
+    }
+    if (entry.policy == DispatchPolicy::permissioned && ctx.parent_policy) {
       auto parent = permission::evaluate(ctx.parent_policy->rules,
                                          name,
                                          effective_input,

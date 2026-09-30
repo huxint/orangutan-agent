@@ -26,9 +26,9 @@ constexpr auto kTypedPermissionsConfig = std::string_view{R"json(
   "permissions": {
     "allow": [
       {"tool_pattern": "FileRead"},
-      {"tool_pattern": "MemoryRemember"},
+      {"tool_pattern": "FileEdit"},
       {"tool_pattern": "*", "capability": "read_file"},
-      {"tool_pattern": "*", "capability": "read_memory"},
+      {"tool_pattern": "*", "capability": "list_directory"},
       {"tool_pattern": "*", "capability": "egress_http"}
     ],
     "deny": [
@@ -42,9 +42,9 @@ constexpr auto kTypedPermissionsConfig = std::string_view{R"json(
       {"tool_pattern": "*", "capability": "write_file"},
       {"tool_pattern": "*", "capability": "edit_file"},
       {"tool_pattern": "*", "capability": "spawn_subprocess"},
-      {"tool_pattern": "*", "capability": "write_memory"},
+      {"tool_pattern": "*", "capability": "signal_subprocess"},
       {"tool_pattern": "*", "capability": "egress_websocket"},
-      {"tool_pattern": "*", "capability": "schedule_job"}
+      {"tool_pattern": "*", "capability": "external_mcp"}
     ]
   },
   "agents": {
@@ -66,9 +66,9 @@ constexpr auto kInputPatternPermissionsConfig = std::string_view{R"json(
   "permissions": {
     "allow": [
       {"tool_pattern": "FileRead"},
-      {"tool_pattern": "MemoryRemember"},
+      {"tool_pattern": "FileEdit"},
       {"tool_pattern": "*", "capability": "read_file"},
-      {"tool_pattern": "*", "capability": "read_memory"},
+      {"tool_pattern": "*", "capability": "list_directory"},
       {"tool_pattern": "*", "capability": "egress_http"}
     ],
     "deny": [

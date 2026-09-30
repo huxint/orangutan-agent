@@ -34,6 +34,12 @@ Result<State> decode_state(std::string_view bytes) {
                                                            : std::optional{pending.at("answer").get<std::string>()},
                   .confirmed_parts = count.get<std::size_t>(),
                   .send_inflight = pending.at("send_inflight").get<bool>()};
+      state.pending->task_id = pending.value("task_id", std::string{});
+      if (!state.pending->task_id.empty()) {
+        auto task = core::parse_turn_id_hex(state.pending->task_id);
+        if (!task || core::is_zero_turn_id(*task))
+          return std::unexpected(Error::parsing("invalid pending background task identifier"));
+      }
     }
     return state;
   } catch (const Json::exception&) {
@@ -50,6 +56,8 @@ Json encode_state(const State& state) {
                    {"answer", entry.answer ? Json(*entry.answer) : Json(nullptr)},
                    {"confirmed_parts", entry.confirmed_parts},
                    {"send_inflight", entry.send_inflight}};
+    if (!entry.task_id.empty())
+      pending["task_id"] = entry.task_id;
   }
   return Json{{"bot", state.bot},
               {"user", state.user},
@@ -89,10 +97,14 @@ Result<void> acknowledge_pending(const io::PrivateDirectory& directory, std::int
     return std::unexpected(state.error());
   if (!state->pending || state->pending->update.at("update_id") != update)
     return std::unexpected(Error{core::ErrorKind::conflict, "pending update differs from acknowledgment"});
-  auto archived = directory.write("handled-" + std::to_string(update) + ".json", **bytes);
+  const auto task_id = state->pending->task_id;
+  auto archived = directory.write(task_id.empty() ? "handled-" + std::to_string(update) + ".json"
+                                                  : "handled-task-" + task_id + ".json",
+                                  **bytes);
   if (!archived)
     return std::unexpected(archived.error());
-  state->next_update = update + 1;
+  if (task_id.empty())
+    state->next_update = update + 1;
   state->pending.reset();
   return directory.write("state.json", encode_state(*state).dump(2) + "\n");
 }

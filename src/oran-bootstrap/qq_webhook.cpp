@@ -115,8 +115,7 @@ async::Awaitable<core::Result<channel::Response>> accept_qq_webhook(QQWebhookReq
                             {"sender", (**message).sender},
                             {"event_id", (**message).event_id}}
                            .dump();
-    const std::array required{core::Capability::write_memory};
-    const auto decision = permission::evaluate(rules, "QQInbox", input, required, permission::Mode::strict);
+    const auto decision = permission::evaluate(rules, "QQInbox", input, {}, permission::Mode::strict);
     co_await hooks.publish_advisory(
         hook::Event::channel_action,
         hook::ChannelActionPayload{"qq", account.id, "QQInbox", decision.verdict == permission::Verdict::allow});

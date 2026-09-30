@@ -41,7 +41,8 @@ These are model behavior instructions. The runtime guarantees the discovery,
 read and write paths, but does not infer durability, force a write every turn, or
 claim that a successful scripted test proves spontaneous model behavior. Current
 owner instructions and current evidence take precedence over saved notes.
-Writes still require the configured permission; visibility never grants a write.
+Writes use the host-bound scope and memory write gate, without generic tool approval.
+Functional tool selection and backend enablement govern availability.
 
 Memory normally changes how the agent does the current work, not what topic it
 answers. Consultation is gated by relevance to the current request; unrelated
@@ -84,10 +85,10 @@ is enabled by default when a backend is present, with up to 20 entries and an
 8192-byte text budget. An explicit `AgentSessionOptions::longterm_recall` overrides
 configuration. Exact caller-supplied `memory_framing` replaces default orientation;
 explicitly enabling both is invalid. Disabling automatic orientation leaves
-authorized model-directed memory tools available.
+enabled model-directed memory tools available.
 
 Orientation dispatches MemoryRecall with no search query. It uses the ordinary
-prepared-call, permission, hook, audit and output-cap boundaries. The returned
+prepared-call, runtime policy, hook, audit and output-cap boundaries. The returned
 index is fixed for the provider/tool iterations in that prompt; an accepted write
 appears in the next prompt's index, while its tool result is available immediately
 in the current conversation. Lookup times and scores never enter index text.
@@ -189,7 +190,7 @@ MemoryRecall has three uses:
 ID and query are mutually exclusive. Offset applies only to browsing. The tool
 limit is 1–20, defaulting to 20 for the index, one for an exact read, and five for
 search. JSON cannot select a scope. Ambiguous selectors, blank/control-containing
-text, invalid UTF-8 and out-of-range bounds fail before authorization or approval.
+text, invalid UTF-8 and out-of-range bounds fail before touching the backend.
 
 `Fts5Backend` stores records in `memory.db` and updates its FTS index
 transactionally. `Backend::list` returns a page plus one look-ahead cue. SQLite
@@ -235,7 +236,8 @@ explains kind selection, discovery priority and these metadata defaults.
 Retrieval values, tool-result JSON and memory-read hook hits carry one lexical
 `score`.
 
-Memory tools enter through validation, permissions, hooks and audit. Bindings
+Memory tools use runtime dispatch with validation, hooks and audit. Generic
+allow/deny/ask rules do not apply. Bindings
 receive scope from the host. Writes publish a blocking pre-write gate; accepted
 writes, reads and removals publish advisory observations. `memory_read_after`
 uses source `MemoryRecall` for full records and `MemoryRecall:index` for the
@@ -269,7 +271,7 @@ answer; an assertion that the model "remembers" is not persistence evidence.
 | An unrelated trivial question with saved preferences/projects in the index | Answer the question without unrelated recall, profile summaries or unsupported durable writes. |
 | "你记得我对回复格式有什么要求？" | Read the relevant note and answer the memory question directly, without unrelated notes or internal IDs. |
 | "记住：以后先给结论。" | Save or update the preference, then briefly confirm the successful save. |
-| Read or write permission is refused | Continue using allowed context; do not leak a note or claim that a refused write persisted. |
+| The memory backend is disabled or a memory write gate refuses a note | Continue with available context; do not claim that a refused write persisted. |
 
 Record consultation success, durable-write success, stale-note use, unwanted
 writes, unsolicited memory disclosures and token cost across repeated runs of

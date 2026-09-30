@@ -170,13 +170,13 @@ TEST_CASE("capability scope round-trips in reason for every verdict", "[unit][pe
   rs.push_back(Rule{
       .verdict = Verdict::ask,
       .tool_pattern = "Memory*",
-      .capability = Capability::write_memory,
+      .capability = Capability::write_file,
   });
 
-  constexpr std::array<Capability, 1> required{Capability::write_memory};
+  constexpr std::array<Capability, 1> required{Capability::write_file};
   const auto decision = perm::evaluate(rs, "MemoryRemember", std::span<const Capability>{required}, Mode::strict);
   REQUIRE(decision.verdict == Verdict::ask);
   REQUIRE(decision.reason.contains("ask"));
   REQUIRE(decision.reason.contains("Memory*"));
-  REQUIRE(decision.reason.contains("capability=write_memory"));
+  REQUIRE(decision.reason.contains("capability=write_file"));
 }

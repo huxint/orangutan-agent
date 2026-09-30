@@ -117,7 +117,8 @@ static async::Awaitable<Result<void>> run_impl(Options options,
                                                State& state,
                                                asio::any_io_executor worker,
                                                Presentation* presentation,
-                                               StatusReader status) {
+                                               StatusReader status,
+                                               BackgroundPort background) {
   const auto started = std::chrono::steady_clock::now();
   auto me = co_await request(api, hooks, PollMethod::getMe, Json::object());
   if (!me)
@@ -174,10 +175,15 @@ static async::Awaitable<Result<void>> run_impl(Options options,
     co_return response;
   };
   channel::RunTurn execute = [&](channel::Message message) -> async::Awaitable<Result<std::string>> {
-    if (presentation)
+    if (presentation && state.pending->task_id.empty())
       presentation->accepted();
     std::optional<core::TurnId> next_session;
     auto resolve = [&]() -> async::Awaitable<Result<std::string>> {
+      if (!state.pending->task_id.empty()) {
+        if (!background.complete)
+          co_return std::unexpected(Error::internal("background completion port is absent"));
+        co_return co_await background.complete(state.session, state.pending->task_id);
+      }
       const auto command = message.image ? std::nullopt : parse_command(message.text, username);
       if (!command)
         co_return co_await turn(std::move(message));
@@ -187,7 +193,22 @@ static async::Awaitable<Result<void>> run_impl(Options options,
         co_return command_help();
       if (command->name == "whoami")
         co_return std::format("Telegram 用户 ID：`{}`\n聊天 ID：`{}`", message.sender, message.conversation.chat);
+      if (command->name == "tasks" || command->name == "stop") {
+        if (!background.control)
+          co_return "此运行模式未启用后台任务。";
+        const bool stop = command->name == "stop";
+        co_await hooks.publish_advisory(hook::Event::channel_action,
+                                        hook::ChannelActionPayload{"telegram", bot, "ChannelTasks", true});
+        co_return background.control(state.session, stop ? TaskCommand::stop : TaskCommand::list);
+      }
       if (command->name == "new") {
+        if (background.control) {
+          co_await hooks.publish_advisory(hook::Event::channel_action,
+                                          hook::ChannelActionPayload{"telegram", bot, "ChannelTasks", true});
+          auto stopped = background.control(state.session, TaskCommand::stop);
+          if (!stopped)
+            co_return std::unexpected(stopped.error());
+        }
         auto id = core::generate_turn_id();
         if (!id)
           co_return std::unexpected(id.error());
@@ -217,7 +238,7 @@ static async::Awaitable<Result<void>> run_impl(Options options,
       co_return "未知命令。用 /help 查看可用命令。";
     };
     auto answer = co_await resolve();
-    if (presentation) {
+    if (presentation && state.pending->task_id.empty()) {
       auto drained = co_await presentation->prepare_final();
       if (!drained && answer)
         co_return std::unexpected(drained.error());
@@ -251,6 +272,8 @@ static async::Awaitable<Result<void>> run_impl(Options options,
       return std::unexpected(request.error());
     auto body = Json::parse(request->body);
     body["entities"] = final_parts[part].entities;
+    if (!state.pending->task_id.empty())
+      body.erase("reply_parameters");
     request->body = body.dump();
     return request;
   };
@@ -269,7 +292,7 @@ static async::Awaitable<Result<void>> run_impl(Options options,
                                     PollMethod::getUpdates,
                                     Json{{"offset", state.next_update},
                                          {"limit", 1},
-                                         {"timeout", 25},
+                                         {"timeout", background.active && background.active(state.session) ? 2 : 25},
                                          {"allowed_updates", Json::array({"message"})}});
     if (!updates) {
       if (++failures >= 5 || !updates.error().retryable())
@@ -283,8 +306,35 @@ static async::Awaitable<Result<void>> run_impl(Options options,
     failures = 0;
     if (!updates->is_array() || updates->size() > 1)
       co_return std::unexpected(Error::parsing("invalid Telegram update batch"));
-    if (updates->empty())
+    if (updates->empty()) {
+      if (background.next) {
+        auto task = background.next(state.session);
+        if (task) {
+          co_await hooks.publish_advisory(hook::Event::channel_action,
+                                          hook::ChannelActionPayload{"telegram", bot, "ChannelTasks", true});
+          state.pending =
+              Pending{.update = Json{{"update_id", state.next_update}}, .answer = std::nullopt, .task_id = *task};
+          saved = co_await persist(directory, state, hooks, worker);
+          if (!saved)
+            co_return std::unexpected(saved.error());
+          channel::Message event{
+              .conversation = {channel::Platform::telegram, bot, channel::ChatKind::direct, options.user, {}},
+              .event_id = "background-" + *task,
+              .message_id = "1",
+              .sender = options.user,
+              .text = "Background task completion"};
+          // There is no incoming Telegram message to react to or reply to.
+          auto delivered = co_await (*dispatcher)->handle(std::move(event));
+          if (!delivered)
+            co_return std::unexpected(delivered.error());
+          state.pending.reset();
+          saved = co_await persist(directory, state, hooks, worker);
+          if (!saved)
+            co_return std::unexpected(saved.error());
+        }
+      }
       continue;
+    }
     const auto& update = updates->front();
     if (!update.at("update_id").is_number_integer())
       co_return std::unexpected(Error::parsing("invalid Telegram update identifier"));
@@ -327,7 +377,8 @@ async::Awaitable<Result<void>> run(Options options,
                                    State& state,
                                    asio::any_io_executor worker,
                                    Presentation* presentation,
-                                   StatusReader status) {
+                                   StatusReader status,
+                                   BackgroundPort background) {
   try {
     co_return co_await run_impl(std::move(options),
                                 std::move(api),
@@ -338,7 +389,8 @@ async::Awaitable<Result<void>> run(Options options,
                                 state,
                                 worker,
                                 presentation,
-                                std::move(status));
+                                std::move(status),
+                                std::move(background));
   } catch (const Json::exception&) {
     co_return std::unexpected(Error::parsing("invalid Telegram host data"));
   } catch (...) {

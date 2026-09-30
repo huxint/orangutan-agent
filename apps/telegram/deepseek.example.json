@@ -3,7 +3,16 @@
   "runtime": {
     "workers": 4,
     "request_timeout_ms": 60000,
-    "prompt": {"active_tools": ["FileRead", "MemoryRecall", "MemoryRemember"]}
+    "prompt": {
+      "active_tools": [
+        "FileRead",
+        "MemoryRecall",
+        "MemoryRemember",
+        "AgentRun",
+        "TaskGet",
+        "TaskCancel"
+      ]
+    }
   },
   "profiles": {
     "deepseek": {
@@ -14,11 +23,23 @@
       "api_key_env": "ORAN_TELEGRAM_MODEL_KEY"
     }
   },
-  "routes": {"default": {"primary": "deepseek", "fallbacks": []}},
+  "routes": {
+    "default": {
+      "primary": "deepseek",
+      "fallbacks": []
+    }
+  },
   "permissions": {
     "allow": [
-      {"tool_pattern": "*", "capability": "egress_http"},
-      {"tool_pattern": "MemoryRemember"}
+      {
+        "tool_pattern": "*",
+        "capability": "egress_http"
+      }
     ]
+  },
+  "agents": {
+    "worker": {
+      "prompt_overlay": "Investigate the supplied task and return concise findings with evidence. Use only available tools."
+    }
   }
 }

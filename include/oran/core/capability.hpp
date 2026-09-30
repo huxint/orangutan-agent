@@ -1,9 +1,8 @@
 // include/oran/core/capability.hpp — runtime capability vocabulary.
 //
-// `Capability` is the v2 mechanism that ties tools (`oran-tool`) to
-// permission rules (`oran-permission`). Tools declare the capabilities they
-// need via `ToolDef::requires` (future slice); permission rules may scope
-// to a capability via `Rule::capability` (next slice).
+// Tools with external effects declare requirements via
+// `ToolDef::required_capabilities`; rules scope them through `Rule::capability`.
+// Internal memory and orchestration use host-owned functional boundaries.
 //
 // Stable string spelling and its inverse come from `core::enum_name(c)` /
 // `core::parse_enum<Capability>(text)` in `enum_names.hpp`. The set of all
@@ -35,20 +34,6 @@ enum class Capability : std::uint8_t {
   // process
   spawn_subprocess,
   signal_subprocess,
-  // memory
-  read_memory,
-  write_memory,
-  // orchestration
-  spawn_agent,
-  send_message_intra_team,
-  send_message_inter_team,
-  // automation
-  schedule_job,
-  modify_job,
-  run_job_now,
-  // skills
-  invoke_skill,
-  deactivate_skill,
   // misc
   external_mcp,
   runtime_loader,

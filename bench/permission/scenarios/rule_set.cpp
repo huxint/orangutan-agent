@@ -90,18 +90,18 @@ using permission::Verdict;
   });
   rules.push_back(Rule{
       .verdict = Verdict::allow,
-      .tool_pattern = "Memory*",
-      .capability = Capability::read_memory,
+      .tool_pattern = "Network*",
+      .capability = Capability::egress_http,
   });
   rules.push_back(Rule{
       .verdict = Verdict::ask,
-      .tool_pattern = "Memory*",
-      .capability = Capability::write_memory,
+      .tool_pattern = "File*",
+      .capability = Capability::write_file,
   });
   rules.push_back(Rule{
       .verdict = Verdict::ask,
-      .tool_pattern = "Automation*",
-      .capability = Capability::schedule_job,
+      .tool_pattern = "Shell*",
+      .capability = Capability::spawn_subprocess,
   });
   rules.push_back(Rule{
       .verdict = Verdict::deny,
@@ -159,7 +159,7 @@ void register_rule_set_scenarios(ankerl::nanobench::Bench& bench) {
       // every capability-bound rule filters out and the call falls through to
       // the unscoped rules (none of which match this tool name) and finally
       // to the mode default.
-      Capability::invoke_skill,
+      Capability::signal_subprocess,
       Capability::external_mcp,
   };
   static const std::string capability_tool = "ShellExec";

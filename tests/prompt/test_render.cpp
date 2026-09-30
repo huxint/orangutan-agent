@@ -110,7 +110,7 @@ TEST_CASE("Native tool fingerprints preserve field boundaries", "[unit][prompt]"
 TEST_CASE("Dispatch capabilities do not enter model-visible cache identity", "[unit][prompt]") {
   std::vector<core::ToolDef> tools{core::ToolDef::with_no_input("CustomLookup", "Find context")};
   const auto first = prompt::render(inputs_for(tools));
-  tools[0].required_capabilities = {core::Capability::read_memory};
+  tools[0].required_capabilities = {core::Capability::egress_http};
   REQUIRE(prompt::render(inputs_for(tools)) == first);
 }
 

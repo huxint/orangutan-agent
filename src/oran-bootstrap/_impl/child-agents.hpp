@@ -13,6 +13,7 @@ class Registry;
 namespace orangutan::bootstrap {
 
 struct AgentSessionOptions;
+void bind_task_tools(tool::DispatchContext& context, const AgentSessionOptions& options);
 
 /// Bind child runs to the parent's strand and prompt-local admission count.
 void bind_child_agents(tool::DispatchContext& context,

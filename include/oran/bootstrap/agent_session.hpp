@@ -26,6 +26,12 @@ class Config;
 namespace orangutan::bootstrap {
 
 class RuntimeAssembly;
+class BackgroundTasks;
+
+/// A runtime event identifying an owned result, never user-authored task text.
+struct TaskCompletion {
+  std::string task_id;
+};
 
 struct LongtermRecallOptions {
   bool enabled{true};
@@ -72,6 +78,8 @@ struct AgentSessionOptions {
   /// tools; executor must be the strand that owns the shared scheduler.
   tool::Registry* registry{nullptr};
   agent::ToolScheduler* scheduler{nullptr};
+  /// Host-owned service, retained through shutdown/join. Supplies shared tools.
+  BackgroundTasks* background_tasks{nullptr};
 };
 
 [[nodiscard]] core::Result<agent::ToolSchedulerOptions> scheduler_options_from(const config::Config& config);
@@ -97,6 +105,10 @@ public:
   AgentSession& operator=(AgentSession&&) = delete;
 
   [[nodiscard]] async::Awaitable<core::Result<agent::PromptResult>> run_prompt(agent::PromptRequest request);
+  /// Return no reply for an already acknowledged completion. Failed turns keep
+  /// the completion pending; overlapping user/event turns still return conflict.
+  [[nodiscard]] async::Awaitable<core::Result<std::optional<agent::PromptResult>>>
+  run_completion(TaskCompletion completion);
 
   [[nodiscard]] const provider::Route& route() const noexcept;
 

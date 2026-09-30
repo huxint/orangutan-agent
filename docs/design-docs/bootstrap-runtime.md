@@ -89,8 +89,8 @@ Sessions share the broker, workspace, hook and audit services. Each session owns
 its rule values. Configuration becomes an optional list of tool names at the
 loop boundary; it does not enter prompt rendering or native protocol mapping.
 An injected registry exposes custom tools through the same selection function.
-The next prompt observes host registration changes. Without an approval consumer, an `ask`
-decision fails closed. Embedders may bind an explicit approval sink through the
+The next prompt observes host registration changes. For external tool effects, an `ask` decision fails closed without an approval consumer.
+Internal memory and coordination use functional boundaries without generic approval. Embedders may bind an explicit approval sink through the
 hook bus.
 
 ## Child Sessions
@@ -107,8 +107,9 @@ parent turn ID. Child token streams do not enter the parent's event sink; the
 completed answer returns through the tool result. The child catalogue and any
 explicit active-tool selection omit disabled delegation.
 
-To permit delegation, authorize `AgentRun` through the configured permission
-rules. The ordinary unmatched `ask` default still needs an approval consumer.
+Delegation is enabled by configured agents, tool selection and a nonzero child
+budget. AgentRun itself does not evaluate generic permission rules or ask for
+approval; each child retains the external-effect policy intersection.
 [Agent execution](agent-platform.md) owns admission and lifetime bounds.
 
 ## Hosting A Session
@@ -149,3 +150,62 @@ HTTP client and current credential lookup. The host maps normalized conversation
 keys to retained sessions and owns authenticated ingress and durable delivery.
 [Messaging channels](messaging-channels.md) owns protocols, credentials, activity
 lifecycle and the composition example.
+
+## Background Tasks
+
+`BackgroundTasks::create` supplies a host-owned registry and scheduler shared by
+foreground sessions and configured child agents. Bind it with
+`AgentSessionOptions::background_tasks`; mismatched executor, configuration,
+assembly or injected tool services are rejected. Every call uses the same
+coordinating strand. Hosts retain the provider, configuration and assembly until
+the service's explicit `shutdown()` closes admission, cancels work and joins it.
+Normal parent completion or destruction does not destroy admitted jobs.
+
+Each task owns a fresh child session, parent permission snapshot, cancellation
+group and deadline. Children retain one-generation authority constraints. Defaults
+are four running jobs, sixteen queued jobs, sixty-four retained records, a
+fifteen-minute deadline including queue time, and 64 KiB of UTF-8 result text.
+Host options bound these values. Capacity exhaustion rejects admission; queued
+work does not occupy an execution slot. Hosts using blocking HTTP must size
+running task admission below worker capacity to keep foreground service available.
+Queued cancellation prevents provider work. A running cancellation remains `cancelling`
+until the child has completed persistence/tool cleanup and its group has joined.
+A deadline reports failure with timeout; it remains active after the start receipt.
+Errors expose their category without copying upstream bodies into task results.
+
+`list` supplies scoped status snapshots without model work. `get` pages retained
+results without consuming them. Completed records expire after one hour by
+default; automatic results awaiting acknowledgment are retained and can fill the
+record bound instead of silently disappearing. With session storage enabled,
+original child transcripts remain in the existing store. Jobs, claims and
+notification acknowledgments are process-local, so no task receipt promises process-restart survival.
+
+`next_completion` exposes a pending terminal task for a host that enabled
+`automatic_delivery`. Query-only hosts never promise unsolicited follow-up.
+`AgentSession::run_completion(TaskCompletion)` is a typed runtime entry point:
+it coalesces up to four ready reports from the same owner, resolves each through
+a scoped TaskGet with a 2 KiB preview, frames the reports as
+untrusted runtime evidence, and uses the ordinary turn/persistence boundary.
+The provider receives a dynamically framed user-role data message, not privileged
+system text or an orphan tool result. Its trace origin is `background_task`;
+the event is not a user instruction or approval. A busy session rejects a
+concurrent completion before claiming it, allowing the host to keep it queued.
+
+A failed continuation releases its claims and leaves the tasks pending. Successful
+transcript persistence acknowledges the batch; repeated acknowledged events make no
+provider call and return no new reply. Reads never acknowledge delivery. External
+message delivery is a separate host responsibility and must retain an answer
+before sending it. Failed parent-turn effects still follow the existing turn
+contract; a completion retry never reruns the original child automatically.
+
+Explicit task cancellation suppresses its pending automatic notification while
+preserving inspection. `cancel_owner` can target a parent session or one originating
+turn. Parent cancellation targets tasks started by that turn. Host shutdown
+cancels all jobs; it must finish before runtime executors or borrowed services stop.
+
+Separating execution, result retention and notification settlement follows the
+same ownership concerns as OpenClaw's
+[process registry](https://github.com/openclaw/openclaw/blob/main/src/agents/bash-process-registry.ts)
+and [subagent handoff](https://github.com/openclaw/openclaw/blob/main/docs/tools/subagents/slash-command.md#spawn-behavior).
+Here the executor is a configured child session, and completion cannot release
+borrowed runtime resources before the existing TaskGroup join.

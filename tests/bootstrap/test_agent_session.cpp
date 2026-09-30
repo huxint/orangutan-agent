@@ -1447,7 +1447,7 @@ TEST_CASE("AgentSession multi-tool batches complete on a multi-worker runtime",
   REQUIRE(fake.turns_consumed() == kToolTurns + 1);
 }
 
-TEST_CASE("automatic orientation reports denied memory without leaking it or blocking ordinary work",
+TEST_CASE("automatic orientation uses scoped memory without generic tool permission",
           "[integration][bootstrap][memory][core_boundary]") {
   TempDir temp{"oran-recall-policy"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
@@ -1471,10 +1471,10 @@ TEST_CASE("automatic orientation reports denied memory without leaking it or blo
     const auto requests = recording.requests();
     REQUIRE(requests.size() == 1);
     REQUIRE(requests.front().system_prompt.has_value());
-    CHECK(requests.front().system_prompt->contains("Memory index unavailable (permission_denied)"));
-    CHECK_FALSE(requests.front().system_prompt->contains("Private recall content"));
+    CHECK_FALSE(requests.front().system_prompt->contains("Memory index unavailable"));
+    CHECK(requests.front().system_prompt->contains("Private recall content"));
     CHECK_FALSE(requests.front().system_prompt->contains("No saved notes match this index"));
-    CHECK(captures.empty());
+    CHECK_FALSE(captures.empty());
   });
 }
 
@@ -1597,7 +1597,7 @@ TEST_CASE("an automatic memory index cannot be rewritten into full prompt conten
   });
 }
 
-TEST_CASE("natural memory use does not grant permission to write notes",
+TEST_CASE("memory writes run without approval only when enabled for the turn",
           "[integration][bootstrap][memory][core_boundary]") {
   bool advertised = true;
   SECTION("default tool exposure") {}
@@ -1612,7 +1612,7 @@ TEST_CASE("natural memory use does not grant permission to write notes",
         tool_response("MemoryRemember",
                       "save",
                       R"({"id":"style","kind":"user","title":"Response style","body":"Prefer concise replies."})"),
-        text_response("Persistence was not authorized."),
+        text_response("Memory operation handled."),
     }};
     auto session = bootstrap::AgentSession::create(base_runner_options(io, assembly, cfg, provider));
     REQUIRE(session.has_value());
@@ -1622,10 +1622,13 @@ TEST_CASE("natural memory use does not grant permission to write notes",
     REQUIRE(requests.size() == 2);
     CHECK(std::ranges::contains(requests[0].tools, std::string_view{"MemoryRemember"}, &core::ToolDef::name) ==
           advertised);
-    CHECK(tool_result_output_in(requests[1], "save").contains("approval"));
+    CHECK_FALSE(tool_result_output_in(requests[1], "save").contains("approval"));
     auto stored = co_await assembly.longterm_memory_backend()->get({.id = "style", .scope_key = "scope-A"});
-    REQUIRE_FALSE(stored.has_value());
-    CHECK(stored.error().kind() == core::ErrorKind::not_found);
+    REQUIRE(stored.has_value() == advertised);
+    if (!advertised) {
+      CHECK(tool_result_output_in(requests[1], "save").contains("not enabled"));
+      CHECK(stored.error().kind() == core::ErrorKind::not_found);
+    }
   });
 }
 
@@ -1661,9 +1664,9 @@ TEST_CASE("AgentSession does not commit incomplete responses and can continue", 
   test::run_async([&](asio::io_context& io) -> async::Awaitable<void> {
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false, true);
-    auto incomplete = with_tool
-        ? tool_response("FileWrite", "write-1", R"({"path":"must-not-exist.txt","content":"partial"})")
-        : text_response("partial answer");
+    auto incomplete =
+        with_tool ? tool_response("FileWrite", "write-1", R"({"path":"must-not-exist.txt","content":"partial"})")
+                  : text_response("partial answer");
     incomplete.stop_reason = reason;
     RecordingProvider recording{{text_response("saved answer"), std::move(incomplete), text_response("continued")}};
     auto options = base_runner_options(io, assembly, cfg, recording);
@@ -1676,9 +1679,9 @@ TEST_CASE("AgentSession does not commit incomplete responses and can continue", 
     auto failed = co_await (*runner)->run_prompt({.prompt = "unfinished prompt"});
     REQUIRE_FALSE(failed.has_value());
     REQUIRE_FALSE(std::filesystem::exists(temp.path() / "must-not-exist.txt"));
-    auto loaded = co_await assembly.session_store()->load(
-        memory::session::SessionId{.value = "00000000000000000000000000000042"},
-        memory::session::AgentKey{.value = "coder"});
+    auto loaded =
+        co_await assembly.session_store()->load(memory::session::SessionId{.value = "00000000000000000000000000000042"},
+                                                memory::session::AgentKey{.value = "coder"});
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->size() == 2);
     REQUIRE((*loaded)[1].blocks == core::Message::assistant_text("saved answer").blocks);
@@ -1701,8 +1704,9 @@ TEST_CASE("AgentSession rejects duplicate tool IDs without file effects or trans
     auto cfg = config::Config{};
     auto assembly = build_assembly(temp.path(), io, false, true);
     auto malformed = tool_response("FileWrite", "same-id", R"({"path":"first.txt","content":"first"})");
-    malformed.blocks.emplace_back(core::ToolUseContent{
-        .id = "same-id", .name = "FileWrite", .input_json = R"({"path":"second.txt","content":"second"})"});
+    malformed.blocks.emplace_back(core::ToolUseContent{.id = "same-id",
+                                                       .name = "FileWrite",
+                                                       .input_json = R"({"path":"second.txt","content":"second"})"});
     RecordingProvider recording{{text_response("saved answer"), std::move(malformed), text_response("continued")}};
     auto options = base_runner_options(io, assembly, cfg, recording);
     options.mode = permission::Mode::permissive;
@@ -1716,9 +1720,9 @@ TEST_CASE("AgentSession rejects duplicate tool IDs without file effects or trans
     REQUIRE(failed.error().kind() == core::ErrorKind::upstream);
     REQUIRE_FALSE(std::filesystem::exists(temp.path() / "first.txt"));
     REQUIRE_FALSE(std::filesystem::exists(temp.path() / "second.txt"));
-    auto loaded = co_await assembly.session_store()->load(
-        memory::session::SessionId{.value = "00000000000000000000000000000042"},
-        memory::session::AgentKey{.value = "coder"});
+    auto loaded =
+        co_await assembly.session_store()->load(memory::session::SessionId{.value = "00000000000000000000000000000042"},
+                                                memory::session::AgentKey{.value = "coder"});
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->size() == 2);
     REQUIRE((*loaded)[1].blocks == core::Message::assistant_text("saved answer").blocks);

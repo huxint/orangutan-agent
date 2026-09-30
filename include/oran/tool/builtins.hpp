@@ -26,10 +26,15 @@ inline constexpr std::string_view kMemoryRememberName{"MemoryRemember"};
 inline constexpr std::string_view kMemoryForgetName{"MemoryForget"};
 
 inline constexpr std::string_view AGENT_RUN_NAME{"AgentRun"};
+inline constexpr std::string_view TASK_GET_NAME{"TaskGet"};
+inline constexpr std::string_view TASK_CANCEL_NAME{"TaskCancel"};
 
 /// Register a child-run tool limited to the configured names. The host supplies
-/// the runner on DispatchContext; each call requires spawn_agent authority.
-[[nodiscard]] core::Result<void> register_agent_run(Registry& registry, std::span<const std::string> agent_names);
+/// the runner on DispatchContext with bounded host-owned admission.
+[[nodiscard]] core::Result<void>
+register_agent_run(Registry& registry, std::span<const std::string> agent_names, bool background = false);
+/// Register scoped background-task inspection and cancellation ports.
+[[nodiscard]] core::Result<void> register_task_tools(Registry& registry);
 
 /// Register the bounded UTF-8 line reader. Requires read_file authority;
 /// workspace dispatch resolves and pins the requested path. Input and output
@@ -66,11 +71,10 @@ inline constexpr std::string_view AGENT_RUN_NAME{"AgentRun"};
 [[nodiscard]] core::Result<void> register_file_edit(Registry& registry);
 
 /// Register the `MemoryRecall` tool. Searches long-term memory through the
-/// runtime supplied on `DispatchContext::memory_recall`; capability
-/// `read_memory` is required. Input shape: `{"query": <string>,
+/// runtime supplied on `DispatchContext::memory_recall`. Input shape: `{"query": <string>,
 /// "limit"?: positive integer <= 20 (default 5), "kinds"?: [<RecordKind wire
 /// spelling>]}`. The concrete memory runtime lives outside `oran-tool`, so
-/// this built-in remains an ordinary permissioned/audited registry dispatch
+/// this built-in uses audited runtime dispatch with host-bound scope
 /// without making the tool library depend on `oran-memory`. Successful calls
 /// return deterministic recall text plus structured `data_json` with recalled
 /// record metadata.
@@ -78,21 +82,21 @@ inline constexpr std::string_view AGENT_RUN_NAME{"AgentRun"};
 
 /// Register the `MemoryRemember` tool. Upserts one long-term memory record
 /// through the runtime supplied on `DispatchContext::memory_remember`;
-/// capability `write_memory` is required. Input shape:
+/// scope and write policy belong to that service. Input shape:
 /// `{"id": <string>, "kind": <RecordKind wire spelling>, "title": <string>,
 /// "body": <string>, "importance"?: number in [0,1] (default 0.5),
-/// "tags"?: [<string>], "linked_record_ids"?: [<string>], "shadow"?: bool}`.
+/// "tags"?: [<string>], "linked_record_ids"?: [<string>]}`.
 /// The concrete memory backend lives outside `oran-tool`, so this built-in
-/// remains an ordinary permissioned/audited registry dispatch without making
+/// uses audited runtime dispatch without making
 /// the tool library depend on `oran-memory`. Successful calls return a short
 /// confirmation text plus structured `data_json` with saved record metadata.
 [[nodiscard]] core::Result<void> register_memory_remember(Registry& registry);
 
 /// Register the `MemoryForget` tool. Removes one long-term memory record in
 /// the current agent scope through the runtime supplied on
-/// `DispatchContext::memory_forget`; capability `write_memory` is required.
+/// `DispatchContext::memory_forget`.
 /// Input shape: `{"id": <string>}`. The concrete memory backend lives outside
-/// `oran-tool`, so this built-in remains an ordinary permissioned/audited
+/// `oran-tool`, so this built-in uses audited runtime
 /// registry dispatch without making the tool library depend on `oran-memory`.
 /// Successful calls are idempotent and return a short confirmation text plus
 /// structured `data_json` with the scoped removed key.

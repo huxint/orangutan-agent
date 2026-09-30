@@ -50,3 +50,13 @@ Timers replace blocking sleeps. Tests use real executors and synchronization
 points, with a hard timeout to expose missing completion.
 
 See [async rules](../rules/async-and-concurrency.md) for implementation constraints.
+
+## Work Beyond A Foreground Turn
+
+Bootstrap's background task service owns one bounded `TaskGroup` per active
+child. The service owns the shared registry/scheduler and retains each child's
+policy, session and deadline until its group joins. A separate monitor publishes
+terminal state only after that join. The task service itself remains alive
+through its monitors; hosts must still retain borrowed provider/configuration/
+assembly services until `shutdown()` completes. This does not change the shorter
+lifetime of ordinary foreground dispatch contexts or synchronous AgentRun.

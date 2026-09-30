@@ -140,12 +140,12 @@ TEST_CASE("Capability + input_pattern compose on a single rule", "[unit][permiss
   rs.push_back(Rule{
       .verdict = Verdict::deny,
       .tool_pattern = "*",
-      .capability = orangutan::core::Capability::write_memory,
+      .capability = orangutan::core::Capability::write_file,
       .input_pattern = std::move(*pat),
   });
 
-  const std::array caps_write{orangutan::core::Capability::write_memory};
-  const std::array caps_read{orangutan::core::Capability::read_memory};
+  const std::array caps_write{orangutan::core::Capability::write_file};
+  const std::array caps_read{orangutan::core::Capability::egress_http};
 
   // Both axes match -> deny.
   REQUIRE(perm::evaluate(rs,

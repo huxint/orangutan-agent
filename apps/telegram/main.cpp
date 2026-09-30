@@ -3,7 +3,9 @@
 #include "input.hpp"
 #include "presentation.hpp"
 
+#include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -13,8 +15,10 @@
 #include <asio/cancellation_signal.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/signal_set.hpp>
+#include <asio/this_coro.hpp>
 #include <oran/async/runtime.hpp>
 #include <oran/bootstrap/agent_session.hpp>
+#include <oran/bootstrap/background_tasks.hpp>
 #include <oran/bootstrap/channel_http.hpp>
 #include <oran/bootstrap/provider_backend.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
@@ -157,6 +161,7 @@ int main(int argc, char** argv) try {
   hook::Bus probe_hooks;
   std::optional<bootstrap::HttpProviderBackend> provider;
   std::optional<bootstrap::RuntimeAssembly> assembly;
+  std::unique_ptr<bootstrap::BackgroundTasks> tasks;
   std::unique_ptr<bootstrap::AgentSession> session;
   core::TurnId active_session{};
   if (config) {
@@ -197,6 +202,20 @@ int main(int argc, char** argv) try {
     }
     assembly.emplace(std::move(*resources));
   }
+  if (config && !options.once && !config->agents().empty() && config->runtime().workers > 1) {
+    // Each provider HTTP call occupies a blocking worker. Leave one worker for
+    // foreground requests and channel polling instead of filling the pool.
+    const auto running = std::min<std::size_t>(4, static_cast<std::size_t>(config->runtime().workers) - 1);
+    auto created = bootstrap::BackgroundTasks::create(strand,
+                                                      *assembly,
+                                                      *config,
+                                                      {.max_running = running, .automatic_delivery = true});
+    if (!created) {
+      std::println(stderr, "Cannot construct background task service");
+      return 2;
+    }
+    tasks = std::move(*created);
+  }
   auto& hooks = assembly ? assembly->hook_bus() : probe_hooks;
   telegram_host::Api api = [&](telegram_host::PollMethod method,
                                std::string payload) -> async::Awaitable<core::Result<channel::Response>> {
@@ -235,22 +254,33 @@ int main(int argc, char** argv) try {
   auto presentation =
       std::make_shared<telegram_host::Presentation>(strand, outbound, hooks, std::move(presentation_rules));
   hooks.subscribe({.id = "telegram-presentation",
-                   .observe = [presentation](hook::Event event, hook::PayloadPtr) -> async::Awaitable<void> {
-                     presentation->observe(event);
+                   .observe = [presentation, owner_identity = options.user](hook::Event event, hook::PayloadPtr payload)
+                       -> async::Awaitable<void> {
+                     const bool parent = std::visit(
+                         [&owner_identity](const auto& value) {
+                           if constexpr (requires { value.who.agent_key; })
+                             return value.who.agent_key == "telegram" && value.who.identity == owner_identity;
+                           else
+                             return false;
+                         },
+                         *payload);
+                     if (parent)
+                       presentation->observe(event);
                      co_return;
                    }},
                   {hook::Event::provider_request, hook::Event::tool_before, hook::Event::tool_after});
-  channel::RunTurn turn =
-      [&, image_transport = outbound](channel::Message message) -> async::Awaitable<core::Result<std::string>> {
-    if (active_session != state->session) {
+  auto owner = [&](core::TurnId id) {
+    channel::Conversation conversation{channel::Platform::telegram,
+                                       state->bot,
+                                       channel::ChatKind::direct,
+                                       options.user,
+                                       {}};
+    return bootstrap::TaskOwner{id, channel::conversation_key(conversation), "telegram", options.user};
+  };
+  auto ensure_session = [&](core::TurnId id) -> core::Result<bootstrap::AgentSession*> {
+    if (active_session != id) {
       session.reset();
-      active_session = state->session;
-    }
-    auto prompt = co_await telegram_host::prepare_prompt(message, image_transport, download, hooks, image_rules);
-    if (!prompt) {
-      if (prompt.error().kind() == core::ErrorKind::cancelled)
-        co_return std::unexpected(prompt.error());
-      co_return "已收到消息，但其中或引用的图片读取失败。请重新发送不超过 5 MiB 的 JPG、PNG、GIF 或 WebP 图片。";
+      active_session = id;
     }
     if (!session) {
       bootstrap::AgentSessionOptions settings;
@@ -261,23 +291,105 @@ int main(int argc, char** argv) try {
       settings.provider = &provider->system();
       settings.event_sink = presentation.get();
       settings.route = provider->route();
-      settings.session_id = state->session;
-      settings.scope_key = channel::conversation_key(message.conversation);
+      settings.session_id = id;
+      settings.scope_key = owner(id).scope_key;
       settings.agent_key = "telegram";
       settings.identity = options.user;
       settings.origin = "telegram";
-      settings.max_child_runs = 0;
+      settings.max_child_runs = tasks ? 4 : 0;
+      settings.background_tasks = tasks.get();
       settings.per_agent_overlay = "You are responding in a private Telegram chat. Reply in the user's language.";
       auto created = bootstrap::AgentSession::create(std::move(settings));
       if (!created)
-        co_return std::unexpected(created.error());
+        return std::unexpected(created.error());
       session = std::move(*created);
     }
-    auto result = co_await session->run_prompt(std::move(*prompt));
+    return session.get();
+  };
+  channel::RunTurn turn =
+      [&, image_transport = outbound](channel::Message message) -> async::Awaitable<core::Result<std::string>> {
+    auto prompt = co_await telegram_host::prepare_prompt(message, image_transport, download, hooks, image_rules);
+    if (!prompt) {
+      if (prompt.error().kind() == core::ErrorKind::cancelled)
+        co_return std::unexpected(prompt.error());
+      co_return "已收到消息，但其中或引用的图片读取失败。请重新发送不超过 5 MiB 的 JPG、PNG、GIF 或 WebP 图片。";
+    }
+    auto current = ensure_session(state->session);
+    if (!current)
+      co_return std::unexpected(current.error());
+    auto result = co_await (*current)->run_prompt(std::move(*prompt));
     if (!result)
       co_return std::unexpected(result.error());
     co_return std::move(result->text);
   };
+  telegram_host::BackgroundPort background;
+  if (tasks) {
+    background.active = [&](core::TurnId id) {
+      return std::ranges::any_of(tasks->list(owner(id)), [](const auto& task) {
+        return task.state == bootstrap::TaskState::queued || task.state == bootstrap::TaskState::running ||
+               task.state == bootstrap::TaskState::cancelling || !task.acknowledged;
+      });
+    };
+    background.next = [&](core::TurnId id) {
+      return tasks->next_completion(owner(id));
+    };
+    background.complete = [&](core::TurnId id, std::string task) -> async::Awaitable<core::Result<std::string>> {
+      auto current = ensure_session(id);
+      if (!current)
+        co_return std::unexpected(current.error());
+      auto result = co_await (*current)->run_completion({.task_id = std::move(task)});
+      if (!result)
+        co_return std::unexpected(result.error());
+      if (!*result)
+        co_return std::unexpected(core::Error::internal("completion was already handled"));
+      co_return std::move((**result).text);
+    };
+    background.control = [&](core::TurnId id, telegram_host::TaskCommand command) -> core::Result<std::string> {
+      const auto key = owner(id);
+      if (command == telegram_host::TaskCommand::stop) {
+        tasks->cancel_owner(key);
+        return "已请求停止当前会话的后台任务。清理结束前会显示正在取消；用 /tasks 查看状态。";
+      }
+      const auto rows = tasks->list(key);
+      if (rows.empty())
+        return "当前会话没有保留的后台任务。";
+      std::string text = "后台任务：\n";
+      for (const auto& task : rows) {
+        std::string_view status;
+        switch (task.state) {
+          case bootstrap::TaskState::queued:
+            status = "排队中";
+            break;
+          case bootstrap::TaskState::running:
+            status = "运行中";
+            break;
+          case bootstrap::TaskState::cancelling:
+            status = "正在取消";
+            break;
+          case bootstrap::TaskState::succeeded:
+            status = "已完成";
+            break;
+          case bootstrap::TaskState::failed:
+            status = "失败";
+            break;
+          case bootstrap::TaskState::cancelled:
+            status = "已取消";
+            break;
+        }
+        const bool finished = task.state == bootstrap::TaskState::succeeded ||
+                              task.state == bootstrap::TaskState::failed ||
+                              task.state == bootstrap::TaskState::cancelled;
+        const auto end = finished ? task.updated_at : core::time::now_utc();
+        const auto seconds =
+            std::max<std::int64_t>(0,
+                                   std::chrono::duration_cast<std::chrono::seconds>(
+                                       end.to_system_time_point() - task.created_at.to_system_time_point())
+                                       .count());
+        text += std::format("- {}：{}（{} 秒）\n", task.label, status, seconds);
+      }
+      return text;
+    };
+  }
   asio::cancellation_signal cancellation;
   asio::signal_set signals{strand, SIGINT, SIGTERM};
   bool stopping = false;
@@ -290,22 +402,45 @@ int main(int argc, char** argv) try {
   int exit_code = 1;
   asio::co_spawn(
       strand,
-      telegram_host::run(options,
-                         std::move(api),
-                         std::move(outbound),
-                         std::move(turn),
-                         hooks,
-                         *directory,
-                         *state,
-                         runtime.cpu_executor(),
-                         presentation.get(),
-                         [&](core::TurnId id) -> async::Awaitable<core::Result<std::string>> {
-                           auto status =
-                               co_await bootstrap::inspect_session(*assembly, id, "telegram", runtime.cpu_executor());
-                           if (!status)
-                             co_return std::unexpected(status.error());
-                           co_return telegram_host::format_session_status(*status, provider->route().primary.model);
-                         }),
+      [&]() -> async::Awaitable<core::Result<void>> {
+        core::Result<void> result = std::unexpected(core::Error::internal("Telegram host failed"));
+        bool threw = false;
+        try {
+          result = co_await telegram_host::run(
+              options,
+              std::move(api),
+              std::move(outbound),
+              std::move(turn),
+              hooks,
+              *directory,
+              *state,
+              runtime.cpu_executor(),
+              presentation.get(),
+              [&](core::TurnId id) -> async::Awaitable<core::Result<std::string>> {
+                auto status = co_await bootstrap::inspect_session(*assembly, id, "telegram", runtime.cpu_executor());
+                if (!status)
+                  co_return std::unexpected(status.error());
+                co_return telegram_host::format_session_status(*status, provider->route().primary.model);
+              },
+              std::move(background));
+        } catch (...) {
+          threw = true;
+        }
+        if (threw) {
+          const auto cancellation = co_await asio::this_coro::cancellation_state;
+          result = std::unexpected(cancellation.cancelled() != asio::cancellation_type::none
+                                       ? core::Error::cancelled()
+                                       : core::Error::internal("Telegram host failed"));
+        }
+        co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+        co_await asio::this_coro::throw_if_cancelled(false);
+        if (tasks) {
+          auto drained = co_await tasks->shutdown();
+          if (!drained)
+            co_return std::unexpected(drained.error());
+        }
+        co_return result;
+      },
       asio::bind_cancellation_slot(cancellation.slot(), [&](std::exception_ptr exception, core::Result<void> result) {
         exit_code = !exception && (result || (stopping && result.error().kind() == core::ErrorKind::cancelled)) ? 0 : 1;
         if (exception || !result)

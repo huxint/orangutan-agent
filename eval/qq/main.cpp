@@ -225,7 +225,7 @@ async::Awaitable<Result<void>> run(io::PrivateDirectory& directory,
             answer = qq_chat::help();
             break;
           case qq_chat::Command::status: {
-            auto permitted = co_await authorize(hooks, "QQEvalInspect", core::Capability::read_memory);
+            auto permitted = co_await authorize(hooks, "QQEvalInspect", core::Capability::read_file);
             if (!permitted)
               co_return std::unexpected(permitted.error());
             auto status = co_await bootstrap::inspect_session(assembly, identity, "qq-live-eval", worker);

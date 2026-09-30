@@ -21,7 +21,8 @@ outcomes for hooks and traces and accumulates usage. Backend error strings do no
 choose the attributed profile.
 
 FileRead, FileWrite and FileEdit use prepared, validated calls and pinned
-filesystem authority. Memory tools and AgentRun use the same dispatch gates.
+filesystem authority. Memory tools and AgentRun share validated dispatch but use
+internal scope/admission rules rather than generic allow/deny/ask.
 Unknown tool selections fail before provider work; visibility grants no authority.
 Path locks follow live holders and waiters, and cancellation joins borrowed work.
 
@@ -37,6 +38,13 @@ and tool context, and the intersection of parent/child permissions. They share
 workspace, memory scope, provider route, scheduler and strand. Admission defaults
 to four children per prompt and one generation; parent cancellation joins them
 without waiting for unrelated sessions.
+
+Hosts may bind bounded background child tasks with scoped status/result reads
+and cancellation. Their owned authority and shared tool services survive parent
+turns; terminal state follows joined cleanup. Typed completion continuations
+coalesce ready reports and acknowledge only after parent persistence. Jobs are
+process-local; child transcripts remain stored. The Telegram host supplies
+completion polling, delivery journaling and `/tasks`/`/stop` controls.
 
 Filesystem, HTTP and SQLite work runs on explicit executors. Durable audit
 decisions precede tool effects; terminal traces and cancellation cleanup finish

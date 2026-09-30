@@ -25,16 +25,6 @@ TEST_CASE("enum_name covers every Capability enumerator", "[unit][core][capabili
   REQUIRE(enum_name(Capability::egress_websocket) == "egress_websocket");
   REQUIRE(enum_name(Capability::spawn_subprocess) == "spawn_subprocess");
   REQUIRE(enum_name(Capability::signal_subprocess) == "signal_subprocess");
-  REQUIRE(enum_name(Capability::read_memory) == "read_memory");
-  REQUIRE(enum_name(Capability::write_memory) == "write_memory");
-  REQUIRE(enum_name(Capability::spawn_agent) == "spawn_agent");
-  REQUIRE(enum_name(Capability::send_message_intra_team) == "send_message_intra_team");
-  REQUIRE(enum_name(Capability::send_message_inter_team) == "send_message_inter_team");
-  REQUIRE(enum_name(Capability::schedule_job) == "schedule_job");
-  REQUIRE(enum_name(Capability::modify_job) == "modify_job");
-  REQUIRE(enum_name(Capability::run_job_now) == "run_job_now");
-  REQUIRE(enum_name(Capability::invoke_skill) == "invoke_skill");
-  REQUIRE(enum_name(Capability::deactivate_skill) == "deactivate_skill");
   REQUIRE(enum_name(Capability::external_mcp) == "external_mcp");
   REQUIRE(enum_name(Capability::runtime_loader) == "runtime_loader");
 }
@@ -72,7 +62,7 @@ TEST_CASE("enum_values<Capability> lists every enumerator exactly once", "[unit]
   constexpr auto all = enum_values<Capability>();
   // The size matches the enumerator list and every entry round-trips through
   // the string mapping.
-  STATIC_REQUIRE(all.size() == 21);
+  STATIC_REQUIRE(all.size() == 11);
   for (const auto cap : all) {
     REQUIRE(enum_name(cap) != "unknown");
   }

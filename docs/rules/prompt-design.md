@@ -119,3 +119,18 @@ checks the default preamble for dynamic inputs.
 For a new model-visible surface, consult the relevant proven shape in
 <https://github.com/Piebald-AI/claude-code-system-prompts>, then record the adopted
 contract in its owning design document.
+
+## Background Receipts And Events
+
+Background AgentRun is advertised only when its host service is bound. Its receipt
+states whether completion is automatic or query-only, and that acceptance is not
+success. Automatic mode directs the agent to continue independent work and avoid
+polling solely to wait. Query-only mode explicitly promises no later wake. TaskGet
+is a status/result read, not a wait operation; TaskCancel reports cancellation in
+progress until cleanup finishes.
+
+Completion evidence is framed dynamically through the typed session event port,
+not appended to the cached system prefix. The frame explicitly rejects treating
+a task result as user approval or a response to a pending question, and asks the
+parent to review the report against the original task. Task IDs and raw metadata
+remain out of ordinary user-facing replies; hosts provide a separate task list.

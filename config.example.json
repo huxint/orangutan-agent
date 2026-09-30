@@ -55,10 +55,6 @@
     "allow": [
       {
         "tool_pattern": "FileRead"
-      },
-      {
-        "tool_pattern": "*",
-        "capability": "read_memory"
       }
     ],
     "deny": [

@@ -41,11 +41,12 @@ the complete setup against a controlled provider.
 Real providers require the named API-key environment variable; the test suite
 uses local fixtures. See [configuration](docs/design-docs/secrets-and-state.md).
 
-Tool calls pass through input validation, workspace policy, permission decisions
-and audit. An operation requiring approval fails closed when the embedding has
-no approval handler. Authorize only the operations needed by your task.
+Tool calls share input validation and observations. External tool effects require
+workspace authority and permission; an ask fails closed without an approval handler.
+Internal memory and coordination use host-bound scope and functional admission,
+so routine bookkeeping does not require tool approval.
 The filesystem tools are FileRead, FileWrite and FileEdit. `AgentRun` selects a
-child from `agents` and requires `spawn_agent` authority; it admits up to four
+child from `agents` and preserves its external-effect restrictions; it admits up to four
 child runs per prompt and one generation of delegation.
 
 QQ, Telegram and Feishu text integrations use SDK-free adapters, injected session
@@ -57,6 +58,10 @@ For real Telegram testing, build the opt-in `oran-telegram` host and follow the
 It includes a DeepSeek Flash example, persistent conversations, status reactions,
 streaming previews, Markdown formatting, reply context and image input for vision-capable models.
 Chat commands `/new`, `/status`, `/help` and `/whoami` provide local session controls.
+The retained host also supports background child tasks: AgentRun can return an
+immediate receipt while later messages continue, and completed work produces a
+reviewed follow-up. `/tasks` lists progress and `/stop` requests cancellation.
+Task execution is process-local; `--once` does not enable background work.
 For QQ, `oran-qq-login` supports [official QR binding](docs/design-docs/messaging-channels.md#qr-authorization)
 without manually entering AppID/AppSecret, plus a saved-credential probe. The QQ
 message-receiving host is still separate deployment work.

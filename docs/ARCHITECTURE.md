@@ -29,8 +29,9 @@ flowchart TD
   session --> memory[Scoped memory and history]
   loop --> provider[Provider protocol and retry]
   loop --> scheduler[Bounded tool scheduler]
-  scheduler --> dispatch[Prepare final input, lock, authorize and dispatch]
-  dispatch --> effects[Filesystem and memory effects]
+  scheduler --> dispatch[Prepare input and select effect boundary]
+  dispatch --> effects[Authorized filesystem effects]
+  dispatch --> memory
   dispatch --> children[Bounded child sessions]
   children --> session
   dispatch --> audit[Audit and hooks]
@@ -87,9 +88,10 @@ hook; bootstrap binds its transport to HTTP. Channel has no session dependency.
 
 ## Authority And State
 
-Each turn carries session, agent and scope identity. A tool definition declares
-required capabilities; an explicit rule decision grants or refuses the concrete
-operation. Filesystem handlers receive pinned authority handles after path
+Each turn carries session, agent and scope identity. An external tool definition declares
+required capabilities; a rule decision grants or refuses the concrete operation.
+Internal memory and coordination instead use host-bound scope, functional
+availability and admission limits, without generic permission prompts. Filesystem handlers receive pinned authority handles after path
 resolution. Approval binds the identity, tool and exact approved input.
 
 Session history and personal records are separate stores. Prompt history reads
@@ -101,7 +103,10 @@ the session's strand. Awaited writes finish before borrowed services are release
 child policy decisions intersect at dispatch. Children share the parent's
 workspace, memory scope, provider route and tool scheduler; fresh approval
 identities keep grants separate. Child counts and delegation depth are bounded,
-and parent cancellation joins borrowed child work.
+and parent cancellation joins borrowed child work. For background execution,
+a host-bound bootstrap service owns child sessions and shared tool services
+beyond the parent turn. Scoped completion events resume the parent at a safe
+turn boundary; the host joins the service before releasing runtime resources.
 
 ## Public Headers
 

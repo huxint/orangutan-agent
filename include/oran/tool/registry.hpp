@@ -34,9 +34,18 @@ struct DispatchContext;
 struct AgentRunRequest {
   std::string agent;
   std::string prompt;
+  bool background{false};
+  std::string label{};
 };
 
-/// The host owns child sessions; dispatch owns authorization and result delivery.
+struct TaskRequest {
+  std::string task_id;
+  std::size_t offset{0};
+  std::size_t max_bytes{8192};
+};
+using TaskHandler = std::function<async::Awaitable<core::Result<Output>>(TaskRequest, DispatchContext&)>;
+
+/// The host owns child admission and lifetime; dispatch validates and delivers results.
 using AgentRunHandler =
     std::function<async::Awaitable<core::Result<Output>>(AgentRunRequest request, DispatchContext& ctx)>;
 
@@ -186,6 +195,11 @@ struct DispatchContext {
   MemoryForgetHandler memory_forget{};
   /// A bounded child-session runner supplied by the host.
   AgentRunHandler agent_run{};
+  TaskHandler task_get{};
+  TaskHandler task_cancel{};
+  /// Optional host-selected tools for a model turn. A direct runtime operation
+  /// leaves this absent. Selection limits availability, not external authority.
+  std::optional<std::span<const std::string>> active_tools{};
   /// Workspace used to resolve prepared path intent. Borrowed through dispatch;
   /// FileWrite and FileEdit require this authority even for direct callers.
   Workspace* workspace{nullptr};
@@ -242,6 +256,13 @@ struct PreparedCall {
 /// Pure preparation from final hook input; no filesystem access or other effects.
 using Preparer = std::function<core::Result<PreparedCall>(std::string_view input_json)>;
 
+/// Runtime tools manage host-bound state; external tools require permission.
+/// Only trusted registration selects this policy, never model input.
+enum class DispatchPolicy {
+  permissioned,
+  runtime
+};
+
 class Registry {
 public:
   Registry() = default;
@@ -259,8 +280,10 @@ public:
   [[nodiscard]] core::Result<void> add(core::ToolDef def, Handler handler);
 
   /// Register argument preparation before admission and approval. The prepared
-  /// executor uses the same permission, audit and output boundary as `add`.
-  [[nodiscard]] core::Result<void> add_prepared(core::ToolDef def, Preparer prepare);
+  /// executor shares audit and output handling. Permissioned is the default;
+  /// trusted internal bindings opt into runtime scope/admission instead.
+  [[nodiscard]] core::Result<void>
+  add_prepared(core::ToolDef def, Preparer prepare, DispatchPolicy policy = DispatchPolicy::permissioned);
 
   /// Remove the tool named `name`. Returns `Error::not_found` if no such
   /// tool was registered.
@@ -307,6 +330,7 @@ private:
   struct Entry {
     core::ToolDef def;
     Preparer prepare;
+    DispatchPolicy policy{DispatchPolicy::permissioned};
     std::size_t insertion_index{0};
   };
 

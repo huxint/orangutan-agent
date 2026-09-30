@@ -6,8 +6,8 @@ from model tool calls pass through `Registry::dispatch`.
 
 ## Dispatch
 
-1. Resolve the registered definition. Registration validates its schema and
-   preparation callback.
+1. Check the model turn's explicit tool selection and resolve the registered
+   definition. Registration validates its schema and preparation callback.
 2. Apply the blocking `tool_before` hook once. Veto stops the operation;
    rewritten input becomes the input for every following stage.
 3. Prepare the call once from final input. A preparer validates arguments and
@@ -22,8 +22,9 @@ from model tool calls pass through `Registry::dispatch`.
 5. Resolve prepared filesystem intent into pinned authority after acquiring the
    lock, so a queued call observes the preceding operation's completed state.
    A displayed path or an earlier path check cannot authorize a later effect.
-6. Evaluate rules for the concrete tool, input, declared capabilities and caller.
-   Denial stops execution. An ask decision requires a valid approval.
+6. For permissioned tools, evaluate rules for the concrete tool, input, declared
+   capabilities and caller. Denial stops execution; ask requires valid approval.
+   Runtime tools use their own scope, enablement and admission checks instead.
 7. Await the durable decision before invoking the prepared executor at most once.
    Storage failure or cancellation stops execution. Enforce output limits and
    publish the completion observation before releasing the lock. The audit row
@@ -33,6 +34,17 @@ from model tool calls pass through `Registry::dispatch`.
 built-in owns its typed arguments and projects path intent from them. Dispatch
 retains the prepared value through execution and cleanup. Approval and hooks use
 the exact final input bytes, without JSON reserialization.
+
+Trusted registration explicitly sets `DispatchPolicy::runtime` for MemoryRecall,
+MemoryRemember, MemoryForget, AgentRun, TaskGet and TaskCancel. These operations
+ignore generic allow/deny/ask, including inherited rules and strict mode. Their
+handlers enforce host-bound scope, service availability, memory write gates,
+configured child names and task limits. Runtime registrations reject external
+capability declarations and filesystem path intent. Hooks can validate/rewrite
+or veto requests, but requesting generic approval for a runtime tool is rejected
+without opening an approval prompt. Audit admission uses reason `runtime_tool`.
+An ordinary custom tool with no capabilities still uses permissioned dispatch;
+empty capabilities are not an implicit exemption.
 
 `Registry::add` adapts ordinary handlers into the same dispatch path. It preserves
 the registered handler's state and defers concrete argument validation to that
@@ -61,8 +73,8 @@ The owner retains it until all borrowing dispatches finish.
 Read-only calls may share a path lock; mutations exclude other accesses to the
 same workspace lock key. Keys normalize final input lexically against configured
 roots without filesystem access; they are not inode or symlink-alias locks.
-Calls without a lockable path still pass through ordinary permission, resolution
-and execution. Path intent does not grant any capability.
+Calls without a lockable path retain their registered dispatch policy.
+Path intent does not grant any capability.
 
 Per-call timeout starts after the batch semaphore admits the call and includes
 hooks, path waiting, authorization and execution. Path waiting counts toward
@@ -103,10 +115,12 @@ that previously listed ToolSearch must remove that name; the registration and
 promotion APIs and the `ToolDef::deferred` and `ToolDef::category` fields have
 been removed.
 
-Selection controls model exposure, not authority. A call naming an unadvertised
-registered tool still goes through ordinary dispatch, including permission,
-hooks, approval and child-policy intersection. Catalogue selection never grants
-a capability. [Prompt design](../rules/prompt-design.md) owns cache identity.
+Explicit selection controls both model exposure and model-call availability.
+Dispatch rejects a name omitted from that turn's selected list; snapshots retain
+the selection until cleanup. Direct host operations, such as automatic memory
+orientation or completion preview reads, use their bound runtime ports without
+a model selection. Selection never grants an external capability.
+[Prompt design](../rules/prompt-design.md) owns cache identity.
 
 ## File And Memory Tools
 
@@ -159,14 +173,14 @@ not advertise image/PDF reading, shell commands or plugin capabilities it lacks.
 MemoryRecall, MemoryRemember and MemoryForget receive a host-bound scope through
 injected handlers. They cannot select another scope in tool JSON. Their JSON shape,
 bounds, uniqueness and record-kind values are prepared into typed requests before
-path admission, permission evaluation or approval; handlers perform only the
+the effect; handlers perform only the
 host-bound memory effect. [memory-system](memory-system.md) owns record and prompt
 recall semantics.
 
 ## Child Agent Tool
 
-`AgentRun` accepts `{"agent":"worker","prompt":"Inspect the change"}` and
-requires `spawn_agent`. The registered schema enumerates configured names;
+`AgentRun` accepts `{"agent":"worker","prompt":"Inspect the change"}` through
+runtime dispatch. The registered schema enumerates configured names;
 the handler rejects unknown names, extra fields and prompts outside 1–16384
 UTF-8 bytes before invoking the host binding. Identity, session, memory scope,
 provider route and policy come from the host.
@@ -178,12 +192,12 @@ The tool description warns against overlapping writes and asks the parent to
 review findings before using them. Each call starts a new conversation, not a
 resumption of an earlier child.
 
-The agent and prompt fields are prepared before authorization; the host binding
+The agent and prompt fields are prepared before functional admission; the host binding
 receives only the typed request and supplies identity, session, memory scope,
 provider route and policy. The result text is the child's completed answer.
 Structured output contains
 `kind=agent_run`, the configured agent name and its session ID. Output caps,
-permissions, approvals, hooks and audit use the ordinary dispatch path. Child
+hooks and audit use the shared dispatch path without generic tool approval. Child
 admission exhaustion returns `mailbox_overflowed` with `reason=child_limit` as a
 model-visible tool error. Disabled delegation returns `permission_denied`.
 [Agent execution](agent-platform.md) owns the host's child-session behavior.
@@ -233,20 +247,6 @@ enum class Capability {
   // process
   spawn_subprocess,
   signal_subprocess,
-  // memory
-  read_memory,
-  write_memory,
-  // orchestration
-  spawn_agent,
-  send_message_intra_team,
-  send_message_inter_team,
-  // automation
-  schedule_job,
-  modify_job,
-  run_job_now,
-  // skills
-  invoke_skill,
-  deactivate_skill,
   // misc
   external_mcp,
   runtime_loader,
@@ -255,3 +255,34 @@ enum class Capability {
 
 [permissions-and-hooks](permissions-and-hooks.md) owns rule precedence and
 approval binding. [prompt-design](../rules/prompt-design.md) owns cached sections.
+
+## Background Task Tools
+
+A host-bound `BackgroundTasks` service adds `background` (default false) and
+`label` (1–120 UTF-8 bytes) to AgentRun's schema. Ordinary AgentRun still awaits
+its child. Background mode returns an accepted task receipt after functional admission,
+with a service-generated task ID and the actual automatic/query-only delivery
+mode. Acceptance is not completion. Hosts without the service keep the original
+schema and reject background fields during preparation.
+
+`TaskGet` accepts a returned `task_id`, optional UTF-8 byte
+`offset` and `max_bytes` (1–16384, default 8192), and returns immediately. Result
+windows are repeatable; an interior code-point offset or a window too small for
+one code point is invalid. `next_offset` continues the retained result; separate
+retention truncation is explicit. `TaskCancel` accepts only `task_id`. It requests cancellation and reports the current state, including
+`cancelling` while cleanup is in progress. Neither tool accepts caller-selected
+scope or identity. Foreign, expired and unknown tasks share a not-found response.
+
+Both tools use runtime preparation, owner checks, hooks, durable audit and output
+caps. Dispatch snapshots preserve their bound handlers. Children cannot access
+these ports or delegate another generation. AgentRun task text is redacted for
+untrusted input observers. The [bootstrap contract](bootstrap-runtime.md#background-tasks)
+owns task lifetime, retention and completion delivery.
+
+The receipt/query split follows the reference Claude Code
+[GetTask description](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/tool-description-gettask.md)
+and [background guidance](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/tool-parameter-bash-run-in-background-guidance.md).
+These are third-party prompt extractions, not evidence of Claude Code's private
+implementation. [MCP Tasks](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks)
+also separates task acceptance, state, results and cancellation; these native
+tools do not claim MCP wire compatibility.

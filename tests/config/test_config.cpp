@@ -521,7 +521,7 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->memory().longterm.recall.enabled);
   REQUIRE(result->memory().longterm.recall.limit == 20);
 
-  REQUIRE(result->permissions().rules.size() == 7);
+  REQUIRE(result->permissions().rules.size() == 6);
   REQUIRE(result->agents().size() == 1);
   REQUIRE(result->agents()[0].name == "researcher");
   REQUIRE(result->agents()[0].permissions.rules.size() == 1);
@@ -915,7 +915,7 @@ TEST_CASE("Config::parse extracts a populated permissions block", "[unit][config
   "permissions": {
     "allow": [
       {"tool_pattern": "FileRead"},
-      {"tool_pattern": "*", "capability": "read_memory"}
+      {"tool_pattern": "*", "capability": "egress_http"}
     ],
     "deny": [
       {"tool_pattern": "*", "capability": "runtime_loader"}
@@ -937,7 +937,7 @@ TEST_CASE("Config::parse extracts a populated permissions block", "[unit][config
   REQUIRE_FALSE(perms.rules[0].capability.has_value());
 
   REQUIRE(perms.rules[1].verdict == config::PermissionVerdict::allow);
-  REQUIRE(perms.rules[1].capability == core::Capability::read_memory);
+  REQUIRE(perms.rules[1].capability == core::Capability::egress_http);
 
   REQUIRE(perms.rules[2].verdict == config::PermissionVerdict::deny);
   REQUIRE(perms.rules[2].capability == core::Capability::runtime_loader);
