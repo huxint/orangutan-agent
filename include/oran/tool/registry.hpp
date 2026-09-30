@@ -23,6 +23,7 @@
 #include <oran/permission/audit.hpp>
 #include <oran/permission/rule_set.hpp>
 #include <oran/tool/output.hpp>
+#include <oran/tool/team.hpp>
 #include <oran/tool/workspace.hpp>
 
 namespace orangutan::tool {
@@ -43,6 +44,7 @@ struct TaskRequest {
   std::size_t max_bytes{8192};
 };
 using TaskHandler = std::function<async::Awaitable<core::Result<Output>>(TaskRequest, DispatchContext&)>;
+using TeamHandler = std::function<async::Awaitable<core::Result<Output>>(TeamCommand, DispatchContext&)>;
 
 /// The host owns child admission and lifetime; dispatch validates and delivers results.
 using AgentRunHandler =
@@ -196,6 +198,7 @@ struct DispatchContext {
   AgentRunHandler agent_run{};
   TaskHandler task_get{};
   TaskHandler task_cancel{};
+  TeamHandler team{};
   /// Optional host-selected tools for a model turn. A direct runtime operation
   /// leaves this absent. Selection limits availability, not external authority.
   std::optional<std::span<const std::string>> active_tools{};

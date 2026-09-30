@@ -134,3 +134,13 @@ not appended to the cached system prefix. The frame explicitly rejects treating
 a task result as user approval or a response to a pending question, and asks the
 parent to review the report against the original task. Task IDs and raw metadata
 remain out of ordinary user-facing replies; hosts provide a separate task list.
+
+## Dynamic Team Context
+
+Team roles are leader-authored task context, not predefined system personas.
+Common specialist guidance and its chosen native catalogue remain stable across
+assignments. Goal/remit initialize dynamic conversation once; subsequent tasks,
+dependency previews, corrections and peer messages enter dynamic messages.
+Inbox consumption never mutates a turn's prefix and is acknowledged only after
+recipient persistence. [Agent teams](../design-docs/agent-teams.md) owns the
+message authority, batching, continuation and cost/cache tradeoffs.

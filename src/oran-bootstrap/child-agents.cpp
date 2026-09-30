@@ -54,6 +54,8 @@ async::Awaitable<core::Result<tool::Output>> run_child_agent(tool::AgentRunReque
   options.trace_context_json = "{}";
   options.event_sink = nullptr;
   options.background_tasks = nullptr;
+  options.inbox.reset();
+  options.team_send = {};
   options.registry = &registry;
   options.scheduler = &scheduler;
   auto child = AgentSession::create(std::move(options));
@@ -77,6 +79,15 @@ async::Awaitable<core::Result<tool::Output>> run_child_agent(tool::AgentRunReque
 }  // namespace
 
 void bind_task_tools(tool::DispatchContext& context, const AgentSessionOptions& options) {
+  if (options.team_send) {
+    context.team = [&options](tool::TeamCommand command,
+                              tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+      const auto* message = std::get_if<tool::TeamMessageRequest>(&command);
+      if (!message)
+        co_return std::unexpected(core::Error::permission_denied("only the leader can manage team tasks"));
+      co_return options.team_send(*message);
+    };
+  }
   if (!options.background_tasks || options.parent_policy)
     return;
   const auto owner = task_owner(options);
@@ -95,6 +106,12 @@ void bind_task_tools(tool::DispatchContext& context, const AgentSessionOptions& 
       co_return std::unexpected(std::move(result).error());
     co_return task_output(*result);
   };
+  if (tasks->teams_enabled() && options.max_child_runs > 0) {
+    context.team = [tasks, &options](tool::TeamCommand command,
+                                     tool::DispatchContext& caller) -> async::Awaitable<core::Result<tool::Output>> {
+      co_return tasks->team_command(options, std::move(command), caller);
+    };
+  }
 }
 
 void bind_child_agents(tool::DispatchContext& context,

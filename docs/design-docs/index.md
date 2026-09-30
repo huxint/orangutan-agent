@@ -2,7 +2,8 @@
 
 | Contract | Owns |
 | --- | --- |
-| [`agent-platform.md`](agent-platform.md) | Agent turn and planned child composition |
+| [`agent-platform.md`](agent-platform.md) | Agent turn and child composition |
+| [`agent-teams.md`](agent-teams.md) | Dynamic specialists, reviewed dependencies, peer messages and cost strategy |
 | [`api-portability.md`](api-portability.md) | Provider protocols, retry and caching |
 | [`async-model.md`](async-model.md) | Executors, cancellation and child ownership |
 | [`bootstrap-runtime.md`](bootstrap-runtime.md) | Application composition and session ownership |

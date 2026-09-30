@@ -3,8 +3,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -18,6 +20,7 @@
 #include <oran/permission/rule_set.hpp>
 #include <oran/provider/system.hpp>
 #include <oran/provider/types.hpp>
+#include <oran/tool/team.hpp>
 
 namespace orangutan::config {
 class Config;
@@ -37,6 +40,18 @@ struct LongtermRecallOptions {
   bool enabled{true};
   std::size_t limit{20};
   std::vector<std::string> kinds{};
+};
+
+struct InboxMessage {
+  std::string id;
+  std::string sender;
+  std::string text;
+};
+
+/// Host-owned messages remain pending until the consuming transcript commits.
+struct SessionInbox {
+  std::function<core::Result<std::vector<InboxMessage>>()> read;
+  std::function<void(std::span<const std::string>)> acknowledge;
 };
 
 struct AgentSessionOptions {
@@ -72,6 +87,10 @@ struct AgentSessionOptions {
   std::optional<permission::PolicyView> parent_policy{};
   /// Maximum child sessions admitted per prompt; zero disables delegation.
   std::size_t max_child_runs{4};
+  /// Host restriction intersected with the configured catalogue, also at dispatch.
+  std::optional<std::vector<std::string>> tool_allowlist{};
+  std::shared_ptr<SessionInbox> inbox{};
+  std::function<core::Result<tool::Output>(tool::TeamMessageRequest)> team_send{};
   provider::EventSink* event_sink{nullptr};
   /// Inject both to share a scheduler. Services outlive this session and all
   /// tools; executor must be the strand that owns the shared scheduler.

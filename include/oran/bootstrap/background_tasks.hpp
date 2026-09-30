@@ -10,9 +10,11 @@
 
 #include <asio/any_io_executor.hpp>
 #include <oran/async/awaitable_fwd.hpp>
+#include <oran/bootstrap/agent-team.hpp>
 #include <oran/core/result.hpp>
 #include <oran/core/time.hpp>
 #include <oran/core/turn_id.hpp>
+#include <oran/tool/team.hpp>
 
 namespace orangutan::config {
 class Config;
@@ -63,6 +65,9 @@ struct TaskSnapshot {
   std::optional<std::size_t> next_offset{};
   bool result_truncated{false};
   std::optional<core::ErrorKind> error_kind{};
+  std::string team_id;
+  std::string team_task_key;
+  std::size_t team_attempt{0};
 };
 
 struct BackgroundTaskOptions {
@@ -74,6 +79,8 @@ struct BackgroundTaskOptions {
   std::chrono::milliseconds retention{std::chrono::hours{1}};
   /// Only a host with an actual completion wake/poll path may enable this.
   bool automatic_delivery{false};
+  /// Adds persistent specialists and a leader-reviewed task board.
+  bool enable_teams{false};
 };
 
 /// Process-local child jobs and shared tool resources. Every method runs on the
@@ -104,6 +111,11 @@ public:
   [[nodiscard]] core::Result<bool> claim_completion(const TaskOwner& owner, std::string_view id);
   void finish_completion(const TaskOwner& owner, std::string_view id, bool committed);
   void cancel_owner(const TaskOwner& owner, std::optional<core::TurnId> turn = std::nullopt);
+  [[nodiscard]] bool teams_enabled() const;
+  /// Scoped leader commands. Host calls use the same validation as native tools.
+  [[nodiscard]] core::Result<tool::Output>
+  team_command(const AgentSessionOptions& parent, tool::TeamCommand command, const tool::DispatchContext& context);
+  [[nodiscard]] core::Result<TeamSnapshot> get_team(const TaskOwner& owner);
   [[nodiscard]] async::Awaitable<core::Result<void>> shutdown();
 
   struct Impl;

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <format>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <span>
 #include <system_error>
 #include <utility>
@@ -17,6 +18,7 @@
 #include <oran/bootstrap/permissions.hpp>
 #include <oran/bootstrap/runtime_assembly.hpp>
 #include <oran/config.hpp>
+#include <oran/core/str.hpp>
 #include <oran/memory/session.hpp>
 #include <oran/provider.hpp>
 #include <oran/tool.hpp>
@@ -92,6 +94,8 @@ using core::Result;
   if (options.origin.empty()) {
     return std::unexpected(Error::invalid_argument("agent session origin must not be empty"));
   }
+  if (options.inbox && (!options.inbox->read || !options.inbox->acknowledge))
+    return std::unexpected(Error::invalid_argument("session inbox requires read and acknowledgment ports"));
   if (options.trace_context_json.empty()) {
     return std::unexpected(Error::invalid_argument("agent session trace context JSON must not be empty"));
   }
@@ -147,6 +151,15 @@ public:
       owned_scheduler_.emplace(options_.executor, *registry_, scheduler_options);
       scheduler_ = &*owned_scheduler_;
     }
+    if (options_.tool_allowlist) {
+      if (active_tools_.use_defaults) {
+        active_tools_.use_defaults = false;
+        active_tools_.tool_names = *options_.tool_allowlist;
+      } else {
+        std::erase_if(active_tools_.tool_names,
+                      [this](const auto& name) { return !std::ranges::contains(*options_.tool_allowlist, name); });
+      }
+    }
     if (options_.parent_policy || options_.max_child_runs == 0) {
       std::erase(active_tools_.tool_names, tool::AGENT_RUN_NAME);
     }
@@ -154,6 +167,11 @@ public:
       std::erase(active_tools_.tool_names, tool::TASK_GET_NAME);
       std::erase(active_tools_.tool_names, tool::TASK_CANCEL_NAME);
     }
+    if (!options_.background_tasks || !options_.background_tasks->teams_enabled() || options_.parent_policy ||
+        options_.max_child_runs == 0)
+      std::erase_if(active_tools_.tool_names, [this](const auto& name) {
+        return tool::is_team_tool(name) && !(name == tool::TEAM_MESSAGE_NAME && options_.team_send);
+      });
   }
 
   [[nodiscard]] async::Awaitable<Result<agent::PromptResult>> run_prompt(agent::PromptRequest request,
@@ -257,10 +275,13 @@ public:
         return definition.name == tool::TASK_GET_NAME || definition.name == tool::TASK_CANCEL_NAME;
       });
     }
+    if (!context.team)
+      std::erase_if(catalog, [](const auto& definition) { return tool::is_team_tool(definition.name); });
     std::optional<std::span<const std::string>> active_tools;
     if (!active_tools_.use_defaults) {
       active_tools = active_tools_.tool_names;
     }
+    std::vector<std::string> inbox_ids;
     auto inputs = agent::RunTurnInputs{
         .system_preamble = options_.system_preamble,
         .tool_catalog = catalog,
@@ -283,6 +304,33 @@ public:
                                               asio::use_awaitable);
           const auto limit = std::min(end, after + 64);
           co_return std::vector<core::Message>{transcript_.begin() + after, transcript_.begin() + limit};
+        },
+        .inbox_reader = [this, &inbox_ids]() -> Result<std::string> {
+          if (!options_.inbox)
+            return std::string{};
+          auto pending = options_.inbox->read();
+          if (!pending)
+            return std::unexpected(std::move(pending).error());
+          auto messages = nlohmann::json::array();
+          for (const auto& message : *pending) {
+            if (std::ranges::contains(inbox_ids, message.id))
+              continue;
+            if (message.id.empty() || message.id.size() > 128 || !core::str::is_valid_utf8(message.id) ||
+                message.text.size() > 8192 || message.sender.size() > 128 || !core::str::is_valid_utf8(message.text) ||
+                !core::str::is_valid_utf8(message.sender))
+              return std::unexpected(Error::invalid_argument("invalid session inbox message"));
+            messages.push_back({{"id", message.id}, {"sender", message.sender}, {"data", message.text}});
+            if (messages.dump().size() > 30000) {
+              if (messages.size() == 1)
+                return std::unexpected(Error::invalid_argument("encoded inbox message exceeds the byte bound"));
+              messages.erase(messages.size() - 1);
+              break;
+            }
+            inbox_ids.push_back(message.id);
+            if (messages.size() == 2)
+              break;
+          }
+          return messages.empty() ? std::string{} : messages.dump();
         },
         .tool_choice = options_.tool_choice,
         .max_tokens = options_.max_tokens,
@@ -349,6 +397,8 @@ public:
                          std::make_move_iterator(result->transcript.end()));
       checkpoint_ = std::move(result->checkpoint);
     }
+    if (options_.inbox)
+      options_.inbox->acknowledge(inbox_ids);
     co_return agent::PromptResult{.text = std::move(result->text)};
   }
 

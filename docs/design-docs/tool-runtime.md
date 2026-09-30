@@ -36,7 +36,8 @@ retains the prepared value through execution and cleanup. Approval and hooks use
 the exact final input bytes, without JSON reserialization.
 
 Trusted registration explicitly sets `DispatchPolicy::runtime` for MemoryRecall,
-MemoryRemember, MemoryForget, AgentRun, TaskGet and TaskCancel. These operations
+MemoryRemember, MemoryForget, AgentRun, TaskGet, TaskCancel and host-enabled
+[team tools](agent-teams.md#tools-and-task-state). These operations
 ignore generic allow/deny/ask, including inherited rules and strict mode. Their
 handlers enforce host-bound scope, service availability, memory write gates,
 dynamic child identities and task limits. Runtime registrations reject external

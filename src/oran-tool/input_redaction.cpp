@@ -55,12 +55,12 @@ void fill_file_edit_counts(nlohmann::json& out, const nlohmann::json& input) {
 
 std::optional<std::string> redacted_hook_input_json(std::string_view tool_name, std::string_view input_json) {
   if (tool_name != kFileWriteName && tool_name != kFileEditName && tool_name != kMemoryRememberName &&
-      tool_name != AGENT_RUN_NAME) {
+      tool_name != AGENT_RUN_NAME && !is_team_tool(tool_name)) {
     return std::nullopt;
   }
 
   auto out = base_redacted_input(tool_name, input_json);
-  if (tool_name == kMemoryRememberName || tool_name == AGENT_RUN_NAME) {
+  if (tool_name == kMemoryRememberName || tool_name == AGENT_RUN_NAME || is_team_tool(tool_name)) {
     out["redaction_status"] = "ok";
     return out.dump();
   }

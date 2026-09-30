@@ -108,6 +108,11 @@ a host-bound bootstrap service owns child sessions and shared tool services
 beyond the parent turn. Scoped completion events resume the parent at a safe
 turn boundary; the host joins the service before releasing runtime resources.
 
+The same service optionally retains leader-defined specialists, a reviewed task
+graph and bounded peer inboxes. Jobs reuse its queue and scheduler; the loop only
+consumes dynamic message values. [Agent teams](design-docs/agent-teams.md) owns
+their topology, authority, lifetime and cost/cache strategy.
+
 ## Public Headers
 
 ```text

@@ -206,10 +206,11 @@ int main(int argc, char** argv) try {
     // Each provider HTTP call occupies a blocking worker. Leave one worker for
     // foreground requests and channel polling instead of filling the pool.
     const auto running = std::min<std::size_t>(4, static_cast<std::size_t>(config->runtime().workers) - 1);
-    auto created = bootstrap::BackgroundTasks::create(strand,
-                                                      *assembly,
-                                                      *config,
-                                                      {.max_running = running, .automatic_delivery = true});
+    auto created =
+        bootstrap::BackgroundTasks::create(strand,
+                                           *assembly,
+                                           *config,
+                                           {.max_running = running, .automatic_delivery = true, .enable_teams = true});
     if (!created) {
       std::println(stderr, "Cannot construct background task service");
       return 2;

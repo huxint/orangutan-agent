@@ -231,6 +231,7 @@ DispatchContext DispatchContext::for_now(const DispatchContext& prototype, bool 
       .agent_run = prototype.agent_run,
       .task_get = prototype.task_get,
       .task_cancel = prototype.task_cancel,
+      .team = prototype.team,
       .active_tools = prototype.active_tools,
       .workspace = prototype.workspace,
       .path_locks = prototype.path_locks,

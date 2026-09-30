@@ -10,7 +10,14 @@
         "MemoryRemember",
         "AgentRun",
         "TaskGet",
-        "TaskCancel"
+        "TaskCancel",
+        "TeamCreate",
+        "TeamMemberAdd",
+        "TeamTaskCreate",
+        "TeamTaskUpdate",
+        "TeamGet",
+        "TeamMessage",
+        "TeamStop"
       ]
     }
   },

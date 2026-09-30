@@ -163,7 +163,7 @@ coordinating strand. Hosts retain the provider, configuration and assembly until
 the service's explicit `shutdown()` closes admission, cancels work and joins it.
 Normal parent completion or destruction does not destroy admitted jobs.
 
-Each task owns a fresh child session, parent permission snapshot, cancellation
+Each ordinary task owns a fresh child session, parent permission snapshot, cancellation
 group and deadline. Children retain one-generation authority constraints. Defaults
 are four running jobs, sixteen queued jobs, sixty-four retained records, a
 fifteen-minute deadline including queue time, and 64 KiB of UTF-8 result text.
@@ -211,3 +211,9 @@ same ownership concerns as OpenClaw's
 and [subagent handoff](https://github.com/openclaw/openclaw/blob/main/docs/tools/subagents/slash-command.md#spawn-behavior).
 Here the executor is a dynamically created child session, and completion cannot release
 borrowed runtime resources before the existing TaskGroup join.
+
+With `BackgroundTaskOptions::enable_teams`, the same service retains named member
+sessions across assignments and corrections. Jobs share its ordinary queue,
+deadlines, completion settlement and shutdown boundary. No second background
+executor is introduced. [Agent teams](agent-teams.md) owns dynamic membership,
+reviewed dependencies, direct messages and resource bounds.

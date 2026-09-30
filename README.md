@@ -63,6 +63,10 @@ The retained host also supports background child tasks: AgentRun can return an
 immediate receipt while later messages continue, and completed work produces a
 reviewed follow-up. `/tasks` lists progress and `/stop` requests cancellation.
 Task execution is process-local; `--once` does not enable background work.
+The retained host also enables [agent teams](docs/design-docs/agent-teams.md): the
+leader defines roles as needed, assigns dependent tasks, reviews results and
+continues the same specialists for corrections. Members exchange targeted
+messages. Library hosts enable this with `BackgroundTaskOptions::enable_teams`.
 For QQ, `oran-qq-login` supports [official QR binding](docs/design-docs/messaging-channels.md#qr-authorization)
 without manually entering AppID/AppSecret, plus a saved-credential probe. The QQ
 message-receiving host is still separate deployment work.

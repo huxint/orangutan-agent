@@ -157,6 +157,13 @@ topic search and same-turn correction writes use the ordinary tool loop; the
 [memory contract](memory-system.md) owns their behavior. Do not add mutable application registries or
 cross-agent state to the loop.
 
+A host may supply bounded inbox text before each provider request. The loop
+frames it as untrusted agent data in dynamic conversation, budgets it and preserves
+it in the original transcript. It does not alter the prefix or interrupt tool
+exchanges. The session acknowledges messages only after persistence succeeds;
+failed turns leave them available. [Agent teams](agent-teams.md) owns the current
+sender and delivery limits.
+
 ## Agent Collaboration
 
 `AgentRun` dynamically creates an agent from a self-contained prompt and returns
@@ -203,3 +210,11 @@ input uses a dedicated session entry point and cannot overlap another parent
 turn. The [bootstrap contract](bootstrap-runtime.md#background-tasks) owns the
 service, acknowledgment and shutdown semantics; ordinary child execution above
 retains its awaited lifetime.
+
+## Agent Teams
+
+An enabled background service hosts leader-defined specialists that retain
+independent sessions across assignments and corrections. Roles may be added as
+needed. Reviewed dependencies and direct peer messages share existing execution
+and persistence boundaries. [Agent teams](agent-teams.md) owns the state machine,
+tools, bounds and cost strategy; the loop owns no role registry or team state.

@@ -19,16 +19,17 @@
 #include <oran/permission/input_pattern.hpp>
 #include <oran/tool/builtins.hpp>
 
+#include "_impl/background-tasks.hpp"
+
 namespace orangutan::bootstrap {
-namespace {
 using core::Error;
 using core::Result;
 
-bool terminal(TaskState state) {
+bool task_terminal(TaskState state) {
   return state == TaskState::succeeded || state == TaskState::failed || state == TaskState::cancelled;
 }
 
-Result<permission::RuleSet> copy_rules(std::span<const permission::Rule> rules) {
+Result<permission::RuleSet> copy_child_rules(std::span<const permission::Rule> rules) {
   permission::RuleSet copy;
   copy.reserve(rules.size());
   for (const auto& rule : rules) {
@@ -47,172 +48,184 @@ Result<permission::RuleSet> copy_rules(std::span<const permission::Rule> rules) 
   }
   return copy;
 }
-}  // namespace
 
-struct BackgroundTasks::Impl : std::enable_shared_from_this<Impl> {
-  struct Job {
-    explicit Job(asio::any_io_executor executor) : deadline{std::move(executor)} {}
-    TaskOwner owner;
-    std::optional<core::TurnId> parent_turn;
-    TaskSnapshot snapshot;
-    permission::RuleSet parent_rules;
-    std::unique_ptr<AgentSession> session;
-    std::optional<async::TaskGroup> group;
-    asio::steady_timer deadline;
-    std::string prompt;
-    std::optional<Result<agent::PromptResult>> outcome;
-    std::string result;
-    bool timed_out{false};
-    bool claimed{false};
-    std::chrono::steady_clock::time_point finished{};
-  };
+BackgroundTasks::Impl::Impl(asio::any_io_executor exec,
+                            RuntimeAssembly& resources,
+                            const config::Config& cfg,
+                            BackgroundTaskOptions opts,
+                            agent::ToolSchedulerOptions sched)
+    : executor{std::move(exec)}, assembly{&resources}, config{&cfg}, options{opts},
+      scheduler{executor, registry, sched}, changed{executor, 1} {}
 
-  Impl(asio::any_io_executor exec,
-       RuntimeAssembly& resources,
-       const config::Config& cfg,
-       BackgroundTaskOptions opts,
-       agent::ToolSchedulerOptions sched)
-      : executor{std::move(exec)}, assembly{&resources}, config{&cfg}, options{opts},
-        scheduler{executor, registry, sched}, changed{executor, 1} {}
+bool BackgroundTasks::Impl::has_record_capacity(bool reserved) {
+  prune();
+  std::size_t waiting = 0;
+  for (const auto& team : teams)
+    waiting += static_cast<std::size_t>(std::ranges::count_if(team->work, [](const auto& work) {
+      return work.snapshot.state == TeamTaskState::waiting;
+    }));
+  if (reserved && waiting > 0)
+    --waiting;
+  return !closed && jobs.size() + waiting < options.max_records;
+}
 
-  asio::any_io_executor executor;
-  RuntimeAssembly* assembly;
-  const config::Config* config;
-  BackgroundTaskOptions options;
-  tool::Registry registry;
-  agent::ToolScheduler scheduler;
-  async::Channel<int> changed;
-  std::vector<std::shared_ptr<Job>> jobs;
-  std::size_t active{0};
-  bool closed{false};
-  bool joining{false};
+bool BackgroundTasks::Impl::has_capacity(bool reserved) {
+  const bool records = has_record_capacity(reserved);
+  const auto unfinished =
+      std::ranges::count_if(jobs, [](const auto& job) { return !task_terminal(job->snapshot.state); });
+  return records && static_cast<std::size_t>(unfinished) < options.max_running + options.max_queued;
+}
 
-  void prune() {
-    const auto now = std::chrono::steady_clock::now();
-    std::erase_if(jobs, [this, now](const auto& job) {
-      return terminal(job->snapshot.state) && !job->claimed &&
-             (!options.automatic_delivery || job->snapshot.acknowledged) && now - job->finished >= options.retention;
-    });
-  }
-
-  std::shared_ptr<Job> find(const TaskOwner& owner, std::string_view id) {
-    prune();
-    const auto found = std::ranges::find_if(jobs, [&owner, id](const auto& job) {
-      return job->owner == owner && job->snapshot.task_id == id;
-    });
-    return found == jobs.end() ? nullptr : *found;
-  }
-
-  void cancel_job(const std::shared_ptr<Job>& job, bool timeout = false) {
-    if (terminal(job->snapshot.state) || job->snapshot.state == TaskState::cancelling) {
-      if (!timeout)
-        job->snapshot.acknowledged = true;
+Result<void> BackgroundTasks::Impl::enqueue(const std::shared_ptr<Job>& job) {
+  if (!has_capacity(job->team != nullptr))
+    return std::unexpected(Error{core::ErrorKind::mailbox_overflowed, "background task capacity reached"});
+  if (std::ranges::any_of(jobs,
+                          [&job](const auto& existing) { return existing->snapshot.task_id == job->snapshot.task_id; }))
+    return std::unexpected(Error{core::ErrorKind::conflict, "background task identity collision"});
+  jobs.push_back(job);
+  job->deadline.expires_after(options.timeout);
+  auto self = shared_from_this();
+  job->deadline.async_wait([weak = std::weak_ptr{self}, weak_job = std::weak_ptr{job}](const asio::error_code& error) {
+    if (error)
       return;
-    }
-    job->timed_out = job->timed_out || timeout;
+    if (auto state = weak.lock())
+      if (auto pending = weak_job.lock()) {
+        state->cancel_job(pending, true);
+        state->pump();
+      }
+  });
+  asio::post(executor, [self] { self->pump(); });
+  return {};
+}
+
+void BackgroundTasks::Impl::prune() {
+  const auto now = std::chrono::steady_clock::now();
+  std::erase_if(jobs, [this, now](const auto& job) {
+    return task_terminal(job->snapshot.state) && !job->claimed &&
+           (!options.automatic_delivery || job->snapshot.acknowledged) && now - job->finished >= options.retention;
+  });
+}
+
+std::shared_ptr<BackgroundTasks::Impl::Job> BackgroundTasks::Impl::find(const TaskOwner& owner, std::string_view id) {
+  prune();
+  const auto found = std::ranges::find_if(jobs, [&owner, id](const auto& job) {
+    return job->owner == owner && job->snapshot.task_id == id;
+  });
+  return found == jobs.end() ? nullptr : *found;
+}
+
+void BackgroundTasks::Impl::cancel_job(const std::shared_ptr<Job>& job, bool timeout) {
+  if (task_terminal(job->snapshot.state) || job->snapshot.state == TaskState::cancelling) {
     if (!timeout)
       job->snapshot.acknowledged = true;
-    job->snapshot.updated_at = core::time::now_utc();
-    if (job->snapshot.state == TaskState::queued) {
-      job->snapshot.state = timeout ? TaskState::failed : TaskState::cancelled;
-      job->snapshot.error_kind = timeout ? core::ErrorKind::timeout : core::ErrorKind::cancelled;
-      job->finished = std::chrono::steady_clock::now();
-      job->deadline.cancel();
-      job->session.reset();
-      job->parent_rules.clear();
-      job->prompt.clear();
-    } else {
-      job->snapshot.state = TaskState::cancelling;
-      job->group->request_stop();
-    }
-    static_cast<void>(changed.try_send(0));
+    return;
   }
-
-  static async::Awaitable<Result<void>> execute(std::shared_ptr<Job> job) {
-    job->outcome = co_await job->session->run_prompt({.prompt = std::move(job->prompt)});
-    co_return Result<void>{};
-  }
-
-  static async::Awaitable<void> monitor(std::shared_ptr<Impl> self, std::shared_ptr<Job> job) {
-    std::optional<Result<async::TaskGroupReport>> report;
-    try {
-      report = co_await job->group->join();
-    } catch (...) {
-      job->group->request_stop();
-    }
-    // Even an exceptional join cannot retire borrowed services before the
-    // child finishes. This fallback is only for a failed join boundary.
-    co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
-    while (job->group->active_tasks() != 0) {
-      auto waited = co_await async::sleep_for(self->executor, std::chrono::milliseconds{1});
-      if (!waited)
-        job->group->request_stop();
-    }
-    job->deadline.cancel();
-    try {
-      if (job->snapshot.state == TaskState::cancelling) {
-        job->snapshot.state = job->timed_out ? TaskState::failed : TaskState::cancelled;
-        job->snapshot.error_kind = job->timed_out ? core::ErrorKind::timeout : core::ErrorKind::cancelled;
-      } else if (!report || !*report || !(**report).all_succeeded() || !job->outcome || !*job->outcome) {
-        const auto kind = job->outcome && !*job->outcome ? job->outcome->error().kind() : core::ErrorKind::internal;
-        job->snapshot.state = kind == core::ErrorKind::cancelled ? TaskState::cancelled : TaskState::failed;
-        job->snapshot.error_kind = kind;
-      } else {
-        job->snapshot.state = TaskState::succeeded;
-        const auto& text = (*job->outcome)->text;
-        job->result = core::str::truncate_to_code_point(text, self->options.max_result_bytes);
-        job->snapshot.result_truncated = job->result.size() < text.size();
-      }
-    } catch (...) {
-      job->snapshot.state = TaskState::failed;
-      job->snapshot.error_kind = core::ErrorKind::internal;
-    }
-    job->snapshot.updated_at = core::time::now_utc();
-    job->snapshot.result_bytes = job->result.size();
+  job->timed_out = job->timed_out || timeout;
+  if (!timeout)
+    job->snapshot.acknowledged = true;
+  job->snapshot.updated_at = core::time::now_utc();
+  if (job->snapshot.state == TaskState::queued) {
+    job->snapshot.state = timeout ? TaskState::failed : TaskState::cancelled;
+    job->snapshot.error_kind = timeout ? core::ErrorKind::timeout : core::ErrorKind::cancelled;
     job->finished = std::chrono::steady_clock::now();
-    job->outcome.reset();
-    job->session.reset();
-    job->parent_rules.clear();
-    job->group.reset();
-    --self->active;
-    static_cast<void>(self->changed.try_send(0));
+    job->deadline.cancel();
+    job->child.reset();
+    finish_team_job(*job);
+    job->team.reset();
+    job->prompt.clear();
+  } else {
+    job->snapshot.state = TaskState::cancelling;
+    job->group->request_stop();
   }
+  static_cast<void>(changed.try_send(0));
+}
 
-  void pump() {
-    if (closed)
-      return;
-    for (const auto& job : jobs) {
-      if (active >= options.max_running)
-        break;
-      if (job->snapshot.state != TaskState::queued)
-        continue;
-      auto group = async::TaskGroup::create(executor, {.max_tasks = 1, .max_completed = 1});
-      if (!group) {
-        cancel_job(job);
-        continue;
-      }
-      job->group.emplace(std::move(*group));
-      job->snapshot.state = TaskState::running;
-      job->snapshot.updated_at = core::time::now_utc();
-      ++active;
-      auto started = job->group->spawn(job->snapshot.task_id, [job] { return execute(job); });
-      if (!started) {
-        job->outcome = std::unexpected(std::move(started).error());
-      }
-      auto self = shared_from_this();
-      asio::co_spawn(executor, monitor(self, job), [self, job](std::exception_ptr error) {
-        // Never publish terminal state or decrement active twice on an
-        // exceptional monitor exit. Keep ownership and rejoin before release.
-        if (error && job->group) {
-          job->group->request_stop();
-          asio::co_spawn(self->executor, monitor(self, job), [self](std::exception_ptr) { self->pump(); });
-        } else {
-          self->pump();
-        }
-      });
-    }
+async::Awaitable<Result<void>> BackgroundTasks::Impl::execute(std::shared_ptr<Job> job) {
+  job->outcome = co_await job->child->session->run_prompt({.prompt = std::move(job->prompt)});
+  co_return Result<void>{};
+}
+
+async::Awaitable<void> BackgroundTasks::Impl::monitor(std::shared_ptr<Impl> self, std::shared_ptr<Job> job) {
+  std::optional<Result<async::TaskGroupReport>> report;
+  try {
+    report = co_await job->group->join();
+  } catch (...) {
+    job->group->request_stop();
   }
-};
+  // Even an exceptional join cannot retire borrowed services before the
+  // child finishes. This fallback is only for a failed join boundary.
+  co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());
+  while (job->group->active_tasks() != 0) {
+    auto waited = co_await async::sleep_for(self->executor, std::chrono::milliseconds{1});
+    if (!waited)
+      job->group->request_stop();
+  }
+  job->deadline.cancel();
+  try {
+    if (job->snapshot.state == TaskState::cancelling) {
+      job->snapshot.state = job->timed_out ? TaskState::failed : TaskState::cancelled;
+      job->snapshot.error_kind = job->timed_out ? core::ErrorKind::timeout : core::ErrorKind::cancelled;
+    } else if (!report || !*report || !(**report).all_succeeded() || !job->outcome || !*job->outcome) {
+      const auto kind = job->outcome && !*job->outcome ? job->outcome->error().kind() : core::ErrorKind::internal;
+      job->snapshot.state = kind == core::ErrorKind::cancelled ? TaskState::cancelled : TaskState::failed;
+      job->snapshot.error_kind = kind;
+    } else {
+      job->snapshot.state = TaskState::succeeded;
+      const auto& text = (*job->outcome)->text;
+      job->result = core::str::truncate_to_code_point(text, self->options.max_result_bytes);
+      job->snapshot.result_truncated = job->result.size() < text.size();
+    }
+  } catch (...) {
+    job->snapshot.state = TaskState::failed;
+    job->snapshot.error_kind = core::ErrorKind::internal;
+  }
+  job->snapshot.updated_at = core::time::now_utc();
+  job->snapshot.result_bytes = job->result.size();
+  job->finished = std::chrono::steady_clock::now();
+  job->outcome.reset();
+  self->finish_team_job(*job);
+  job->team.reset();
+  job->child.reset();
+  job->group.reset();
+  --self->active;
+  static_cast<void>(self->changed.try_send(0));
+}
+
+void BackgroundTasks::Impl::pump() {
+  if (closed)
+    return;
+  pump_teams();
+  for (const auto& job : jobs) {
+    if (active >= options.max_running)
+      break;
+    if (job->snapshot.state != TaskState::queued)
+      continue;
+    auto group = async::TaskGroup::create(executor, {.max_tasks = 1, .max_completed = 1});
+    if (!group) {
+      cancel_job(job);
+      continue;
+    }
+    job->group.emplace(std::move(*group));
+    job->snapshot.state = TaskState::running;
+    job->snapshot.updated_at = core::time::now_utc();
+    ++active;
+    auto started = job->group->spawn(job->snapshot.task_id, [job] { return execute(job); });
+    if (!started) {
+      job->outcome = std::unexpected(std::move(started).error());
+    }
+    auto self = shared_from_this();
+    asio::co_spawn(executor, monitor(self, job), [self, job](std::exception_ptr error) {
+      // Never publish terminal state or decrement active twice on an
+      // exceptional monitor exit. Keep ownership and rejoin before release.
+      if (error && job->group) {
+        job->group->request_stop();
+        asio::co_spawn(self->executor, monitor(self, job), [self](std::exception_ptr) { self->pump(); });
+      } else {
+        self->pump();
+      }
+    });
+  }
+}
 
 TaskOwner task_owner(const AgentSessionOptions& options) {
   return {options.session_id, options.scope_key, options.agent_key, options.identity};
@@ -242,12 +255,18 @@ Result<std::unique_ptr<BackgroundTasks>> BackgroundTasks::create(asio::any_io_ex
     return std::unexpected(std::move(added).error());
   if (auto added = tool::register_task_tools(impl->registry); !added)
     return std::unexpected(std::move(added).error());
+  if (options.enable_teams) {
+    if (auto added = tool::register_team_tools(impl->registry); !added)
+      return std::unexpected(std::move(added).error());
+  }
   return std::make_unique<BackgroundTasks>(std::move(impl), PrivateTag{});
 }
 
 BackgroundTasks::BackgroundTasks(std::shared_ptr<Impl> impl, PrivateTag) : impl_{std::move(impl)} {}
 BackgroundTasks::~BackgroundTasks() {
   impl_->closed = true;
+  for (const auto& team : impl_->teams)
+    impl_->stop_team(*team);
   for (const auto& job : impl_->jobs)
     impl_->cancel_job(job);
 }
@@ -272,7 +291,7 @@ Result<TaskSnapshot> BackgroundTasks::start(const AgentSessionOptions& parent,
     return std::unexpected(Error::invalid_argument("invalid background task prompt or label"));
   impl_->prune();
   const auto unfinished =
-      std::ranges::count_if(impl_->jobs, [](const auto& job) { return !terminal(job->snapshot.state); });
+      std::ranges::count_if(impl_->jobs, [](const auto& job) { return !task_terminal(job->snapshot.state); });
   if (impl_->closed || impl_->jobs.size() >= impl_->options.max_records ||
       static_cast<std::size_t>(unfinished) >= impl_->options.max_running + impl_->options.max_queued)
     return std::unexpected(Error{core::ErrorKind::mailbox_overflowed, "background task capacity reached"});
@@ -282,13 +301,14 @@ Result<TaskSnapshot> BackgroundTasks::start(const AgentSessionOptions& parent,
   const auto text_id = core::format_turn_id_hex(*id);
   if (std::ranges::any_of(impl_->jobs, [&text_id](const auto& job) { return job->snapshot.task_id == text_id; }))
     return std::unexpected(Error{core::ErrorKind::conflict, "background task identity collision"});
-  auto rules = copy_rules(context.rules);
+  auto rules = copy_child_rules(context.rules);
   if (!rules)
     return std::unexpected(std::move(rules).error());
   auto job = std::make_shared<Impl::Job>(impl_->executor);
+  job->child = std::make_shared<Impl::Child>();
   job->owner = task_owner(parent);
   job->parent_turn = context.parent_turn_id;
-  job->parent_rules = std::move(*rules);
+  job->child->parent_rules = std::move(*rules);
   job->snapshot.task_id = text_id;
   job->snapshot.agent_key = "child/" + text_id;
   job->snapshot.label = request.label.empty() ? "Background task" : request.label;
@@ -301,7 +321,7 @@ Result<TaskSnapshot> BackgroundTasks::start(const AgentSessionOptions& parent,
   child_options.identity = "child/" + text_id;
   child_options.origin = "background_agent";
   child_options.parent_turn_id = context.parent_turn_id;
-  child_options.parent_policy = permission::PolicyView{.rules = job->parent_rules, .mode = context.mode};
+  child_options.parent_policy = permission::PolicyView{.rules = job->child->parent_rules, .mode = context.mode};
   child_options.max_child_runs = 0;
   child_options.per_agent_overlay.clear();
   child_options.trace_context_json = "{}";
@@ -309,21 +329,15 @@ Result<TaskSnapshot> BackgroundTasks::start(const AgentSessionOptions& parent,
   child_options.registry = &impl_->registry;
   child_options.scheduler = &impl_->scheduler;
   child_options.background_tasks = nullptr;
+  child_options.inbox.reset();
+  child_options.team_send = {};
   auto child = AgentSession::create(std::move(child_options));
   if (!child)
     return std::unexpected(std::move(child).error());
-  job->session = std::move(*child);
-  impl_->jobs.push_back(job);
-  job->deadline.expires_after(impl_->options.timeout);
-  auto self = impl_;
-  job->deadline.async_wait([weak = std::weak_ptr{self}, weak_job = std::weak_ptr{job}](const asio::error_code& error) {
-    if (error)
-      return;
-    if (auto state = weak.lock())
-      if (auto pending = weak_job.lock())
-        state->cancel_job(pending, true);
-  });
-  asio::post(impl_->executor, [self] { self->pump(); });
+  job->child->session = std::move(*child);
+  auto admitted = impl_->enqueue(job);
+  if (!admitted)
+    return std::unexpected(std::move(admitted).error());
   return job->snapshot;
 }
 
@@ -361,7 +375,7 @@ std::vector<TaskSnapshot> BackgroundTasks::list(const TaskOwner& owner) {
 }
 std::optional<std::string> BackgroundTasks::next_completion(const TaskOwner& owner) {
   for (const auto& job : impl_->jobs)
-    if (job->owner == owner && terminal(job->snapshot.state) && job->snapshot.automatic_delivery &&
+    if (job->owner == owner && task_terminal(job->snapshot.state) && job->snapshot.automatic_delivery &&
         !job->snapshot.acknowledged && !job->claimed)
       return job->snapshot.task_id;
   return std::nullopt;
@@ -372,7 +386,7 @@ Result<bool> BackgroundTasks::claim_completion(const TaskOwner& owner, std::stri
     return std::unexpected(Error::not_found("task completion is unavailable"));
   if (job->snapshot.acknowledged)
     return false;
-  if (!terminal(job->snapshot.state) || job->claimed)
+  if (!task_terminal(job->snapshot.state) || job->claimed)
     return std::unexpected(Error{core::ErrorKind::conflict, "task completion is not ready"});
   job->claimed = true;
   return true;
@@ -384,6 +398,15 @@ void BackgroundTasks::finish_completion(const TaskOwner& owner, std::string_view
   }
 }
 void BackgroundTasks::cancel_owner(const TaskOwner& owner, std::optional<core::TurnId> turn) {
+  if (auto team = impl_->find_team(owner)) {
+    if (!turn) {
+      impl_->stop_team(*team);
+    } else {
+      for (auto& work : team->work)
+        if (work.parent_turn == turn && work.snapshot.state == TeamTaskState::waiting)
+          work.snapshot.state = TeamTaskState::cancelled;
+    }
+  }
   for (const auto& job : impl_->jobs)
     if (job->owner == owner && (!turn || job->parent_turn == turn))
       impl_->cancel_job(job);
@@ -394,6 +417,8 @@ async::Awaitable<Result<void>> BackgroundTasks::shutdown() {
     co_return std::unexpected(Error{core::ErrorKind::conflict, "background shutdown already active"});
   self->joining = true;
   self->closed = true;
+  for (const auto& team : self->teams)
+    self->stop_team(*team);
   for (const auto& job : self->jobs)
     self->cancel_job(job);
   co_await asio::this_coro::reset_cancellation_state(asio::disable_cancellation());

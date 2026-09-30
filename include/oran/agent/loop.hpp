@@ -84,6 +84,9 @@ struct RunTurnInputs {
   /// Forward reader over a fixed persisted snapshot, starting after sequence.
   /// Returns a bounded nonempty page until history_end is reached.
   std::function<async::Awaitable<core::Result<std::vector<core::Message>>>(std::int64_t)> history_loader{};
+  /// Bounded untrusted data before each model request. Empty means no messages;
+  /// the host acknowledges delivery only after transcript persistence.
+  std::function<core::Result<std::string>()> inbox_reader{};
   std::optional<std::string> tool_choice{};
   std::optional<std::uint32_t> max_tokens{};
   std::optional<std::uint32_t> thinking_budget{};

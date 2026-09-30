@@ -34,6 +34,7 @@ inline constexpr std::string_view TASK_CANCEL_NAME{"TaskCancel"};
 [[nodiscard]] core::Result<void> register_agent_run(Registry& registry, bool background = false);
 /// Register scoped background-task inspection and cancellation ports.
 [[nodiscard]] core::Result<void> register_task_tools(Registry& registry);
+[[nodiscard]] core::Result<void> register_team_tools(Registry& registry);
 
 /// Register the bounded UTF-8 line reader. Requires read_file authority;
 /// workspace dispatch resolves and pins the requested path. Input and output

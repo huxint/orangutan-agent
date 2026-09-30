@@ -46,6 +46,13 @@ coalesce ready reports and acknowledge only after parent persistence. Jobs are
 process-local; child transcripts remain stored. The Telegram host supplies
 completion polling, delivery journaling and `/tasks`/`/stop` controls.
 
+An enabled background service also provides dynamic agent teams: the leader
+creates and adds roles, reuses specialist sessions, reviews dependency results
+and requests bounded corrections. Peers exchange targeted messages at model
+boundaries without changing task authority or waking idle members. The retained
+Telegram host enables the tools. [Agent teams](design-docs/agent-teams.md) owns
+the current controls and the limits of cache and cost claims.
+
 Filesystem, HTTP and SQLite work runs on explicit executors. Durable audit
 decisions precede tool effects; terminal traces and cancellation cleanup finish
 before services are released. Existing user records remain intact.

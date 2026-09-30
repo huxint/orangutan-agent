@@ -30,6 +30,15 @@ tool::Output task_output(const TaskSnapshot& snapshot) {
                           snapshot.label,
                           core::enum_name(snapshot.state),
                           delivery);
+  if (!snapshot.team_id.empty()) {
+    data["team_id"] = snapshot.team_id;
+    data["team_task_key"] = snapshot.team_task_key;
+    data["team_attempt"] = snapshot.team_attempt;
+    text += std::format("Team task {} attempt {}: review with TeamGet, then TeamTaskUpdate. "
+                        "Successful execution alone does not accept a team task; check its current state.\n",
+                        snapshot.team_task_key,
+                        snapshot.team_attempt);
+  }
   if (snapshot.state == TaskState::queued || snapshot.state == TaskState::running) {
     text += "Accepted, not completed. Continues across turns, but not across process restarts.\n";
     text += snapshot.automatic_delivery
