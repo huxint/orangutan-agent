@@ -1694,6 +1694,44 @@ TEST_CASE("AgentSession does not commit incomplete responses and can continue", 
   });
 }
 
+TEST_CASE("AgentSession rejects duplicate tool IDs without file effects or transcript changes",
+          "[integration][bootstrap][tool-identity]") {
+  TempDir temp{"oran-session-duplicate-tool"};
+  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
+    auto cfg = config::Config{};
+    auto assembly = build_assembly(temp.path(), io, false, true);
+    auto malformed = tool_response("FileWrite", "same-id", R"({"path":"first.txt","content":"first"})");
+    malformed.blocks.emplace_back(core::ToolUseContent{
+        .id = "same-id", .name = "FileWrite", .input_json = R"({"path":"second.txt","content":"second"})"});
+    RecordingProvider recording{{text_response("saved answer"), std::move(malformed), text_response("continued")}};
+    auto options = base_runner_options(io, assembly, cfg, recording);
+    options.mode = permission::Mode::permissive;
+    options.session_id.back() = std::byte{0x42};
+    auto runner = bootstrap::AgentSession::create(std::move(options));
+    REQUIRE(runner.has_value());
+    auto first = co_await (*runner)->run_prompt({.prompt = "saved prompt"});
+    REQUIRE(first.has_value());
+    auto failed = co_await (*runner)->run_prompt({.prompt = "write both files"});
+    REQUIRE_FALSE(failed.has_value());
+    REQUIRE(failed.error().kind() == core::ErrorKind::upstream);
+    REQUIRE_FALSE(std::filesystem::exists(temp.path() / "first.txt"));
+    REQUIRE_FALSE(std::filesystem::exists(temp.path() / "second.txt"));
+    auto loaded = co_await assembly.session_store()->load(
+        memory::session::SessionId{.value = "00000000000000000000000000000042"},
+        memory::session::AgentKey{.value = "coder"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->size() == 2);
+    REQUIRE((*loaded)[1].blocks == core::Message::assistant_text("saved answer").blocks);
+    auto continued = co_await (*runner)->run_prompt({.prompt = "continue"});
+    REQUIRE(continued.has_value());
+    REQUIRE(continued->text == "continued");
+    const auto requests = recording.requests();
+    REQUIRE(requests.size() == 3);
+    REQUIRE(requests.back().messages.size() == 3);
+    REQUIRE(requests.back().messages[2].blocks == core::Message::user_text("continue").blocks);
+  });
+}
+
 TEST_CASE("AgentSession resumes completed history after a failed transcript commit",
           "[integration][bootstrap][memory][atomic]") {
   TempDir temp{"oran-session-atomic-turn"};

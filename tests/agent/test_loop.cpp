@@ -2549,6 +2549,60 @@ TEST_CASE("Loop stops repeated tool_use turns at the iteration cap", "[unit][age
   });
 }
 
+TEST_CASE("Loop records usage and terminal failure for rejected tool IDs", "[unit][agent][loop][trace][tool-identity]") {
+  TempDb db{"oran-agent-loop-tool-id-trace"};
+  test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {
+    auto pool = open_trace_pool(io, db);
+    storage::TraceRepository trace{pool};
+    auto migrated = co_await trace.migrate();
+    REQUIRE(migrated.has_value());
+    RecordingSequenceProvider provider{std::vector<provider::Response>{
+        provider::Response{
+            .blocks = {core::ToolUseContent{.id = "same", .name = "Count", .input_json = "{}"}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = provider::Usage{.input_tokens = 4, .output_tokens = 1, .cost_estimate = std::nullopt},
+            .model_used = std::string{"first-model"},
+        },
+        provider::Response{
+            .blocks = {core::ToolUseContent{.id = "same", .name = "Count", .input_json = "{}"}},
+            .stop_reason = core::StopReason::tool_use,
+            .usage = provider::Usage{.input_tokens = 6, .output_tokens = 2, .cost_estimate = std::nullopt},
+            .model_used = std::string{"last-model"},
+        },
+    }};
+    agent::Loop loop{provider, default_route()};
+    tool::Registry registry;
+    add_canned_tool(registry, canned_tool_def("Count"), "effect");
+    auto rules = allow_all_rules();
+    permission::RecordingAuditSink audit;
+    auto context = dispatch_context(io, rules, audit);
+    const auto catalog = registry.catalog();
+    const auto tail = std::vector{core::Message::user_text("perform the operation")};
+    auto inputs = base_inputs(catalog, tail);
+    inputs.tools = &registry;
+    inputs.dispatch_context = &context;
+    inputs.turn_id = turn_id_with(0x56);
+    inputs.trace = agent::TraceContext{.repository = &trace,
+                                       .blocking_executor = io.get_executor(),
+                                       .session_id = turn_id_with(0x90),
+                                       .agent_key = "coder",
+                                       .origin = "cli"};
+    auto result = co_await loop.run_turn(inputs);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind() == core::ErrorKind::upstream);
+    REQUIRE(contains_context(result.error(), "reason", "duplicate_tool_use_id"));
+    REQUIRE(audit.events().size() == 1);
+    auto row = co_await trace.get_turn(*inputs.turn_id);
+    REQUIRE(row.has_value());
+    REQUIRE(row->has_value());
+    CHECK((*row)->stop_reason == "error");
+    CHECK((*row)->iteration_count == 2);
+    CHECK((*row)->route_model == "last-model");
+    CHECK((*row)->input_tokens == 10);
+    CHECK((*row)->output_tokens == 3);
+  });
+}
+
 TEST_CASE("Loop persists iteration-cap trace rows", "[unit][agent][loop][trace]") {
   TempDb db{"oran-agent-loop-trace-iteration-cap"};
   test::run_async([&db](asio::io_context& io) -> async::Awaitable<void> {

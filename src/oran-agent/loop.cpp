@@ -1,6 +1,7 @@
 #include <oran/agent/loop.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <memory>
@@ -8,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -149,6 +151,19 @@ private:
     }
   }
   return uses;
+}
+
+[[nodiscard]] core::Result<void> admit_tool_use_ids(std::span<const core::ToolUseContent> uses,
+                                                   std::unordered_set<std::string>& seen) {
+  for (std::size_t i = 0; i < uses.size(); ++i) {
+    const auto& id = uses[i].id;
+    if (id.empty() || !seen.insert(id).second) {
+      return std::unexpected(core::Error::upstream("provider returned an invalid tool-call ID")
+                                 .with("reason", id.empty() ? "empty_tool_use_id" : "duplicate_tool_use_id")
+                                 .with("tool_index", std::to_string(i)));
+    }
+  }
+  return {};
 }
 
 void add_usage(provider::Usage& total, const provider::Usage& next) {
@@ -315,6 +330,9 @@ public:
     // supply one and the loop has a tool batch to run. Lives across iterations
     // so a multi-iteration turn shares one path-lock table.
     std::optional<ToolScheduler> owned_scheduler;
+    // Compaction may discard tool exchanges from the provider view; their IDs
+    // must still prevent replay within this turn.
+    std::unordered_set<std::string> tool_use_ids;
 
     detail::ContextView view{.checkpoint = inputs.checkpoint, .messages = {}};
     auto frame = provider::Request{
@@ -430,6 +448,10 @@ public:
       }
 
       const auto tool_uses = tool_uses_in(response->blocks);
+      if (auto admitted = admit_tool_use_ids(tool_uses, tool_use_ids); !admitted) {
+        co_return std::unexpected(
+            co_await observer.fail(std::move(admitted).error(), "provider_complete", progress()));
+      }
       if (response->stop_reason == core::StopReason::tool_use || !tool_uses.empty()) {
         if (inputs.tools == nullptr || inputs.dispatch_context == nullptr) {
           co_return std::unexpected(

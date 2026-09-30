@@ -36,6 +36,21 @@ partial text remains only an observation; it does not establish task completion.
 Effects from earlier, complete tool responses are not rolled back if a later
 response fails; their ordinary audit records and effect-specific durability remain.
 
+Before a completed response can dispatch tools, every tool-use ID in that response
+must be nonempty and unique across the generated tool batches of this `run_turn`.
+One invalid ID rejects the entire batch before tool hooks, approvals, dispatch
+audit decisions or tool effects, including otherwise valid calls earlier in the
+batch. The turn returns an upstream error with `reason=empty_tool_use_id` or
+`reason=duplicate_tool_use_id` and a zero-based `tool_index`. Provider usage and
+terminal error tracing are retained. An ambiguous ID cannot be repaired with a
+tool-result message, so there is no automatic retry or synthetic result.
+
+The owned ID set survives context compaction and is released with the turn.
+Identical arguments with new IDs remain independent operations. This is a
+per-turn correlation and replay guard, not durable idempotency across sessions
+or restarts; it does not roll back effects from earlier valid batches. A rejected
+turn does not commit a transcript suffix or working checkpoint.
+
 Tool results whose usage marks truncation or dropped structured data carry an
 explicit notice in the model-visible text and the returned transcript. A truncated
 result must not appear complete merely because its tool call succeeded. These
