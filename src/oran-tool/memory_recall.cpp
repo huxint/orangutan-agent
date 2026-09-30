@@ -174,7 +174,9 @@ constexpr std::string_view kMemoryRecallSchema =
 core::Result<void> register_memory_recall(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kMemoryRecallName},
-      .description = "Consult your saved knowledge before making a decision or asking the user to repeat context. "
+      .description = "Read saved knowledge when a past preference, correction, or decision is relevant to the current "
+                     "request, or the user asks about memory. Use relevant facts to answer the request. "
+                     "Do not announce routine lookups or volunteer note recaps. Ignore unrelated memories. "
                      "Call {} to browse a compact index, {\"id\":\"note-id\"} to read a relevant note in full, "
                      "or {\"query\":\"topic words\"} to search. Index cues are incomplete; read applicable notes "
                      "before relying on them. Follow next_offset to browse more and use returned IDs when "

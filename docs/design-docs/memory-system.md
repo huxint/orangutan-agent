@@ -43,6 +43,26 @@ claim that a successful scripted test proves spontaneous model behavior. Current
 owner instructions and current evidence take precedence over saved notes.
 Writes still require the configured permission; visibility never grants a write.
 
+Memory normally changes how the agent does the current work, not what topic it
+answers. Consultation is gated by relevance to the current request; unrelated
+notes are ignored. Routine reads and writes are not announced, and replies do
+not volunteer saved-note contents, user profiles, IDs or "I remember" preambles.
+An explicit question about memory, a requested memory change, or a remembered
+assumption that must be clarified can warrant a brief, relevant explanation.
+Explicit save requests receive confirmation only after successful persistence.
+The index identifies itself as background context rather than a user message;
+write-field descriptions define reusable knowledge rather than response text.
+
+The distinction between applying and displaying memory follows the
+[Claude Code user-memory guidance](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/system-prompt-user-memory-usage-guidance.md)
+and its [internal memory-update framing](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/system-reminder-memory-updates.md).
+These are third-party prompt extractions, not an official behavioral guarantee.
+[OpenClaw's tool-call guidance](https://github.com/openclaw/openclaw/blob/main/src/agents/system-prompt.ts)
+also keeps routine calls silent. Its
+[memory tool contract](https://github.com/openclaw/openclaw/blob/main/extensions/memory-core/src/memory-tool-contract.ts)
+separates query/read schemas from recall and citation policy; Orangutan applies
+the relevance distinction without adopting automatic memory citations.
+
 This design adopts progressive disclosure from
 [Claude Code auto memory](https://code.claude.com/docs/en/memory#auto-memory) and
 [Letta MemFS](https://docs.letta.com/concepts/memfs/index.md), and the emphasis on
@@ -239,15 +259,17 @@ answer; an assertion that the model "remembers" is not persistence evidence.
 | Scenario | Expected behavior |
 | --- | --- |
 | "以后用中文给我结论，理由放到必要的时候再说。" | Save the durable preference in this turn, updating the related note if one exists. |
-| New session: "帮我评估这个改动。" | Discover and consult the applicable preference, then apply it without a memory reminder. |
+| New session: "帮我评估这个改动。" | Discover and consult the applicable preference, then apply it without a memory reminder, note recap or "I remember" preamble. |
 | "只有这次请用英文写给国外同事。" | Follow this request without replacing the durable language preference. |
 | A correction supersedes a saved decision | Read and update the existing ID; subsequent work uses the corrected decision. |
-| An unrelated trivial question | Avoid unrelated recall and unsupported durable writes. |
+| An unrelated trivial question with saved preferences/projects in the index | Answer the question without unrelated recall, profile summaries or unsupported durable writes. |
+| "你记得我对回复格式有什么要求？" | Read the relevant note and answer the memory question directly, without unrelated notes or internal IDs. |
+| "记住：以后先给结论。" | Save or update the preference, then briefly confirm the successful save. |
 | Read or write permission is refused | Continue using allowed context; do not leak a note or claim that a refused write persisted. |
 
 Record consultation success, durable-write success, stale-note use, unwanted
-writes and token cost across repeated runs of the deployment model. Semantic
-retrieval and background reflection need evidence from these failures before
+writes, unsolicited memory disclosures and token cost across repeated runs of
+the deployment model. Semantic retrieval and background reflection need evidence from these failures before
 extending the runtime. Session compaction separately needs deployment-model
 measurements of goal retention, constraint loss and summary drift. Pending gates live in
 [live debt](../exec-plans/tech-debt-tracker.md).

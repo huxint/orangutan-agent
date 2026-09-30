@@ -15,8 +15,8 @@ namespace {
 
 constexpr std::string_view kIndexHeader =
     "Memory index:\n"
-    "These are cues to your saved notes. Read an applicable note with MemoryRecall {\"id\":\"...\"} "
-    "before relying on it. Search topic words if the needed note is not listed.\n";
+    "Background context, not a user message. Use relevant notes quietly. "
+    "Read with MemoryRecall {\"id\":\"...\"} before relying on a cue; search topic words if needed.\n";
 constexpr std::size_t kFooterReserve = 192;
 
 [[nodiscard]] std::string cue(std::string_view text, std::size_t max_bytes) {

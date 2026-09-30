@@ -58,6 +58,9 @@ conversation through model-directed reads. Index loading occurs once before the
 loop; accepted writes appear in the next prompt's index. Scores, read times and
 mutable counters stay out of index text. [Memory](../design-docs/memory-system.md)
 owns consultation and same-turn durable learning guidance.
+The default preamble, native memory descriptions and index framing keep relevant
+memory as background context. Ordinary replies apply it without unsolicited
+memory narration; explicit memory requests retain useful answers and confirmations.
 
 `bench-prompt` compares full/reduced catalogue rendering and repeated construction
 versus reuse across eight iterations. Tests cover joined bytes, identity changes,

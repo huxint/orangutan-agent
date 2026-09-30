@@ -34,7 +34,7 @@ constexpr auto kMemoryRememberFields = std::to_array<std::string_view>(
     {"id", "kind", "title", "body", "importance", "tags", "linked_record_ids"});
 
 constexpr std::string_view kMemoryRememberSchema =
-    R"({"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["user","feedback","project","reference","team"]},"title":{"type":"string"},"body":{"type":"string"},"importance":{"type":"number","minimum":0,"maximum":1},"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true},"linked_record_ids":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["id","kind","title","body"],"additionalProperties":false})";
+    R"({"type":"object","properties":{"id":{"type":"string","description":"Reuse the existing note ID when correcting the same lesson."},"kind":{"type":"string","enum":["user","feedback","project","reference","team"]},"title":{"type":"string","description":"A short topic title that helps decide relevance to future requests."},"body":{"type":"string","description":"One durable fact or lesson, why it matters, and when to apply it. Background knowledge, not a reply to the user."},"importance":{"type":"number","minimum":0,"maximum":1},"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true},"linked_record_ids":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["id","kind","title","body"],"additionalProperties":false})";
 
 [[nodiscard]] core::Result<std::string> require_non_empty_string(const json& parsed, std::string_view field) {
   auto value = detail::require_string_field(parsed, kMemoryRememberName, field);
@@ -168,7 +168,9 @@ core::Result<void> register_memory_remember(Registry& registry) {
                      "duplicates. Store one lesson per note: a discoverable title, then a concise fact followed "
                      "by why it matters and when to apply it. The opening sentence becomes its index cue. "
                      "Do not save guesses, secrets, transient task progress, or facts easily re-read from code. "
-                     "The host supplies scope and timestamps; a successful result confirms persistence.",
+                     "The host supplies scope and timestamps; a successful result confirms persistence. "
+                     "Routine saves need no announcement or note recap. If the user explicitly asks to remember "
+                     "something, confirm briefly after success, then continue with their request.",
       .input_schema_json = std::string{kMemoryRememberSchema},
       .required_capabilities = {core::Capability::write_memory},
   };
