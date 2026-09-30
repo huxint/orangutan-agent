@@ -47,6 +47,13 @@ and environment as described in [testing-and-bench](rules/testing-and-bench.md).
 
 ## Build Ownership
 
+The optional React/TypeScript/Vite prototype lives in `apps/desktop` and uses
+Node.js 24+ with a pinned npm lockfile. Its [README](../apps/desktop/README.md)
+owns install, development, build and browser-test commands. Xmake does not fetch
+frontend dependencies or build this prototype; `make ci` retains its repository
+hygiene scope. Frontend changes run the app's build, format, state and browser
+checks separately. No C++ toolchain is needed to preview the browser UI.
+
 | File | Owns |
 | --- | --- |
 | `xmake.lua` | Language, common warnings, default toolchain and shared policy selection. |

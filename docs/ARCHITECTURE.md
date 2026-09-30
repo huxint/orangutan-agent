@@ -62,6 +62,12 @@ session identities through `oran-bootstrap`. The host owns process lifetime and
 presentation. Tests and benchmarks exercise these interfaces through their own
 runners. See [BUILD_SYSTEM.md](BUILD_SYSTEM.md).
 
+The optional [desktop prototype](../apps/desktop/README.md) under `apps/desktop`
+is a browser UI with a pure state model, source-restricted commands and injected
+demo/storage effects. It does not link or call the runtime. Its
+[product contract](product-specs/desktop-prototype.md) owns local actions,
+read-only channel observation and the future integration boundary.
+
 The opt-in `oran-telegram` application in `apps/telegram/` composes authenticated
 polling, one allowed private user's persistent session and a private delivery
 journal. Its deployment and recovery contract belongs to

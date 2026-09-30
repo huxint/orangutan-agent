@@ -89,6 +89,13 @@ obsolete surfaces and their tests/docs directly, as defined by
 
 ## Verification And Next Work
 
+The optional [desktop browser prototype](../apps/desktop/README.md) implements
+the [desktop product contract](product-specs/desktop-prototype.md) using simulated
+execution and channel events. It includes five pages, scoped state, read-only
+channel views, approvals for local work, bilingual themes and page-close recovery.
+Its separate frontend checks cover state behavior and browser interactions;
+these do not establish live provider/channel or native desktop integration.
+
 The release gate covers all 15 test targets and `make ci`. Controlled HTTP
 integration composes transport, assembly and session continuation. Regressions
 cover denied effects, atomic persistence, scoped recall, fallback attribution,

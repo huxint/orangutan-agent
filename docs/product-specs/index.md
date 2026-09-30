@@ -2,7 +2,7 @@
 
 | Specification | Scope |
 | --- | --- |
-| [Desktop prototype](desktop-prototype.md) | Accepted requirements for the browser prototype: local interaction, read-only channel observation, shared workspace and scoped memory. Not yet implemented. |
+| [Desktop prototype](desktop-prototype.md) | Implemented browser prototype: local demo interaction, read-only channel observation, shared workspace and scoped memory. Live runtime integration remains separate. |
 
 ## Runtime Behavior
 

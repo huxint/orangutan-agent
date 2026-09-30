@@ -20,6 +20,14 @@ xmake build -j4
 xmake test -j4
 ```
 
+## Desktop Prototype
+
+The optional [desktop browser prototype](apps/desktop/README.md) provides a
+five-page assistant workspace with bilingual light/dark themes, local demo
+execution and read-only views of channel conversations. It uses simulated data
+and is independent of the C++ runtime. Its README contains setup and verification
+commands for Node.js 24 or later.
+
 ## Embed
 
 Link `oran-bootstrap` and include `<oran/bootstrap.hpp>`. Compose the runtime
