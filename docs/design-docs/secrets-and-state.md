@@ -18,7 +18,6 @@ The config file contains:
   "profiles": {},
   "routes": {},
   "permissions": {},
-  "agents": {},
   "hooks": {},
   "memory": {}
 }
@@ -36,8 +35,7 @@ The config file contains:
 | `trace.enabled` | Host maps the trace switch to `RuntimeAssemblyOptions`. |
 | `profiles`, `routes` | `HttpProviderBackend` selects model, protocol, endpoint, credentials and model policy; `route_name` defaults to `default`. |
 | `profiles.<name>.cache` | The selected protocol target applies explicit cache controls; [provider](api-portability.md) owns eligibility and service limits. |
-| `permissions`, `agents.<name>.permissions` | `AgentSession` materializes global and selected-agent rules. Host maps workspace roots to `WorkspaceOptions`. |
-| `agents.<name>.prompt_overlay` | `AgentSession` selects stable agent instructions. |
+| `permissions` | `AgentSession` materializes configured external-effect rules. Host maps workspace roots to `WorkspaceOptions`; dynamic children inherit the parent boundary. |
 | `hooks.timeout_ms` | Host maps the hook deadline to `RuntimeAssemblyOptions`. |
 | `memory.longterm.recall` | `AgentSession` resolves automatic index enablement, limit and kinds; an explicit optional `longterm_recall` overrides it. |
 
@@ -51,14 +49,13 @@ names. Defaults expose every registered tool, including host extensions. An
 explicit array selects only those names; `[]` exposes none. Unknown names fail
 before provider execution. Disabled delegation is removed from both the available
 catalogue and explicit selection. [Tools](tool-runtime.md) owns this boundary.
-Path locks follow active work and have no idle expiration setting.
+Path locks follow active work and have no idle expiration setting. Child agents
+are created from AgentRun tasks; configuration has no named agent presets.
 
 Memory orientation defaults to enabled with a 20-entry limit when the backend
-exists. `enabled: false` disables the automatic index. The default permission
-profile allows memory reads and asks before writes. A host that authorizes
-automatic note maintenance can grant the specific tool through
-`permissions.allow: [{"tool_pattern":"MemoryRemember"}]`; MemoryForget retains
-its independent approval behavior. [Memory](memory-system.md) owns consultation,
+exists. `enabled: false` disables the automatic index. Memory tools use
+host-bound scope, functional tool availability and the memory write gate without
+generic allow/deny/ask. [Memory](memory-system.md) owns consultation,
 index budgeting and correction semantics.
 
 ## Credentials

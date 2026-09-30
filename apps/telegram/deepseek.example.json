@@ -36,10 +36,5 @@
         "capability": "egress_http"
       }
     ]
-  },
-  "agents": {
-    "worker": {
-      "prompt_overlay": "Investigate the supplied task and return concise findings with evidence. Use only available tools."
-    }
   }
 }

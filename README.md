@@ -4,9 +4,9 @@ A C++26 agent runtime for applications that need model calls, permission-checked
 tools and persistent conversation memory.
 
 The libraries run agent turns through Anthropic Messages or OpenAI Responses,
-save completed turns atomically, and delegate bounded tasks to
-configured child agents. Children keep independent conversations and execute
-under the intersection of parent and child permissions; see the
+save completed turns atomically, and delegate bounded tasks to dynamically
+created child agents. Children keep independent conversations and inherit
+external-effect restrictions; see the
 [agent contract](docs/design-docs/agent-platform.md).
 
 ## Build
@@ -45,9 +45,10 @@ Tool calls share input validation and observations. External tool effects requir
 workspace authority and permission; an ask fails closed without an approval handler.
 Internal memory and coordination use host-bound scope and functional admission,
 so routine bookkeeping does not require tool approval.
-The filesystem tools are FileRead, FileWrite and FileEdit. `AgentRun` selects a
-child from `agents` and preserves its external-effect restrictions; it admits up to four
-child runs per prompt and one generation of delegation.
+The filesystem tools are FileRead, FileWrite and FileEdit. `AgentRun` creates a
+fresh child from `{"prompt":"Inspect the change"}` without preset configuration.
+It inherits the parent's model, workspace, scope and external-effect limits, with
+up to four child runs per prompt and one generation of delegation.
 
 QQ, Telegram and Feishu text integrations use SDK-free adapters, injected session
 and transport ports, and joined typing-status cleanup. See the

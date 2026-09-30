@@ -11,7 +11,7 @@ namespace orangutan::bench {
 
 void register_catalog_sections(ankerl::nanobench::Bench& bench) {
   const std::vector<core::ToolDef> tools{
-      core::ToolDef::with_no_input("AgentRun", "Run a configured child agent"),
+      core::ToolDef::with_no_input("AgentRun", "Create a child for the supplied task"),
       core::ToolDef::with_no_input("FileEdit", "Edit a file"),
       core::ToolDef::with_no_input("FileRead", "Read a file"),
       core::ToolDef::with_no_input("FileWrite", "Write a file"),

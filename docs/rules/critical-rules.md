@@ -124,7 +124,7 @@ plus local/editor analysis.
 
 Tool effects on workspace files, external network services, subprocesses and
 loaded executable code go through `permission::evaluate` and publish hook events.
-Internal memory, task bookkeeping and configured-agent coordination instead use
+Internal memory, task bookkeeping and dynamic child coordination instead use
 explicit runtime dispatch: host-bound scope, functional enablement, validation,
 admission limits and domain hooks. They do not enter generic allow/deny/ask.
 Child agents inherit constraints on their external effects; delegation cannot

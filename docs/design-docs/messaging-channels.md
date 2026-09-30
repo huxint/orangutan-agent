@@ -181,8 +181,8 @@ Sends and agent turns are never retried automatically by the host.
 
 The DeepSeek example uses the Anthropic-compatible endpoint and the
 `ORAN_TELEGRAM_MODEL_KEY` reference, with FileRead, MemoryRecall, MemoryRemember,
-AgentRun, TaskGet and TaskCancel selected. It configures a worker and permits
-provider requests. Memory and delegation use their functional runtime boundaries. Filesystem writes are not
+AgentRun, TaskGet and TaskCancel selected. It permits provider requests. Memory
+and delegation use their functional runtime boundaries. Filesystem writes are not
 exposed by this example; other configurations retain normal session permission
 decisions. The host provides no interactive approval consumer.
 The model receives typed text and image blocks. Local host commands are handled
@@ -224,7 +224,7 @@ last recorded turn, not a live context occupancy estimate.
 ### Background completion
 
 The retained host binds bootstrap's [background task service](bootstrap-runtime.md#background-tasks)
-when configured agents exist and at least two blocking workers are configured.
+when at least two blocking workers are configured. No agent presets are needed.
 It caps running background children at `min(4, workers - 1)`, leaving capacity
 for foreground provider requests and channel polling because HTTP calls occupy
 blocking workers. `--once`, a one-worker Telegram host and the one-event QQ

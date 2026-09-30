@@ -7,7 +7,6 @@
 
 #include <oran/bootstrap/agent_session.hpp>
 #include <oran/bootstrap/background_tasks.hpp>
-#include <oran/config/config.hpp>
 #include <oran/tool/registry.hpp>
 
 namespace orangutan::bootstrap {
@@ -45,8 +44,7 @@ async::Awaitable<core::Result<tool::Output>> run_child_agent(tool::AgentRunReque
   const auto session_id_text = core::format_turn_id_hex(*session_id);
   auto options = parent;
   options.session_id = *session_id;
-  options.agent_config_name = request.agent;
-  options.agent_key = request.agent;
+  options.agent_key = "child/" + session_id_text;
   options.identity = "child/" + session_id_text;
   options.origin = "child_agent";
   options.parent_turn_id = context.parent_turn_id;
@@ -65,12 +63,14 @@ async::Awaitable<core::Result<tool::Output>> run_child_agent(tool::AgentRunReque
   ++child_runs;
   auto result = co_await (*child)->run_prompt(agent::PromptRequest{.prompt = std::move(request.prompt)});
   if (!result) {
-    co_return std::unexpected(std::move(result).error().with("agent", request.agent));
+    co_return std::unexpected(std::move(result).error().with("agent_key", "child/" + session_id_text));
   }
   co_return tool::Output{
       .text = std::move(result->text),
-      .data_json =
-          nlohmann::json{{"kind", "agent_run"}, {"agent", request.agent}, {"session_id", session_id_text}}.dump(),
+      .data_json = nlohmann::json{{"kind", "agent_run"},
+                                  {"agent_key", "child/" + session_id_text},
+                                  {"session_id", session_id_text}}
+                       .dump(),
   };
 }
 
@@ -102,7 +102,7 @@ void bind_child_agents(tool::DispatchContext& context,
                        tool::Registry& registry,
                        agent::ToolScheduler& scheduler,
                        std::size_t& child_runs) {
-  if (options.parent_policy || options.max_child_runs == 0 || options.config->agents().empty()) {
+  if (options.parent_policy || options.max_child_runs == 0) {
     return;
   }
   context.agent_run = [&options, &registry, &scheduler, &child_runs](tool::AgentRunRequest request,

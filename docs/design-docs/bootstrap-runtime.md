@@ -27,12 +27,12 @@ owns construction validation and per-profile dispatch.
 ## Configuration Adapters
 
 Bootstrap converts parsed configuration into owned runtime values before
-execution. `materialize_permissions` accepts spans of global and optional agent
-rules, prepends the mode's baseline and compiles input patterns. Workspace
+execution. `materialize_permissions` accepts configuration rules, prepends the
+mode's baseline and compiles input patterns. Workspace
 settings are resolved separately. The returned RuleSet owns its strings and
 patterns; materialization retains no rule views. Invalid patterns return an error without
-exposing a partial policy. AgentSession passes the selected agent's rule view
-directly without copying the surrounding permissions configuration.
+exposing a partial policy. AgentSession supplies the configuration rule view
+without copying the surrounding configuration.
 
 `resolve_route_profiles` resolves configured route/profile names, protocol
 aliases and model policy into `provider::RouteProfileResolution`. Explicit
@@ -95,11 +95,14 @@ hook bus.
 
 ## Child Sessions
 
-A delegating session registers `AgentRun` when configured agents exist and its
-child budget is nonzero. The tool schema advertises those agent names. Its host
-binding creates a fresh `AgentSession`, selects the child's permission and prompt
-overlay, inherits the parent's mode and resource bindings, and attaches a borrowed
-parent-policy view. The parent remains alive until all child calls finish.
+A delegating session registers `AgentRun` when its child budget is nonzero.
+Its task prompt supplies the objective and context without selecting a template.
+The host creates a fresh `AgentSession`, a random session ID and a generated
+`child/<session-id>` agent/approval identity. The child inherits the parent's
+provider route, permission mode, active tools and resource bindings, and carries
+a borrowed parent-policy view. Parent chat/presentation overlays are cleared;
+the task is the child's conversation input. The parent remains alive until
+ordinary awaited child calls finish.
 
 Children share the parent's scheduler and strand, use a fresh approval identity,
 and return their text plus agent/session identifiers. Child trace rows carry the
@@ -107,9 +110,9 @@ parent turn ID. Child token streams do not enter the parent's event sink; the
 completed answer returns through the tool result. The child catalogue and any
 explicit active-tool selection omit disabled delegation.
 
-Delegation is enabled by configured agents, tool selection and a nonzero child
-budget. AgentRun itself does not evaluate generic permission rules or ask for
-approval; each child retains the external-effect policy intersection.
+Delegation is enabled by tool selection and a nonzero child budget, even with
+an empty configuration. AgentRun itself does not evaluate generic permission
+rules or ask for approval; children retain inherited external-effect restrictions.
 [Agent execution](agent-platform.md) owns admission and lifetime bounds.
 
 ## Hosting A Session
@@ -126,8 +129,7 @@ approval; each child retains the external-effect policy intersection.
    `Result<PromptResult>`. The return boundary includes tool cleanup and
    successful transcript persistence.
 
-`agent_config_name` selects configured permission and prompt overlays. The host
-maps settings for workers, transport limits, hooks, trace and recall into the
+The host supplies optional per-session instructions directly and maps settings for workers, transport limits, hooks, trace and recall into the
 corresponding construction options; [configuration](secrets-and-state.md) owns
 that mapping. Stream output uses an optional `provider::EventSink`.
 
@@ -154,7 +156,7 @@ lifecycle and the composition example.
 ## Background Tasks
 
 `BackgroundTasks::create` supplies a host-owned registry and scheduler shared by
-foreground sessions and configured child agents. Bind it with
+foreground sessions and dynamic child agents. Bind it with
 `AgentSessionOptions::background_tasks`; mismatched executor, configuration,
 assembly or injected tool services are rejected. Every call uses the same
 coordinating strand. Hosts retain the provider, configuration and assembly until
@@ -207,5 +209,5 @@ Separating execution, result retention and notification settlement follows the
 same ownership concerns as OpenClaw's
 [process registry](https://github.com/openclaw/openclaw/blob/main/src/agents/bash-process-registry.ts)
 and [subagent handoff](https://github.com/openclaw/openclaw/blob/main/docs/tools/subagents/slash-command.md#spawn-behavior).
-Here the executor is a configured child session, and completion cannot release
+Here the executor is a dynamically created child session, and completion cannot release
 borrowed runtime resources before the existing TaskGroup join.

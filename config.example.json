@@ -81,19 +81,6 @@
       }
     ]
   },
-  "agents": {
-    "researcher": {
-      "prompt_overlay": "Prefer concise, source-backed answers and call out uncertain evidence.",
-      "permissions": {
-        "allow": [
-          {
-            "tool_pattern": "*",
-            "capability": "egress_http"
-          }
-        ]
-      }
-    }
-  },
   "hooks": {
     "timeout_ms": 2000
   },

@@ -47,7 +47,6 @@ struct AgentSessionOptions {
   provider::System* provider{nullptr};
   provider::Route route{};
   permission::Mode mode{permission::Mode::default_};
-  std::string agent_config_name{};
   std::string scope_key{"default"};
   std::string agent_key{"default"};
   std::string identity{"owner"};

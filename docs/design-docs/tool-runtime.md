@@ -39,7 +39,7 @@ Trusted registration explicitly sets `DispatchPolicy::runtime` for MemoryRecall,
 MemoryRemember, MemoryForget, AgentRun, TaskGet and TaskCancel. These operations
 ignore generic allow/deny/ask, including inherited rules and strict mode. Their
 handlers enforce host-bound scope, service availability, memory write gates,
-configured child names and task limits. Runtime registrations reject external
+dynamic child identities and task limits. Runtime registrations reject external
 capability declarations and filesystem path intent. Hooks can validate/rewrite
 or veto requests, but requesting generic approval for a runtime tool is rejected
 without opening an approval prompt. Audit admission uses reason `runtime_tool`.
@@ -58,8 +58,7 @@ memory services. A tool receives these dependencies explicitly. Application
 code supplies bindings once instead of registering alternate dispatch paths.
 `register_builtins` installs the three filesystem tools;
 `register_memory_tools` adds the three memory tools when the host supplies their
-services. `register_agent_run` adds a configured-name child runner supplied by
-the host. A session advertises tools available through its bindings.
+services. `register_agent_run` adds a dynamic child runner supplied by the host. A session advertises tools available through its bindings.
 
 ## Scheduler
 
@@ -179,11 +178,12 @@ recall semantics.
 
 ## Child Agent Tool
 
-`AgentRun` accepts `{"agent":"worker","prompt":"Inspect the change"}` through
-runtime dispatch. The registered schema enumerates configured names;
-the handler rejects unknown names, extra fields and prompts outside 1–16384
-UTF-8 bytes before invoking the host binding. Identity, session, memory scope,
-provider route and policy come from the host.
+`AgentRun` accepts `{"prompt":"Inspect the change"}` through runtime dispatch.
+Only prompt is required. Each call dynamically creates a child; there is no
+agent-name selector or preset registry. Extra fields and prompts outside 1–16384
+UTF-8 bytes fail before invoking the host binding. Fresh identity/session values
+come from the runtime; provider route, workspace, memory scope and external
+permissions are inherited from the parent.
 
 The prompt field describes the objective, needed context and paths, constraints,
 whether edits are wanted and the expected result. The child does not inherit the
@@ -192,11 +192,11 @@ The tool description warns against overlapping writes and asks the parent to
 review findings before using them. Each call starts a new conversation, not a
 resumption of an earlier child.
 
-The agent and prompt fields are prepared before functional admission; the host binding
+The task is prepared before functional admission; the host binding
 receives only the typed request and supplies identity, session, memory scope,
 provider route and policy. The result text is the child's completed answer.
 Structured output contains
-`kind=agent_run`, the configured agent name and its session ID. Output caps,
+`kind=agent_run`, the generated `agent_key` and `session_id`. Output caps,
 hooks and audit use the shared dispatch path without generic tool approval. Child
 admission exhaustion returns `mailbox_overflowed` with `reason=child_limit` as a
 model-visible tool error. Disabled delegation returns `permission_denied`.

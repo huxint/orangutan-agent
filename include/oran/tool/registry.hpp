@@ -32,7 +32,6 @@ class PathLocks;
 struct DispatchContext;
 
 struct AgentRunRequest {
-  std::string agent;
   std::string prompt;
   bool background{false};
   std::string label{};

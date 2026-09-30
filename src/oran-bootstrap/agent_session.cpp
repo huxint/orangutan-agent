@@ -42,21 +42,6 @@ using core::Result;
   return static_cast<std::size_t>(value);
 }
 
-[[nodiscard]] Result<const config::AgentConfig*> selected_agent_config(const config::Config& cfg,
-                                                                       std::string_view agent_name) {
-  if (agent_name.empty()) {
-    return nullptr;
-  }
-
-  const auto agents = cfg.agents();
-  const auto match = std::ranges::find(agents, agent_name, &config::AgentConfig::name);
-  if (match == agents.end()) {
-    return std::unexpected(
-        Error::not_found("agent session agent config not found").with("agent", std::string{agent_name}));
-  }
-  return &*match;
-}
-
 [[nodiscard]] Result<tool::OutputCapOptions> output_caps_from(const config::Config& cfg) {
   const auto max_text = checked_cap(cfg.runtime().tool_output.max_text_bytes, "runtime.tool_output.max_text_bytes");
   if (!max_text) {
@@ -449,18 +434,9 @@ core::Result<std::unique_ptr<AgentSession>> AgentSession::create(AgentSessionOpt
   if (auto valid = validate_options(options); !valid) {
     return std::unexpected(std::move(valid).error());
   }
-  auto selected = selected_agent_config(*options.config, options.agent_config_name);
-  if (!selected) {
-    return std::unexpected(std::move(selected).error());
-  }
-  const auto agent_rules =
-      *selected ? std::span{(*selected)->permissions.rules} : std::span<const config::PermissionRuleConfig>{};
-  auto rules = materialize_permissions(options.mode, options.config->permissions().rules, agent_rules);
+  auto rules = materialize_permissions(options.mode, options.config->permissions().rules);
   if (!rules) {
     return std::unexpected(std::move(rules).error());
-  }
-  if (*selected && options.per_agent_overlay.empty()) {
-    options.per_agent_overlay = (*selected)->prompt_overlay;
   }
   auto output_caps = output_caps_from(*options.config);
   if (!output_caps) {
@@ -481,12 +457,8 @@ core::Result<std::unique_ptr<AgentSession>> AgentSession::create(AgentSessionOpt
         return std::unexpected(std::move(added).error());
       }
     }
-    if (!options.parent_policy && options.max_child_runs > 0 && !options.config->agents().empty()) {
-      auto agent_names = std::vector<std::string>{};
-      for (const auto& agent : options.config->agents()) {
-        agent_names.push_back(agent.name);
-      }
-      if (auto added = tool::register_agent_run(*registry, agent_names); !added) {
+    if (!options.parent_policy && options.max_child_runs > 0) {
+      if (auto added = tool::register_agent_run(*registry); !added) {
         return std::unexpected(std::move(added).error());
       }
     }

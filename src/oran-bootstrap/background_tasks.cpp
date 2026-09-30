@@ -238,13 +238,8 @@ Result<std::unique_ptr<BackgroundTasks>> BackgroundTasks::create(asio::any_io_ex
     if (auto added = tool::register_memory_tools(impl->registry); !added)
       return std::unexpected(std::move(added).error());
   }
-  std::vector<std::string> names;
-  for (const auto& agent : config.agents())
-    names.push_back(agent.name);
-  if (!names.empty()) {
-    if (auto added = tool::register_agent_run(impl->registry, names, true); !added)
-      return std::unexpected(std::move(added).error());
-  }
+  if (auto added = tool::register_agent_run(impl->registry, true); !added)
+    return std::unexpected(std::move(added).error());
   if (auto added = tool::register_task_tools(impl->registry); !added)
     return std::unexpected(std::move(added).error());
   return std::make_unique<BackgroundTasks>(std::move(impl), PrivateTag{});
@@ -271,11 +266,10 @@ Result<TaskSnapshot> BackgroundTasks::start(const AgentSessionOptions& parent,
                                             const tool::DispatchContext& context) {
   if (!matches(parent) || parent.parent_policy || parent.max_child_runs == 0)
     return std::unexpected(Error::permission_denied("background delegation is disabled for this caller"));
-  if (!std::ranges::contains(impl_->config->agents(), request.agent, &config::AgentConfig::name) ||
-      request.prompt.empty() || request.prompt.size() > 16384 || !core::str::is_valid_utf8(request.prompt) ||
+  if (request.prompt.empty() || request.prompt.size() > 16384 || !core::str::is_valid_utf8(request.prompt) ||
       request.label.size() > 120 || !core::str::is_valid_utf8(request.label) ||
       std::ranges::any_of(request.label, [](unsigned char c) { return c < 0x20 || c == 0x7f; }))
-    return std::unexpected(Error::invalid_argument("invalid background task agent, prompt or label"));
+    return std::unexpected(Error::invalid_argument("invalid background task prompt or label"));
   impl_->prune();
   const auto unfinished =
       std::ranges::count_if(impl_->jobs, [](const auto& job) { return !terminal(job->snapshot.state); });
@@ -296,14 +290,14 @@ Result<TaskSnapshot> BackgroundTasks::start(const AgentSessionOptions& parent,
   job->parent_turn = context.parent_turn_id;
   job->parent_rules = std::move(*rules);
   job->snapshot.task_id = text_id;
-  job->snapshot.agent = request.agent;
-  job->snapshot.label = request.label.empty() ? request.agent : request.label;
+  job->snapshot.agent_key = "child/" + text_id;
+  job->snapshot.label = request.label.empty() ? "Background task" : request.label;
   job->snapshot.created_at = job->snapshot.updated_at = core::time::now_utc();
   job->snapshot.automatic_delivery = impl_->options.automatic_delivery;
   job->prompt = std::move(request.prompt);
   auto child_options = parent;
   child_options.session_id = *id;
-  child_options.agent_config_name = child_options.agent_key = request.agent;
+  child_options.agent_key = job->snapshot.agent_key;
   child_options.identity = "child/" + text_id;
   child_options.origin = "background_agent";
   child_options.parent_turn_id = context.parent_turn_id;

@@ -159,12 +159,12 @@ cross-agent state to the loop.
 
 ## Agent Collaboration
 
-`AgentRun` starts a configured agent with a self-contained task and returns its
-completed answer as a tool result. Its `agent` argument selects an entry from
-`config.agents`; the host supplies the provider route, workspace, memory scope,
-fresh session ID and approval identity. The child owns its conversation and
-selected tool context. Each completed child transcript commits separately from
-the parent's transcript.
+`AgentRun` dynamically creates an agent from a self-contained prompt and returns
+its completed answer as a tool result. No name or preset is selected. The runtime
+generates fresh agent, session and approval identities, and inherits provider
+route, workspace, memory scope, active tools and external-effect restrictions.
+The child owns its conversation and selected tool context. Each completed child
+transcript commits separately from the parent's transcript.
 
 The host admits at most `AgentSessionOptions::max_child_runs` children per parent
 prompt, defaulting to four; zero disables delegation. Only one generation is

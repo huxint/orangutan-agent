@@ -16,36 +16,35 @@ namespace core = orangutan::core;
 namespace permission = orangutan::permission;
 namespace tool = orangutan::tool;
 
-TEST_CASE("AgentRun rejects inputs outside the configured task contract", "[unit][tool][collaboration]") {
+TEST_CASE("AgentRun rejects inputs outside the dynamic task contract", "[unit][tool][collaboration]") {
   std::string input;
-  SECTION("unknown agent") {
+  SECTION("preset selector is unsupported") {
     input = R"({"agent":"stranger","prompt":"inspect"})";
   }
   SECTION("authority override") {
-    input = R"({"agent":"worker","prompt":"inspect","mode":"permissive"})";
+    input = R"({"prompt":"inspect","mode":"permissive"})";
   }
   SECTION("scope override") {
-    input = R"({"agent":"worker","prompt":"inspect","scope_key":"elsewhere"})";
+    input = R"({"prompt":"inspect","scope_key":"elsewhere"})";
   }
   SECTION("session reuse") {
-    input = R"({"agent":"worker","prompt":"inspect","session_id":"parent"})";
+    input = R"({"prompt":"inspect","session_id":"parent"})";
   }
   SECTION("missing prompt") {
-    input = R"({"agent":"worker"})";
+    input = "{}";
   }
   SECTION("unbound background option") {
-    input = R"({"agent":"worker","prompt":"inspect","background":true})";
+    input = R"({"prompt":"inspect","background":true})";
   }
   SECTION("empty prompt") {
-    input = R"({"agent":"worker","prompt":""})";
+    input = R"({"prompt":""})";
   }
   SECTION("oversized prompt") {
-    input = nlohmann::json{{"agent", "worker"}, {"prompt", std::string(16385, 'x')}}.dump();
+    input = nlohmann::json{{"prompt", std::string(16385, 'x')}}.dump();
   }
   orangutan::tests::run_async([&input](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    const auto names = std::array{std::string{"worker"}};
-    REQUIRE(tool::register_agent_run(registry, names));
+    REQUIRE(tool::register_agent_run(registry));
     permission::NullAuditSink audit;
     auto context = tool::DispatchContext::for_now(io.get_executor(), {}, audit);
     context.mode = permission::Mode::permissive;
@@ -64,15 +63,15 @@ TEST_CASE("AgentRun rejects inputs outside the configured task contract", "[unit
   });
 }
 
-TEST_CASE("AgentRun advertises configured names and delivers the authorized task", "[unit][tool][collaboration]") {
+TEST_CASE("AgentRun requires only a task and uses runtime admission", "[unit][tool][collaboration]") {
   orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    const auto names = std::array{std::string{"worker"}, std::string{"reviewer"}};
-    REQUIRE(tool::register_agent_run(registry, names));
+    REQUIRE(tool::register_agent_run(registry));
     const auto* definition = registry.find(tool::AGENT_RUN_NAME);
     REQUIRE(definition != nullptr);
     const auto schema = nlohmann::json::parse(definition->input_schema_json);
-    REQUIRE(schema["properties"]["agent"]["enum"] == nlohmann::json::array({"worker", "reviewer"}));
+    REQUIRE(schema["required"] == nlohmann::json::array({"prompt"}));
+    CHECK_FALSE(schema["properties"].contains("agent"));
     CHECK_FALSE(schema["properties"].contains("background"));
     REQUIRE(definition->required_capabilities.empty());
     permission::RecordingAuditSink audit;
@@ -86,12 +85,10 @@ TEST_CASE("AgentRun advertises configured names and delivers the authorized task
     };
     auto snapshot = tool::DispatchContext::for_now(context, false);
 
-    auto result =
-        co_await registry.dispatch(tool::AGENT_RUN_NAME, R"({"agent":"reviewer","prompt":"check changes"})", snapshot);
+    auto result = co_await registry.dispatch(tool::AGENT_RUN_NAME, R"({"prompt":"check changes"})", snapshot);
 
     REQUIRE(result.has_value());
     REQUIRE(result->text == "review complete");
-    REQUIRE(received.agent == "reviewer");
     REQUIRE(received.prompt == "check changes");
     REQUIRE(audit.events().size() == 1);
     REQUIRE(audit.events()[0].tool_name == "AgentRun");
@@ -103,8 +100,7 @@ TEST_CASE("AgentRun advertises configured names and delivers the authorized task
 TEST_CASE("Background AgentRun validates options before calling the host", "[unit][tool][background]") {
   orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
-    const auto names = std::array{std::string{"worker"}};
-    REQUIRE(tool::register_agent_run(registry, names, true));
+    REQUIRE(tool::register_agent_run(registry, true));
     permission::NullAuditSink audit;
     auto context = tool::DispatchContext::for_now(io.get_executor(), {}, audit);
     context.mode = permission::Mode::permissive;
@@ -120,17 +116,16 @@ TEST_CASE("Background AgentRun validates options before calling the host", "[uni
                               nlohmann::json{{"label", ""}},
                               nlohmann::json{{"label", "bad\nlabel"}},
                               nlohmann::json{{"label", std::string(121, 'x')}}}) {
-      auto input = nlohmann::json{{"agent", "worker"}, {"prompt", "inspect"}};
+      auto input = nlohmann::json{{"prompt", "inspect"}};
       input.update(extra);
       auto result = co_await registry.dispatch(tool::AGENT_RUN_NAME, input.dump(), context);
       REQUIRE_FALSE(result.has_value());
       CHECK(result.error().kind() == core::ErrorKind::invalid_argument);
     }
     CHECK(calls == 0);
-    auto accepted =
-        co_await registry.dispatch(tool::AGENT_RUN_NAME,
-                                   R"({"agent":"worker","prompt":"inspect","background":true,"label":"检查"})",
-                                   context);
+    auto accepted = co_await registry.dispatch(tool::AGENT_RUN_NAME,
+                                               R"({"prompt":"inspect","background":true,"label":"检查"})",
+                                               context);
     REQUIRE(accepted.has_value());
     CHECK(calls == 1);
   });

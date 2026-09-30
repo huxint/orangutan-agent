@@ -3,7 +3,6 @@
 #include <chrono>
 #include <expected>
 #include <optional>
-#include <ranges>
 #include <utility>
 
 #include <oran/core/enum_names.hpp>
@@ -12,13 +11,11 @@
 
 namespace orangutan::bootstrap {
 
-core::Result<permission::RuleSet>
-materialize_permissions(permission::Mode mode,
-                        std::span<const config::PermissionRuleConfig> global,
-                        std::span<const config::PermissionRuleConfig> per_agent) {
+core::Result<permission::RuleSet> materialize_permissions(permission::Mode mode,
+                                                          std::span<const config::PermissionRuleConfig> global) {
   auto rules = permission::default_rules(mode);
-  rules.reserve(rules.size() + global.size() + per_agent.size());
-  for (const auto& rule : std::views::concat(global, per_agent)) {
+  rules.reserve(rules.size() + global.size());
+  for (const auto& rule : global) {
     auto input_pattern = std::optional<permission::InputPattern>{};
     if (rule.input_pattern.has_value()) {
       auto compiled = permission::InputPattern::compile(*rule.input_pattern);

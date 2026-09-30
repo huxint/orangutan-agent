@@ -16,8 +16,7 @@ TEST_CASE("Internal tools ignore generic rules and never ask for approval", "[to
   tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_memory_tools(registry));
-    const std::array names{std::string{"worker"}};
-    REQUIRE(tool::register_agent_run(registry, names, true));
+    REQUIRE(tool::register_agent_run(registry, true));
     REQUIRE(tool::register_task_tools(registry));
     permission::RuleSet rules;
     rules.push_back({.verdict = permission::Verdict::deny, .tool_pattern = "*"});
@@ -48,7 +47,7 @@ TEST_CASE("Internal tools ignore generic rules and never ask for approval", "[to
         std::pair{tool::kMemoryRecallName, "{}"},
         std::pair{tool::kMemoryRememberName, R"({"id":"n","kind":"user","title":"Preference","body":"Be concise"})"},
         std::pair{tool::kMemoryForgetName, R"({"id":"n"})"},
-        std::pair{tool::AGENT_RUN_NAME, R"({"agent":"worker","prompt":"inspect","background":true})"},
+        std::pair{tool::AGENT_RUN_NAME, R"({"prompt":"inspect","background":true})"},
         std::pair{tool::TASK_GET_NAME, R"({"task_id":"00000000000000000000000000000001"})"},
         std::pair{tool::TASK_CANCEL_NAME, R"({"task_id":"00000000000000000000000000000001"})"}};
     for (auto mode : {permission::Mode::strict,

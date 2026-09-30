@@ -138,7 +138,8 @@ struct ParseState {
 /// read claimed, as warnings or, when strict, as the error.
 class Fields {
 public:
-  Fields(const json& value, std::string path, ParseState& state) : value_{&value}, path_{std::move(path)}, state_{&state} {
+  Fields(const json& value, std::string path, ParseState& state)
+      : value_{&value}, path_{std::move(path)}, state_{&state} {
     if (!value.is_object()) {
       fail(config_error("expected object", path_));
     }
@@ -364,8 +365,8 @@ void parse_prompt(Fields& f, PromptRuntimeConfig& out) {
   f.field("active_tools", [&out](const json& value, const std::string& path) -> Result<void> {
     if (value.is_string()) {
       if (value.get_ref<const std::string&>() != "defaults") {
-        return std::unexpected(config_error("expected \"defaults\" or array of tool names", path)
-                                   .with("value", value.get<std::string>()));
+        return std::unexpected(
+            config_error("expected \"defaults\" or array of tool names", path).with("value", value.get<std::string>()));
       }
       return {};
     }
@@ -519,11 +520,6 @@ void parse_permissions(Fields& f, PermissionsConfig& out) {
   }
 }
 
-void parse_agent(Fields& f, AgentConfig& out) {
-  f.object("permissions", out.permissions, parse_permissions);
-  f.string("prompt_overlay", out.prompt_overlay);
-}
-
 }  // namespace
 
 core::Result<Config> Config::parse(std::string_view contents, LoadOptions options) {
@@ -541,7 +537,6 @@ core::Result<Config> Config::parse(std::string_view contents, LoadOptions option
     fields.object("hooks", config.hooks_, parse_hooks);
     fields.object("memory", config.memory_, parse_memory);
     fields.object("permissions", config.permissions_, parse_permissions);
-    fields.entries("agents", config.agents_, parse_agent);
     if (auto finished = fields.finish(); !finished) {
       return std::unexpected(std::move(finished).error());
     }

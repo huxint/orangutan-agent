@@ -46,16 +46,6 @@ constexpr auto kTypedPermissionsConfig = std::string_view{R"json(
       {"tool_pattern": "*", "capability": "egress_websocket"},
       {"tool_pattern": "*", "capability": "external_mcp"}
     ]
-  },
-  "agents": {
-    "researcher": {
-      "permissions": {
-        "allow": [
-          {"tool_pattern": "*", "capability": "egress_http"},
-          {"tool_pattern": "*", "capability": "read_file"}
-        ]
-      }
-    }
   }
 }
 )json"};
@@ -95,7 +85,7 @@ constexpr auto kInputPatternPermissionsConfig = std::string_view{R"json(
   if (!parsed) {
     std::abort();
   }
-  return parsed->permissions().rules.size() + parsed->agents().size();
+  return parsed->permissions().rules.size();
 }
 
 [[gnu::noinline]] std::size_t parse_typed_permissions() {
@@ -103,7 +93,7 @@ constexpr auto kInputPatternPermissionsConfig = std::string_view{R"json(
   if (!parsed) {
     std::abort();
   }
-  return parsed->permissions().rules.size() + parsed->agents().size();
+  return parsed->permissions().rules.size();
 }
 
 [[gnu::noinline]] std::size_t parse_input_pattern_permissions() {

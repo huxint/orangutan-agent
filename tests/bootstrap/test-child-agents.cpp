@@ -45,10 +45,7 @@ using namespace std::chrono_literals;
 
 namespace {
 
-constexpr std::string_view COLLABORATION_CONFIG = R"({
-  "permissions":{"allow":[{"tool_pattern":"*"}]},
-  "agents":{"parent":{"prompt_overlay":"Parent instructions"},"worker":{"prompt_overlay":"Worker instructions"}}
-})";
+constexpr std::string_view COLLABORATION_CONFIG = R"({"permissions":{"allow":[{"tool_pattern":"*"}]}})";
 
 class Workspace {
 public:
@@ -129,7 +126,7 @@ struct SessionFixture {
     options.provider = &provider;
     options.route.primary.profile = "test";
     options.route.primary.model = "test-model";
-    options.agent_config_name = "parent";
+    options.per_agent_overlay = "Parent instructions";
     options.agent_key = "parent";
     options.scope_key = "scope-A";
     options.identity = "owner";
@@ -140,11 +137,11 @@ struct SessionFixture {
     return options;
   }
 
-  std::int64_t worker_session_count() const {
+  std::int64_t child_session_count() const {
     auto connection = storage::Connection::open(
         {.path = std::string{assembly.sessions_path()}, .mode = storage::OpenMode::read_only});
     REQUIRE(connection.has_value());
-    auto statement = connection->prepare("SELECT COUNT(*) FROM sessions WHERE agent_key = 'worker'");
+    auto statement = connection->prepare("SELECT COUNT(*) FROM sessions WHERE agent_key LIKE 'child/%'");
     REQUIRE(statement.has_value());
     auto row = statement->step();
     REQUIRE(row.has_value());
@@ -170,14 +167,41 @@ const core::ToolResultContent& result_in(const provider::Request& request, std::
   std::unreachable();
 }
 
-std::string policies(std::string_view parent, std::string_view child) {
-  return nlohmann::json{{"agents",
-                         {{"parent", {{"permissions", nlohmann::json::parse(parent)}}},
-                          {"worker", {{"permissions", nlohmann::json::parse(child)}}}}}}
-      .dump();
+std::string policies(std::string_view parent) {
+  return nlohmann::json{{"permissions", nlohmann::json::parse(parent)}}.dump();
 }
 
 }  // namespace
+
+TEST_CASE("AgentRun creates distinct children without any agent configuration", "[bootstrap][collaboration]") {
+  orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
+    SessionFixture fixture{io.get_executor(), "{}"};
+    ScriptedProvider provider{{calls({call("first", "AgentRun", R"({"prompt":"review first task"})"),
+                                      call("second", "AgentRun", R"({"prompt":"review second task"})")}),
+                               answer("child result"),
+                               answer("child result"),
+                               answer("combined result")}};
+    auto session = bootstrap::AgentSession::create(fixture.options(provider));
+    REQUIRE(session.has_value());
+    auto result = co_await (*session)->run_prompt({.prompt = "Delegate two independent reviews"});
+    REQUIRE(result.has_value());
+    CHECK(result->text == "combined result");
+    REQUIRE(provider.requests.size() == 4);
+    const auto first = nlohmann::json::parse(*result_in(provider.requests.back(), "first").data_json);
+    const auto second = nlohmann::json::parse(*result_in(provider.requests.back(), "second").data_json);
+    CHECK(first.at("session_id") != second.at("session_id"));
+    CHECK(first.at("agent_key") != second.at("agent_key"));
+    for (const auto& child : {first, second}) {
+      CHECK(child.at("agent_key") == "child/" + child.at("session_id").get<std::string>());
+      CHECK(child.at("session_id") != "00000000000000000000000000000042");
+    }
+    CHECK(fixture.child_session_count() == 2);
+    for (std::size_t i = 1; i < 3; ++i) {
+      CHECK(provider.requests[i].messages.size() == 1);
+      CHECK_FALSE(provider.requests[i].system_prompt->contains("Parent instructions"));
+    }
+  });
+}
 
 TEST_CASE("AgentRun delivers a scoped child result with independent persisted history",
           "[integration][bootstrap][collaboration]") {
@@ -212,7 +236,7 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
     fixture.assembly.hook_bus().subscribe(capture, {hook::Event::tool_after});
     ScriptedProvider provider{{
         answer("saved parent answer"),
-        calls({call("child-1", "AgentRun", R"({"agent":"worker","prompt":"inspect"})")}),
+        calls({call("child-1", "AgentRun", R"({"prompt":"inspect"})")}),
         calls({call("recall-1", "MemoryRecall", R"({"query":"sharedanchor"})")}),
         answer("child found the note"),
         answer("parent received the finding"),
@@ -235,7 +259,6 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
     REQUIRE(child_request.messages.size() == 1);
     REQUIRE(child_request.messages[0].blocks == core::Message::user_text("inspect").blocks);
     REQUIRE(child_request.system_prompt.has_value());
-    REQUIRE(child_request.system_prompt->contains("Worker instructions"));
     REQUIRE(child_request.system_prompt->contains("Memory index:"));
     REQUIRE(child_request.system_prompt->contains("sharedanchor in scope-A"));
     REQUIRE_FALSE(child_request.system_prompt->contains("sharedanchor in scope-B"));
@@ -251,9 +274,12 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
     REQUIRE(returned.data_json.has_value());
     const auto metadata = nlohmann::json::parse(*returned.data_json);
     const auto child_session_id = metadata["session_id"].get<std::string>();
-    REQUIRE(fixture.worker_session_count() == 1);
+    const auto child_agent_key = metadata["agent_key"].get<std::string>();
+    REQUIRE(child_agent_key == "child/" + child_session_id);
+    REQUIRE(fixture.child_session_count() == 1);
     REQUIRE(child_session_id != "00000000000000000000000000000042");
-    auto history = co_await fixture.assembly.session_store()->load({.value = child_session_id}, {.value = "worker"});
+    auto history =
+        co_await fixture.assembly.session_store()->load({.value = child_session_id}, {.value = child_agent_key});
     REQUIRE(history.has_value());
     REQUIRE(history->size() == 4);
     REQUIRE(history->front().blocks == core::Message::user_text("inspect").blocks);
@@ -262,7 +288,7 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
                                                                           {.value = "parent"});
     REQUIRE(parent_history.has_value());
     REQUIRE(parent_history->size() == 6);
-    auto traces = co_await fixture.assembly.trace_repository()->list_turns({.agent_key = "worker"});
+    auto traces = co_await fixture.assembly.trace_repository()->list_turns({.agent_key = child_agent_key});
     REQUIRE(traces.has_value());
     REQUIRE(traces->size() == 1);
     REQUIRE(traces->front().parent_turn_id == parent_turn);
@@ -272,11 +298,11 @@ TEST_CASE("AgentRun delivers a scoped child result with independent persisted hi
             return event.tool_name == "MemoryRecall" && event.who.agent_key == "parent";
           }) == 2);
     CHECK(std::ranges::count_if(events, [](const auto& event) {
-            return event.tool_name == "MemoryRecall" && event.who.agent_key == "worker";
+            return event.tool_name == "MemoryRecall" && event.who.agent_key.starts_with("child/");
           }) == 2);
     for (const auto& event : events) {
       CHECK(event.who.scope_key == "scope-A");
-      if (event.who.agent_key == "worker") {
+      if (event.who.agent_key.starts_with("child/")) {
         CHECK(event.who.identity != "owner");
       } else {
         CHECK(event.who.identity == "owner");
@@ -292,8 +318,7 @@ TEST_CASE("child memory uses the inherited scope instead of generic tool permiss
   orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     SessionFixture fixture{
         io.get_executor(),
-        policies(R"({"allow":[{"tool_pattern":"AgentRun"}],"deny":[{"tool_pattern":"MemoryRecall"}]})",
-                 R"({"allow":[{"tool_pattern":"MemoryRecall"}]})")};
+        policies(R"({"allow":[{"tool_pattern":"AgentRun"}],"deny":[{"tool_pattern":"MemoryRecall"}]})")};
     memory::longterm::Record note;
     note.key = {.id = "private", .scope_key = "scope-A"};
     note.title = "Private note";
@@ -301,7 +326,7 @@ TEST_CASE("child memory uses the inherited scope instead of generic tool permiss
     auto stored = co_await fixture.assembly.longterm_memory_backend()->upsert(note);
     REQUIRE(stored.has_value());
     ScriptedProvider provider{{
-        calls({call("child", "AgentRun", R"({"agent":"worker","prompt":"Review the task"})")}),
+        calls({call("child", "AgentRun", R"({"prompt":"Review the task"})")}),
         answer("reviewed the available context"),
         answer("done"),
     }};
@@ -321,9 +346,8 @@ TEST_CASE("child memory uses the inherited scope instead of generic tool permiss
   });
 }
 
-TEST_CASE("AgentRun child writes obey both parent and child policy", "[integration][bootstrap][collaboration]") {
+TEST_CASE("Dynamic child writes inherit the parent policy", "[integration][bootstrap][collaboration]") {
   std::string parent;
-  std::string child = R"({"allow":[{"tool_pattern":"FileWrite"}]})";
   bool requires_approval = false;
   SECTION("parent explicit deny") {
     parent = R"({"allow":[{"tool_pattern":"AgentRun"}],"deny":[{"tool_pattern":"FileWrite"}]})";
@@ -332,17 +356,13 @@ TEST_CASE("AgentRun child writes obey both parent and child policy", "[integrati
     parent = R"({"allow":[{"tool_pattern":"AgentRun"}],"ask":[{"tool_pattern":"FileWrite"}]})";
     requires_approval = true;
   }
-  SECTION("parent strict default denies the child's grant") {
+  SECTION("parent strict default denies writes") {
     parent = R"({"allow":[{"tool_pattern":"AgentRun"}]})";
   }
-  SECTION("child restricts the parent's grant") {
-    parent = R"({"allow":[{"tool_pattern":"AgentRun"},{"tool_pattern":"FileWrite"}]})";
-    child = R"({"deny":[{"tool_pattern":"FileWrite"}]})";
-  }
-  orangutan::tests::run_async([&parent, &child, requires_approval](asio::io_context& io) -> async::Awaitable<void> {
-    SessionFixture fixture{io.get_executor(), policies(parent, child)};
+  orangutan::tests::run_async([&parent, requires_approval](asio::io_context& io) -> async::Awaitable<void> {
+    SessionFixture fixture{io.get_executor(), policies(parent)};
     ScriptedProvider provider{{
-        calls({call("child-1", "AgentRun", R"({"agent":"worker","prompt":"write"})")}),
+        calls({call("child-1", "AgentRun", R"({"prompt":"write"})")}),
         calls({call("write-1", "FileWrite", R"({"path":"blocked.txt","content":"unauthorized"})")}),
         answer("write refused"),
         answer("parent done"),
@@ -366,11 +386,9 @@ TEST_CASE("AgentRun uses functional admission instead of generic tool permission
           "[integration][bootstrap][collaboration]") {
   orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     SessionFixture fixture{io.get_executor(),
-                           policies(R"({"allow":[{"tool_pattern":"*"}],"deny":[{"tool_pattern":"AgentRun"}]})",
-                                    R"({"allow":[{"tool_pattern":"*"}]})")};
-    ScriptedProvider provider{{calls({call("child-1", "AgentRun", R"({"agent":"worker","prompt":"inspect"})")}),
-                               answer("done"),
-                               answer("done")}};
+                           policies(R"({"allow":[{"tool_pattern":"*"}],"deny":[{"tool_pattern":"AgentRun"}]})")};
+    ScriptedProvider provider{
+        {calls({call("child-1", "AgentRun", R"({"prompt":"inspect"})")}), answer("done"), answer("done")}};
     auto session = bootstrap::AgentSession::create(fixture.options(provider));
     REQUIRE(session.has_value());
 
@@ -379,7 +397,7 @@ TEST_CASE("AgentRun uses functional admission instead of generic tool permission
     REQUIRE(provider.requests.size() == 3);
     REQUIRE(result.has_value());
     REQUIRE_FALSE(result_in(provider.requests[2], "child-1").is_error);
-    REQUIRE(fixture.worker_session_count() == 1);
+    REQUIRE(fixture.child_session_count() == 1);
   });
 }
 
@@ -389,14 +407,13 @@ TEST_CASE("AgentRun evaluates parent restrictions after a child input rewrite",
     SessionFixture fixture{
         io.get_executor(),
         policies(
-            R"({"allow":[{"tool_pattern":"AgentRun"},{"tool_pattern":"FileWrite","input_pattern":"allowed.txt"}]})",
-            R"({"allow":[{"tool_pattern":"FileWrite"}]})")};
+            R"({"allow":[{"tool_pattern":"AgentRun"},{"tool_pattern":"FileWrite","input_pattern":"allowed.txt"}]})")};
     hook::Sink rewrite{
         .id = "rewrite-child",
         .decide = [](hook::Event, hook::PayloadPtr payload) -> async::Awaitable<core::Result<hook::HookDecision>> {
           const auto& before = std::get<hook::ToolBeforePayload>(*payload);
           hook::HookDecision decision;
-          if (before.who.agent_key == "worker" && before.tool_name == "FileWrite") {
+          if (before.who.agent_key.starts_with("child/") && before.tool_name == "FileWrite") {
             decision.kind = hook::HookDecisionKind::rewrite;
             decision.rewritten_input_json = R"({"path":"blocked.txt","content":"rewritten"})";
           }
@@ -405,7 +422,7 @@ TEST_CASE("AgentRun evaluates parent restrictions after a child input rewrite",
     };
     fixture.assembly.hook_bus().subscribe(rewrite, {hook::Event::tool_before});
     ScriptedProvider provider{{
-        calls({call("child-1", "AgentRun", R"({"agent":"worker","prompt":"write"})")}),
+        calls({call("child-1", "AgentRun", R"({"prompt":"write"})")}),
         calls({call("write-1", "FileWrite", R"({"path":"allowed.txt","content":"original"})")}),
         answer("write refused"),
         answer("done"),
@@ -426,8 +443,8 @@ TEST_CASE("AgentRun evaluates parent restrictions after a child input rewrite",
 TEST_CASE("AgentRun admits a bounded number of children in each prompt", "[integration][bootstrap][collaboration]") {
   orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     SessionFixture fixture{io.get_executor()};
-    const auto batch = calls({call("first", "AgentRun", R"({"agent":"worker","prompt":"first task"})"),
-                              call("second", "AgentRun", R"({"agent":"worker","prompt":"second task"})")});
+    const auto batch = calls({call("first", "AgentRun", R"({"prompt":"first task"})"),
+                              call("second", "AgentRun", R"({"prompt":"second task"})")});
     ScriptedProvider provider{{batch,
                                answer("child answer"),
                                answer("parent answer"),
@@ -442,7 +459,7 @@ TEST_CASE("AgentRun admits a bounded number of children in each prompt", "[integ
     for (std::size_t prompt = 1; prompt <= 2; ++prompt) {
       auto result = co_await (*session)->run_prompt({.prompt = "delegate twice"});
 
-      REQUIRE(fixture.worker_session_count() == static_cast<std::int64_t>(prompt));
+      REQUIRE(fixture.child_session_count() == static_cast<std::int64_t>(prompt));
       REQUIRE(result.has_value());
       REQUIRE(provider.requests.size() == prompt * 3);
       const auto& results = provider.requests.back().messages.back().blocks;
@@ -460,7 +477,7 @@ TEST_CASE("AgentRun admits a bounded number of children in each prompt", "[integ
 TEST_CASE("AgentRun children cannot delegate another generation", "[integration][bootstrap][collaboration]") {
   orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     SessionFixture fixture{io.get_executor()};
-    const auto delegate = calls({call("child-1", "AgentRun", R"({"agent":"worker","prompt":"delegate again"})")});
+    const auto delegate = calls({call("child-1", "AgentRun", R"({"prompt":"delegate again"})")});
     ScriptedProvider provider{{delegate, delegate, answer("done"), answer("done"), answer("done")}};
     auto session = bootstrap::AgentSession::create(fixture.options(provider));
     REQUIRE(session.has_value());
@@ -472,7 +489,7 @@ TEST_CASE("AgentRun children cannot delegate another generation", "[integration]
     const auto& refused = result_in(provider.requests[2], "child-1");
     REQUIRE(refused.is_error);
     REQUIRE(refused.output.contains("delegation_disabled"));
-    REQUIRE(fixture.worker_session_count() == 1);
+    REQUIRE(fixture.child_session_count() == 1);
   });
 }
 
@@ -490,8 +507,7 @@ TEST_CASE("AgentRun cancellation joins its child without waiting for another ses
         bool child_finished = false;
         bool independent_finished = false;
         tool::Registry registry;
-        const auto names = std::array{std::string{"worker"}};
-        REQUIRE(tool::register_agent_run(registry, names));
+        REQUIRE(tool::register_agent_run(registry));
         auto definition = core::ToolDef::with_no_input("CleanupGate", "Hold a tool until cleanup is released");
         REQUIRE(registry.add(std::move(definition),
                              [&started, &release_child, &release_independent, &child_finished, &independent_finished](
@@ -501,7 +517,7 @@ TEST_CASE("AgentRun cancellation joins its child without waiting for another ses
                                auto signalled = started.try_send(context.agent_key);
                                if (!signalled)
                                  co_return std::unexpected(std::move(signalled).error());
-                               const bool child = context.agent_key == "worker";
+                               const bool child = context.agent_key.starts_with("child/");
                                auto released = co_await (child ? release_child : release_independent).receive();
                                if (!released)
                                  co_return std::unexpected(std::move(released).error());
@@ -510,7 +526,7 @@ TEST_CASE("AgentRun cancellation joins its child without waiting for another ses
                              }));
         agent::ToolScheduler scheduler{io.get_executor(), registry};
         ScriptedProvider parent_provider{{
-            calls({call("child-1", "AgentRun", R"({"agent":"worker","prompt":"work"})")}),
+            calls({call("child-1", "AgentRun", R"({"prompt":"work"})")}),
             calls({call("cleanup", "CleanupGate", "{}")}),
             answer("child done"),
             answer("parent done"),
@@ -545,7 +561,7 @@ TEST_CASE("AgentRun cancellation joins its child without waiting for another ses
                            }));
         auto child_started = co_await started.receive();
         REQUIRE(child_started.has_value());
-        REQUIRE(*child_started == "worker");
+        REQUIRE(child_started->starts_with("child/"));
         asio::co_spawn(io,
                        (*independent)->run_prompt({.prompt = "independent"}),
                        [&independent_result,
@@ -595,7 +611,7 @@ TEST_CASE("AgentRun cancellation joins its child without waiting for another ses
         REQUIRE(independent_result.has_value());
         REQUIRE(independent_result->has_value());
         REQUIRE((*independent_result)->text == "independent done");
-        REQUIRE(fixture.worker_session_count() == 0);
+        REQUIRE(fixture.child_session_count() == 0);
       },
       5s);
 }
@@ -604,9 +620,7 @@ TEST_CASE("AgentRun child writes proceed after bounded approval", "[integration]
   orangutan::tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     SessionFixture fixture{
         io.get_executor(),
-        policies(
-            R"({"allow":[{"tool_pattern":"AgentRun"}],"ask":[{"tool_pattern":"FileWrite","replay_max":2,"approval_ttl_seconds":90}]})",
-            R"({"ask":[{"tool_pattern":"FileWrite","replay_max":8,"approval_ttl_seconds":20}]})")};
+        policies(R"({"ask":[{"tool_pattern":"FileWrite","replay_max":2,"approval_ttl_seconds":90}]})")};
     std::vector<hook::PermissionAskRenderedPayload> approvals;
     hook::Sink approve{
         .id = "approve-child",
@@ -620,7 +634,7 @@ TEST_CASE("AgentRun child writes proceed after bounded approval", "[integration]
     };
     fixture.assembly.hook_bus().subscribe(approve, {hook::Event::permission_ask_rendered});
     ScriptedProvider provider{{
-        calls({call("child-1", "AgentRun", R"({"agent":"worker","prompt":"write"})")}),
+        calls({call("child-1", "AgentRun", R"({"prompt":"write"})")}),
         calls({call("write-1", "FileWrite", R"({"path":"approved.txt","content":"approved child content"})")}),
         answer("child wrote the file"),
         answer("done"),
@@ -632,10 +646,10 @@ TEST_CASE("AgentRun child writes proceed after bounded approval", "[integration]
 
     REQUIRE(result.has_value());
     REQUIRE(approvals.size() == 1);
-    REQUIRE(approvals[0].who.agent_key == "worker");
+    REQUIRE(approvals[0].who.agent_key.starts_with("child/"));
     REQUIRE(approvals[0].who.identity != "owner");
     REQUIRE(approvals[0].replay_max == 2);
-    REQUIRE(approvals[0].approval_ttl == 20s);
+    REQUIRE(approvals[0].approval_ttl == 90s);
     auto file = std::ifstream{fixture.workspace.path / "approved.txt"};
     REQUIRE(file.is_open());
     const auto content = std::string{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
@@ -679,10 +693,9 @@ TEST_CASE("AgentRun can dispatch child tools with one parallel slot", "[bootstra
     SessionFixture fixture{io.get_executor()};
     tool::Registry registry;
     REQUIRE(tool::register_builtins(registry));
-    const auto names = std::array{std::string{"worker"}};
-    REQUIRE(tool::register_agent_run(registry, names));
+    REQUIRE(tool::register_agent_run(registry));
     agent::ToolScheduler scheduler{io.get_executor(), registry, {.max_parallel_tools = 1}};
-    ScriptedProvider provider{{calls({call("child", "AgentRun", R"({"agent":"worker","prompt":"write a file"})")}),
+    ScriptedProvider provider{{calls({call("child", "AgentRun", R"({"prompt":"write a file"})")}),
                                calls({call("write", "FileWrite", R"({"path":"single-slot.txt","content":"done"})")}),
                                answer("child done"),
                                answer("parent done")}};
@@ -695,7 +708,7 @@ TEST_CASE("AgentRun can dispatch child tools with one parallel slot", "[bootstra
     REQUIRE(result);
     CHECK(result->text == "parent done");
     CHECK(std::filesystem::exists(fixture.workspace.path / "single-slot.txt"));
-    CHECK(fixture.worker_session_count() == 1);
+    CHECK(fixture.child_session_count() == 1);
     auto joined = co_await scheduler.wait_idle();
     REQUIRE(joined);
   });

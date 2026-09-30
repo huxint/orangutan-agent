@@ -33,7 +33,7 @@ search and same-turn note corrections run through memory tools. Successful
 transcript suffixes serialize before acquiring the writer and commit atomically.
 Browsing does not update read timestamps; corrections preserve record history.
 
-Configured children receive fresh session/approval identities, selected prompt
+Dynamic children receive fresh agent/session/approval identities, task-specific prompt
 and tool context, and the intersection of parent/child permissions. They share
 workspace, memory scope, provider route, scheduler and strand. Admission defaults
 to four children per prompt and one generation; parent cancellation joins them

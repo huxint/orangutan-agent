@@ -49,9 +49,8 @@ namespace {
   };
 }
 
-[[nodiscard]] RuleSet
-require_materialized(Mode mode, const cfg::PermissionsConfig& global, const cfg::PermissionsConfig& per_agent = {}) {
-  auto rs = bootstrap::materialize_permissions(mode, global.rules, per_agent.rules);
+[[nodiscard]] RuleSet require_materialized(Mode mode, const cfg::PermissionsConfig& global) {
+  auto rs = bootstrap::materialize_permissions(mode, global.rules);
   REQUIRE(rs.has_value());
   return std::move(*rs);
 }
@@ -67,8 +66,8 @@ eval(const RuleSet& rs, std::string_view tool, std::span<const Capability> caps,
 
 }  // namespace
 
-TEST_CASE("materialize(empty, empty) equals default_rules", "[unit][bootstrap][materialize]") {
-  const auto rs = require_materialized(Mode::default_, cfg::PermissionsConfig{}, cfg::PermissionsConfig{});
+TEST_CASE("materialize(empty) equals default_rules", "[unit][bootstrap][materialize]") {
+  const auto rs = require_materialized(Mode::default_, cfg::PermissionsConfig{});
   REQUIRE(rs.size() == default_rules(Mode::default_).size());
 
   // Spot-check representative classifications.
@@ -93,19 +92,6 @@ TEST_CASE("materialize appends global config rules after defaults", "[unit][boot
   // The defaults are still in place.
   const std::array<Capability, 1> read{Capability::read_file};
   REQUIRE(eval(rs, "anything", std::span<const Capability>{read}) == Verdict::allow);
-}
-
-TEST_CASE("materialize appends per-agent overlay after global", "[unit][bootstrap][materialize]") {
-  cfg::PermissionsConfig global;
-  global.rules.push_back(allow("GlobalOnly"));
-
-  cfg::PermissionsConfig overlay;
-  overlay.rules.push_back(allow("AgentOnly"));
-
-  const auto rs = require_materialized(Mode::default_, global, overlay);
-  REQUIRE(rs.size() == default_rules(Mode::default_).size() + 2);
-  REQUIRE(eval_no_caps(rs, "GlobalOnly") == Verdict::allow);
-  REQUIRE(eval_no_caps(rs, "AgentOnly") == Verdict::allow);
 }
 
 TEST_CASE("materialize maps config verdicts one-to-one", "[unit][bootstrap][materialize]") {
@@ -147,13 +133,6 @@ TEST_CASE("explicit deny in any layer outranks allow in any other layer", "[unit
   const auto rs = require_materialized(Mode::permissive, global);
   const std::array<Capability, 1> loader{Capability::runtime_loader};
   REQUIRE(eval(rs, "any.tool", std::span<const Capability>{loader}, Mode::permissive) == Verdict::deny);
-
-  // Mirror the same shape from the per-agent side.
-  cfg::PermissionsConfig agent_only_allow;
-  agent_only_allow.rules.push_back(allow("*", Capability::runtime_loader));
-
-  const auto rs2 = require_materialized(Mode::permissive, cfg::PermissionsConfig{}, agent_only_allow);
-  REQUIRE(eval(rs2, "any.tool", std::span<const Capability>{loader}, Mode::permissive) == Verdict::deny);
 }
 
 TEST_CASE("materialize preserves intra-layer rule order", "[unit][bootstrap][materialize]") {
@@ -171,16 +150,6 @@ TEST_CASE("materialize preserves intra-layer rule order", "[unit][bootstrap][mat
   REQUIRE(second.verdict == Verdict::allow);
   REQUIRE(first.reason.contains("first"));
   REQUIRE(second.reason.contains("second"));
-}
-
-TEST_CASE("materialize defaults to an empty per-agent overlay", "[unit][bootstrap][materialize]") {
-  cfg::PermissionsConfig global;
-  global.rules.push_back(allow("only.thing"));
-
-  auto rs_result = bootstrap::materialize_permissions(Mode::strict, global.rules);
-  REQUIRE(rs_result.has_value());
-  REQUIRE(rs_result->size() == 1);
-  REQUIRE(eval_no_caps(*rs_result, "only.thing", Mode::strict) == Verdict::allow);
 }
 
 TEST_CASE("materialize compiles config-side input_pattern into the runtime Rule",

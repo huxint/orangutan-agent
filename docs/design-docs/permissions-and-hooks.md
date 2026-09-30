@@ -5,7 +5,7 @@ capabilities. It does not prompt, perform IO or execute the tool. Dispatch owns
 those effects after the decision.
 
 This generic policy governs external tool effects. Internal memory, task state
-and configured-agent coordination use explicit runtime registration instead.
+and dynamic child coordination use explicit runtime registration instead.
 Their boundaries are host-selected availability, scope, validation and resource
 limits, with memory-specific write gates. They never evaluate allow/deny/ask,
 even in strict mode. An internal operation grants no authority for an external
@@ -43,7 +43,7 @@ cannot satisfy an unmatched or denied requirement in the other. Scheduler contex
 snapshots retain this parent policy, so rewritten external effects obey the
 same restriction. Automatic recall uses the inherited memory scope instead.
 
-`AgentRun` uses configured names, functional enablement and admission bounds.
+`AgentRun` creates a fresh child from its task, with functional enablement and admission bounds.
 The host assigns a fresh child approval identity and does not forward parent grants; any child approval binds that child
 and the exact final input.
 

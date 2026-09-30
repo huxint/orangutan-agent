@@ -4,7 +4,6 @@
 #include <array>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -16,24 +15,16 @@ namespace orangutan::tool {
 namespace {
 
 constexpr std::size_t MAX_AGENT_PROMPT_BYTES = 16384;
-constexpr auto kAgentRunFields = std::to_array<std::string_view>({"agent", "prompt"});
-constexpr auto kBackgroundFields = std::to_array<std::string_view>({"agent", "prompt", "background", "label"});
+constexpr auto kAgentRunFields = std::to_array<std::string_view>({"prompt"});
+constexpr auto kBackgroundFields = std::to_array<std::string_view>({"prompt", "background", "label"});
 
-core::Result<AgentRunRequest>
-parse_agent_run(std::span<const std::string> agent_names, std::string_view input, bool background) {
+core::Result<AgentRunRequest> parse_agent_run(std::string_view input, bool background) {
   auto parsed = detail::parse_input_object(input,
                                            AGENT_RUN_NAME,
                                            background ? std::span<const std::string_view>{kBackgroundFields}
                                                       : std::span<const std::string_view>{kAgentRunFields});
   if (!parsed) {
     return std::unexpected(std::move(parsed).error());
-  }
-  auto agent = detail::require_string_field(*parsed, AGENT_RUN_NAME, "agent");
-  if (!agent) {
-    return std::unexpected(std::move(agent).error());
-  }
-  if (!std::ranges::contains(agent_names, *agent)) {
-    return std::unexpected(core::Error::invalid_argument("AgentRun: agent is not configured").with("agent", *agent));
   }
   auto prompt = detail::require_string_field(*parsed, AGENT_RUN_NAME, "prompt");
   if (!prompt) {
@@ -57,8 +48,7 @@ parse_agent_run(std::span<const std::string> agent_names, std::string_view input
     }
     label = std::move(*value);
   }
-  return AgentRunRequest{.agent = std::move(*agent),
-                         .prompt = std::move(*prompt),
+  return AgentRunRequest{.prompt = std::move(*prompt),
                          .background = parsed->value("background", false),
                          .label = std::move(label)};
 }
@@ -73,25 +63,18 @@ async::Awaitable<core::Result<Output>> run_agent(AgentRunRequest request, Dispat
 
 }  // namespace
 
-core::Result<void> register_agent_run(Registry& registry, std::span<const std::string> agent_names, bool background) {
-  if (agent_names.empty() || std::ranges::any_of(agent_names, [](const auto& name) {
-        return name.empty() || !core::str::is_valid_utf8(name);
-      })) {
-    return std::unexpected(core::Error::invalid_argument("AgentRun requires configured agent names"));
-  }
-  auto names = std::vector<std::string>{agent_names.begin(), agent_names.end()};
+core::Result<void> register_agent_run(Registry& registry, bool background) {
   auto schema = nlohmann::json{
       {"type", "object"},
       {"properties",
-       {{"agent", {{"type", "string"}, {"enum", names}, {"description", "Configured child agent to run."}}},
-        {"prompt",
+       {{"prompt",
          {{"type", "string"},
           {"minLength", 1},
           {"maxLength", MAX_AGENT_PROMPT_BYTES},
           {"description",
            "Self-contained task: objective, relevant context and paths, constraints, whether edits "
            "are wanted, and the expected result. At most 16384 UTF-8 bytes, not characters."}}}}},
-      {"required", {"agent", "prompt"}},
+      {"required", {"prompt"}},
       {"additionalProperties", false},
   };
   if (background) {
@@ -111,10 +94,10 @@ core::Result<void> register_agent_run(Registry& registry, std::span<const std::s
       core::ToolDef{
           .name = std::string{AGENT_RUN_NAME},
           .description =
-              std::string{"Delegate a separable subtask to a configured agent. By default, await its completed answer. "
+              std::string{"Create a new child agent for a separable subtask. By default, await its completed answer. "
                           "Each call starts a fresh conversation with the task you supply; include needed context "
                           "rather than referring to this conversation. The child shares this workspace and memory "
-                          "scope. Its external actions obey both agents' permissions; allowed edits affect the same "
+                          "scope. It inherits your model and external-action limits; allowed edits affect the same "
                           "files. State "
                           "when inspection without edits is wanted and avoid overlapping writes. Review returned "
                           "findings before using them. Admission is bounded; a refused run has not done the work."} +
@@ -127,8 +110,8 @@ core::Result<void> register_agent_run(Registry& registry, std::span<const std::s
           .input_schema_json = schema.dump(),
           .required_capabilities = {},
       },
-      [names = std::move(names), background](std::string_view input) -> core::Result<PreparedCall> {
-        auto request = parse_agent_run(names, input, background);
+      [background](std::string_view input) -> core::Result<PreparedCall> {
+        auto request = parse_agent_run(input, background);
         if (!request) {
           return std::unexpected(std::move(request).error());
         }

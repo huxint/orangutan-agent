@@ -11,7 +11,7 @@ tool::Output task_output(const TaskSnapshot& snapshot) {
   auto data = nlohmann::json{
       {"kind", "background_task"},
       {"task_id", snapshot.task_id},
-      {"agent", snapshot.agent},
+      {"agent_key", snapshot.agent_key},
       {"label", snapshot.label},
       {"state", core::enum_name(snapshot.state)},
       {"completion_delivery", delivery},

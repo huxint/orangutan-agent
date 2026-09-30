@@ -199,7 +199,7 @@ struct WorkspacePermissionsConfig {
 };
 
 /// Rules collected from one permissions block (the global `permissions`
-/// root or a single agent's overlay). Rules appear in the JSON object's
+/// root). Rules appear in the JSON object's
 /// iteration order so the operator's authoring intent survives the
 /// materialize step (precedence is recovered by the runtime evaluator's
 /// deny → allow → ask walk).
@@ -210,18 +210,10 @@ struct PermissionsConfig {
   friend bool operator==(const PermissionsConfig&, const PermissionsConfig&) = default;
 };
 
-struct AgentConfig {
-  std::string name;
-  PermissionsConfig permissions;
-  std::string prompt_overlay;
-
-  friend bool operator==(const AgentConfig&, const AgentConfig&) = default;
-};
-
 struct LoadOptions {
   /// When enabled, unknown fields are rejected at the root plus typed nested
   /// config sections that already have a model (`profiles`, `pricing`,
-  /// `routes`, `hooks`, `memory`, `permissions`, `workspace`, and `agents`).
+  /// `routes`, `hooks`, `memory`, `permissions`, and `workspace`).
   /// Loose mode preserves them as `ConfigWarning` rows and otherwise ignores
   /// them.
   bool strict_unknown_fields{false};
@@ -263,9 +255,6 @@ public:
   [[nodiscard]] const PermissionsConfig& permissions() const noexcept {
     return permissions_;
   }
-  [[nodiscard]] std::span<const AgentConfig> agents() const noexcept {
-    return std::span<const AgentConfig>{agents_};
-  }
   [[nodiscard]] std::span<const ConfigWarning> warnings() const noexcept {
     return std::span<const ConfigWarning>{warnings_};
   }
@@ -279,7 +268,6 @@ private:
   HooksConfig hooks_{};
   MemoryConfig memory_{};
   PermissionsConfig permissions_{};
-  std::vector<AgentConfig> agents_{};
   std::vector<ConfigWarning> warnings_{};
 };
 

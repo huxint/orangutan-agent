@@ -57,7 +57,7 @@ public:
   async::Awaitable<core::Result<provider::Response>>
   send(provider::Request request, provider::ModelTarget, provider::EventSink*) const override {
     requests.push_back(request);
-    const bool child = request.system_prompt->contains("WORKER");
+    const bool child = std::get<core::TextContent>(request.messages.front().blocks.front()).text == "inspect";
     if (child && request.messages.back().role != core::Role::tool) {
       ++children;
       REQUIRE(started.try_send(0).has_value());
@@ -91,8 +91,7 @@ public:
       co_return text("reviewed result");
     }
     if (prompt == "launch")
-      co_return call("AgentRun",
-                     {{"agent", "worker"}, {"prompt", "inspect"}, {"background", true}, {"label", "检查项目"}});
+      co_return call("AgentRun", {{"prompt", "inspect"}, {"background", true}, {"label", "检查项目"}});
     if (prompt.starts_with("get:"))
       co_return call("TaskGet", {{"task_id", prompt.substr(4)}});
     if (prompt.starts_with("cancel:"))
@@ -110,8 +109,7 @@ class Fixture {
 public:
   explicit Fixture(asio::any_io_executor executor,
                    bootstrap::BackgroundTaskOptions limits = {},
-                   std::string_view configuration = R"({"permissions":{"allow":[{"tool_pattern":"*"}]},
-                     "agents":{"worker":{"prompt_overlay":"WORKER"}}})")
+                   std::string_view configuration = R"({"permissions":{"allow":[{"tool_pattern":"*"}]}})")
       : executor{executor}, provider{executor} {
     auto id = core::generate_turn_id();
     REQUIRE(id.has_value());
@@ -192,6 +190,9 @@ TEST_CASE("Background child survives its parent turn and does not block the next
   tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     Fixture f{io.get_executor(), {.automatic_delivery = true}};
     const auto id = co_await launch(f);
+    auto task = f.tasks->get(f.owner(), id);
+    REQUIRE(task.has_value());
+    CHECK(task->agent_key == "child/" + id);
     auto started = co_await f.provider.started.receive();
     REQUIRE(started.has_value());
     auto reply = co_await f.session->run_prompt({.prompt = "hello"});
@@ -287,15 +288,22 @@ TEST_CASE("Task ownership rejects foreign status and cancellation without disclo
 
 TEST_CASE("Background child retains parent pattern restrictions after parent destruction", "[background]") {
   tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
-    Fixture f{io.get_executor(), {}, R"({"permissions":{"allow":[{"tool_pattern":"*"}]},
-      "agents":{"parent":{"permissions":{"deny":[{"tool_pattern":"FileWrite","input_pattern":"protected"}]}},
-      "worker":{"prompt_overlay":"WORKER"}}})"};
-    f.options.agent_config_name = "parent";
-    auto parent = bootstrap::AgentSession::create(f.options);
-    REQUIRE(parent.has_value());
-    f.session = std::move(*parent);
+    Fixture f{io.get_executor()};
     f.provider.child_writes = true;
-    const auto id = co_await launch(f);
+    std::string id;
+    {
+      permission::RuleSet rules;
+      rules.push_back({.verdict = permission::Verdict::allow, .tool_pattern = "*"});
+      auto pattern = permission::InputPattern::compile("protected");
+      REQUIRE(pattern.has_value());
+      rules.push_back(
+          {.verdict = permission::Verdict::deny, .tool_pattern = "FileWrite", .input_pattern = std::move(*pattern)});
+      permission::NullAuditSink audit;
+      auto context = tool::DispatchContext::for_now(io.get_executor(), rules, audit);
+      auto task = f.tasks->start(f.options, {.prompt = "inspect", .background = true}, context);
+      REQUIRE(task.has_value());
+      id = task->task_id;
+    }
     auto started = co_await f.provider.started.receive();
     REQUIRE(started.has_value());
     f.session.reset();
@@ -492,7 +500,7 @@ TEST_CASE("A failed parent transcript commit keeps the completion pending", "[ba
 TEST_CASE("Disabled delegation creates no background job", "[background]") {
   tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     Fixture f{io.get_executor(), {}, R"({"permissions":{"allow":[{"tool_pattern":"*"}],
-      "deny":[{"tool_pattern":"AgentRun"}]},"agents":{"worker":{"prompt_overlay":"WORKER"}}})"};
+      "deny":[{"tool_pattern":"AgentRun"}]}})"};
     f.options.max_child_runs = 0;
     auto parent = bootstrap::AgentSession::create(f.options);
     REQUIRE(parent.has_value());
@@ -511,7 +519,7 @@ TEST_CASE("Disabled delegation creates no background job", "[background]") {
 TEST_CASE("Completion reads use task ownership instead of generic permission rules", "[background]") {
   tests::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     Fixture f{io.get_executor(), {.automatic_delivery = true}, R"({"permissions":{"allow":[{"tool_pattern":"*"}],
-      "deny":[{"tool_pattern":"TaskGet"}]},"agents":{"worker":{"prompt_overlay":"WORKER"}}})"};
+      "deny":[{"tool_pattern":"TaskGet"}]}})"};
     const auto id = co_await launch(f);
     REQUIRE(f.provider.release.try_send(0).has_value());
     auto done = co_await settled(f, id);

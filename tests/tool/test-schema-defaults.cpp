@@ -43,7 +43,7 @@ TEST_CASE("MemoryRecall declared defaults preserve all three selector modes", "[
     context.mode = permission::Mode::permissive;
     std::vector<tool::MemoryRecallRequest> seen;
     context.memory_recall = [&seen](tool::MemoryRecallRequest request,
-                                   tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+                                    tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
       seen.push_back(std::move(request));
       co_return tool::Output::text_only("read");
     };
@@ -53,8 +53,9 @@ TEST_CASE("MemoryRecall declared defaults preserve all three selector modes", "[
       seen.clear();
       auto omitted = co_await registry.dispatch(tool::kMemoryRecallName, inputs[i].dump(), context);
       REQUIRE(omitted.has_value());
-      auto explicit_defaults = co_await registry.dispatch(
-          tool::kMemoryRecallName, with_declared_defaults(schema, inputs[i]).dump(), context);
+      auto explicit_defaults = co_await registry.dispatch(tool::kMemoryRecallName,
+                                                          with_declared_defaults(schema, inputs[i]).dump(),
+                                                          context);
       REQUIRE(explicit_defaults.has_value());
       REQUIRE(seen.size() == 2);
       REQUIRE(seen[0] == seen[1]);
@@ -74,18 +75,16 @@ TEST_CASE("MemoryRemember advertised defaults match omitted metadata", "[unit][t
     context.mode = permission::Mode::permissive;
     std::vector<tool::MemoryRememberRequest> seen;
     context.memory_remember = [&seen](tool::MemoryRememberRequest request,
-                                     tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+                                      tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
       seen.push_back(std::move(request));
       co_return tool::Output::text_only("saved");
     };
-    const auto input = json{{"id", "reply-style"},
-                            {"kind", "user"},
-                            {"title", "Reply style"},
-                            {"body", "Lead with the result."}};
+    const auto input =
+        json{{"id", "reply-style"}, {"kind", "user"}, {"title", "Reply style"}, {"body", "Lead with the result."}};
     auto omitted = co_await registry.dispatch(tool::kMemoryRememberName, input.dump(), context);
     REQUIRE(omitted.has_value());
-    auto explicit_defaults = co_await registry.dispatch(
-        tool::kMemoryRememberName, with_declared_defaults(schema, input).dump(), context);
+    auto explicit_defaults =
+        co_await registry.dispatch(tool::kMemoryRememberName, with_declared_defaults(schema, input).dump(), context);
     REQUIRE(explicit_defaults.has_value());
     REQUIRE(seen.size() == 2);
     REQUIRE(seen[0] == seen[1]);
@@ -101,19 +100,18 @@ TEST_CASE("MemoryRecall and AgentRun enforce advertised UTF-8 byte caps before e
   test::run_async([](asio::io_context& io) -> async::Awaitable<void> {
     tool::Registry registry;
     REQUIRE(tool::register_memory_recall(registry).has_value());
-    const auto agents = std::array{std::string{"worker"}};
-    REQUIRE(tool::register_agent_run(registry, agents).has_value());
+    REQUIRE(tool::register_agent_run(registry).has_value());
     permission::NullAuditSink audit;
     auto context = tool::DispatchContext::for_now(io.get_executor(), {}, audit);
     context.mode = permission::Mode::permissive;
     std::size_t calls = 0;
     context.memory_recall = [&calls](tool::MemoryRecallRequest,
-                                    tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+                                     tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
       ++calls;
       co_return tool::Output::text_only("read");
     };
     context.agent_run = [&calls](tool::AgentRunRequest,
-                                tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
+                                 tool::DispatchContext&) -> async::Awaitable<core::Result<tool::Output>> {
       ++calls;
       co_return tool::Output::text_only("done");
     };
@@ -123,9 +121,6 @@ TEST_CASE("MemoryRecall and AgentRun enforce advertised UTF-8 byte caps before e
       const auto cap = schema.at("properties").at(field).at("maxLength").get<std::size_t>();
       REQUIRE(cap >= 3);
       auto input = json{{field, std::string(cap - 3, 'x') + "中"}};
-      if (name == tool::AGENT_RUN_NAME) {
-        input["agent"] = "worker";
-      }
       calls = 0;
       auto exact = co_await registry.dispatch(name, input.dump(), context);
       REQUIRE(exact.has_value());

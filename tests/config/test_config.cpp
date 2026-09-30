@@ -522,9 +522,6 @@ TEST_CASE("Config::load_file accepts the checked-in example config", "[unit][con
   REQUIRE(result->memory().longterm.recall.limit == 20);
 
   REQUIRE(result->permissions().rules.size() == 6);
-  REQUIRE(result->agents().size() == 1);
-  REQUIRE(result->agents()[0].name == "researcher");
-  REQUIRE(result->agents()[0].permissions.rules.size() == 1);
 }
 
 TEST_CASE("Config::parse validates optional provider profile pricing", "[unit][config][profiles]") {
@@ -973,37 +970,6 @@ TEST_CASE("Config::parse preserves authoring order across verdict keys", "[unit]
   REQUIRE(rules[2].tool_pattern == "third");
 }
 
-TEST_CASE("Config::parse extracts agents.<name>.permissions overlays", "[unit][config][permissions]") {
-  auto result = config::Config::parse(R"json(
-{
-  "agents": {
-    "researcher": {
-      "prompt_overlay": "Prefer concise, source-backed answers.",
-      "permissions": {
-        "allow": [{"tool_pattern": "*", "capability": "egress_http"}]
-      }
-    },
-    "auditor": {
-      "permissions": {
-        "deny": [{"tool_pattern": "*", "capability": "write_file"}]
-      }
-    }
-  }
-}
-)json");
-
-  REQUIRE(result.has_value());
-  REQUIRE(result->agents().size() == 2);
-  REQUIRE(result->agents()[0].name == "researcher");
-  REQUIRE(result->agents()[0].prompt_overlay == "Prefer concise, source-backed answers.");
-  REQUIRE(result->agents()[0].permissions.rules.size() == 1);
-  REQUIRE(result->agents()[0].permissions.rules[0].capability == core::Capability::egress_http);
-  REQUIRE(result->agents()[1].name == "auditor");
-  REQUIRE(result->agents()[1].prompt_overlay.empty());
-  REQUIRE(result->agents()[1].permissions.rules[0].verdict == config::PermissionVerdict::deny);
-  REQUIRE(result->agents()[1].permissions.rules[0].capability == core::Capability::write_file);
-}
-
 TEST_CASE("Config::parse env-substitutes inside permission rules", "[unit][config][permissions]") {
   ScopedEnv pattern{"ORAN_CONFIG_TEST_PATTERN", "File*"};
 
@@ -1111,7 +1077,8 @@ TEST_CASE("Config::parse rejects malformed input_pattern at load time", "[unit][
   }
 }
 
-TEST_CASE("Config::parse handles unknown verdict / rule / agent keys per mode", "[unit][config][permissions]") {
+TEST_CASE("Config::parse handles unknown verdict, rule and unsupported root keys per mode",
+          "[unit][config][permissions]") {
   SECTION("unknown verdict key warns in loose mode") {
     auto result = config::Config::parse(R"json({"permissions": {"approve": [{"tool_pattern": "*"}]}})json");
     REQUIRE(result.has_value());
@@ -1136,22 +1103,15 @@ TEST_CASE("Config::parse handles unknown verdict / rule / agent keys per mode", 
     REQUIRE(result->warnings()[0].path == "$.permissions.allow[0].notes");
   }
 
-  SECTION("unknown agent field warns in loose mode") {
+  SECTION("removed agents section warns in loose mode") {
     auto result = config::Config::parse(R"json({"agents": {"a": {"model": "claude"}}})json");
     REQUIRE(result.has_value());
-    REQUIRE(result->agents().size() == 1);
     REQUIRE(result->warnings().size() == 1);
-    REQUIRE(result->warnings()[0].path == "$.agents.a.model");
+    REQUIRE(result->warnings()[0].path == "$.agents");
   }
 
-  SECTION("unknown agent field fails under strict_config") {
+  SECTION("removed agents section fails under strict_config") {
     auto result = config::Config::parse(R"json({"strict_config": true, "agents": {"a": {"model": "claude"}}})json");
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().kind() == core::ErrorKind::config);
-  }
-
-  SECTION("malformed agent prompt_overlay fails") {
-    auto result = config::Config::parse(R"json({"agents": {"a": {"prompt_overlay": ["not", "a string"]}}})json");
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().kind() == core::ErrorKind::config);
   }
@@ -1305,30 +1265,6 @@ TEST_CASE("Config::parse warns or fails on unknown workspace fields", "[unit][co
       R"json({"strict_config": true, "permissions": {"workspace": {"sandbox_root": "/tmp/sandbox"}}})json");
   REQUIRE_FALSE(strict.has_value());
   REQUIRE(strict.error().kind() == core::ErrorKind::config);
-}
-
-TEST_CASE("Config::parse threads workspace blocks through agent overlays", "[unit][config][permissions][workspace]") {
-  auto result = config::Config::parse(R"json({
-  "permissions": {
-    "workspace": {
-      "extra_read_roots": ["/srv/global"]
-    }
-  },
-  "agents": {
-    "auditor": {
-      "permissions": {
-        "workspace": {
-          "extra_read_roots": ["/var/log/auditor"]
-        }
-      }
-    }
-  }
-})json");
-
-  REQUIRE(result.has_value());
-  REQUIRE(result->permissions().workspace.extra_read_roots == std::vector<std::string>{"/srv/global"});
-  REQUIRE(result->agents().size() == 1);
-  REQUIRE(result->agents()[0].permissions.workspace.extra_read_roots == std::vector<std::string>{"/var/log/auditor"});
 }
 
 TEST_CASE("prompt recall rejects limits beyond the memory tool boundary", "[unit][config][memory][core_boundary]") {

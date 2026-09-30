@@ -8,11 +8,9 @@
 
 namespace orangutan::bootstrap {
 
-/// Compile owned rules in baseline, global and agent order. Workspace settings
+/// Compile owned rules in baseline then configuration order. Workspace settings
 /// are separate; invalid input patterns return an error without a partial policy.
 [[nodiscard]] core::Result<permission::RuleSet>
-materialize_permissions(permission::Mode mode,
-                        std::span<const config::PermissionRuleConfig> global,
-                        std::span<const config::PermissionRuleConfig> per_agent = {});
+materialize_permissions(permission::Mode mode, std::span<const config::PermissionRuleConfig> global);
 
 }  // namespace orangutan::bootstrap

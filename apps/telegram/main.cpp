@@ -202,7 +202,7 @@ int main(int argc, char** argv) try {
     }
     assembly.emplace(std::move(*resources));
   }
-  if (config && !options.once && !config->agents().empty() && config->runtime().workers > 1) {
+  if (config && !options.once && config->runtime().workers > 1) {
     // Each provider HTTP call occupies a blocking worker. Leave one worker for
     // foreground requests and channel polling instead of filling the pool.
     const auto running = std::min<std::size_t>(4, static_cast<std::size_t>(config->runtime().workers) - 1);
@@ -296,7 +296,7 @@ int main(int argc, char** argv) try {
       settings.agent_key = "telegram";
       settings.identity = options.user;
       settings.origin = "telegram";
-      settings.max_child_runs = tasks ? 4 : 0;
+      settings.max_child_runs = 4;
       settings.background_tasks = tasks.get();
       settings.per_agent_overlay = "You are responding in a private Telegram chat. Reply in the user's language.";
       auto created = bootstrap::AgentSession::create(std::move(settings));

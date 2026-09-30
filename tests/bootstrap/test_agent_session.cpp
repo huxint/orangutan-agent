@@ -308,23 +308,6 @@ hook::Sink memory_capture_sink(std::vector<MemoryHookCapture>& captures,
 
 }  // namespace
 
-TEST_CASE("AgentSession rejects unknown permission overlays", "[unit][bootstrap][prompt_runner]") {
-  TempDir temp{"oran-bootstrap-prompt-runner-bad-agent"};
-  test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
-    auto cfg = config::Config{};
-    auto assembly = build_assembly(temp.path(), io, false);
-    provider::FakeProvider fake{std::vector<provider::ScriptedTurn>{}};
-    auto options = base_runner_options(io, assembly, cfg, fake);
-    options.agent_config_name = "ghost";
-
-    auto runner = bootstrap::AgentSession::create(std::move(options));
-
-    REQUIRE_FALSE(runner.has_value());
-    REQUIRE(runner.error().kind() == core::ErrorKind::not_found);
-    co_return;
-  });
-}
-
 TEST_CASE("AgentSession rejects an empty executor at create time", "[unit][bootstrap][prompt_runner]") {
   TempDir temp{"oran-bootstrap-prompt-runner-empty-executor"};
   test::run_async([&temp](asio::io_context& io) -> async::Awaitable<void> {
@@ -1195,18 +1178,9 @@ TEST_CASE("AgentSession renders default system preamble once per prompt before l
   });
 }
 
-TEST_CASE("AgentSession renders selected agent prompt overlay in the stable prefix",
-          "[unit][bootstrap][prompt_runner][prompt]") {
+TEST_CASE("AgentSession preserves host-supplied instructions across iterations", "[unit][bootstrap][prompt_runner]") {
   TempDir temp{"oran-bootstrap-prompt-runner-agent-overlay"};
-  auto cfg = parse_config(R"json(
-{
-  "agents": {
-    "writer": {
-      "prompt_overlay": "Agent overlay: prefer concise, source-backed answers."
-    }
-  }
-}
-)json");
+  auto cfg = config::Config{};
 
   test::run_async([&temp, &cfg](asio::io_context& io) -> async::Awaitable<void> {
     auto assembly = build_assembly(temp.path(), io, false);
@@ -1227,7 +1201,7 @@ TEST_CASE("AgentSession renders selected agent prompt overlay in the stable pref
     }};
 
     auto options = base_runner_options(io, assembly, cfg, recording);
-    options.agent_config_name = "writer";
+    options.per_agent_overlay = "Agent overlay: prefer concise, source-backed answers.";
     auto runner = bootstrap::AgentSession::create(std::move(options));
     REQUIRE(runner.has_value());
 

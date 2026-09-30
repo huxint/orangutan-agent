@@ -29,10 +29,9 @@ inline constexpr std::string_view AGENT_RUN_NAME{"AgentRun"};
 inline constexpr std::string_view TASK_GET_NAME{"TaskGet"};
 inline constexpr std::string_view TASK_CANCEL_NAME{"TaskCancel"};
 
-/// Register a child-run tool limited to the configured names. The host supplies
+/// Register dynamic child creation from a self-contained task. The host supplies
 /// the runner on DispatchContext with bounded host-owned admission.
-[[nodiscard]] core::Result<void>
-register_agent_run(Registry& registry, std::span<const std::string> agent_names, bool background = false);
+[[nodiscard]] core::Result<void> register_agent_run(Registry& registry, bool background = false);
 /// Register scoped background-task inspection and cancellation ports.
 [[nodiscard]] core::Result<void> register_task_tools(Registry& registry);
 

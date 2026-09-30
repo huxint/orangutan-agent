@@ -50,7 +50,7 @@ struct TaskOwner {
 
 struct TaskSnapshot {
   std::string task_id;
-  std::string agent;
+  std::string agent_key;
   std::string label;
   TaskState state{TaskState::queued};
   core::Time created_at{};
