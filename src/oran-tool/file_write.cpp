@@ -31,11 +31,11 @@ namespace {
 constexpr std::string_view kFileWriteSchema =
     R"({"type":"object","properties":{)"
     R"("path":{"type":"string","minLength":1,"description":"Absolute or workspace-relative file path."},)"
-    R"("content":{"type":"string","description":"Text to write."},)"
-    R"("mode":{"type":"string","enum":["truncate","append","fail_if_exists"],"default":"truncate","description":"Replace, append, or create only if absent."},)"
+    R"("content":{"type":"string","description":"Complete UTF-8 file contents for truncate or fail_if_exists; only the added text for append. Empty is allowed. No diff markers or read metadata."},)"
+    R"("mode":{"type":"string","enum":["truncate","append","fail_if_exists"],"default":"truncate","description":"truncate replaces the whole file; append adds content; fail_if_exists creates only if absent."},)"
     R"("create_parents":{"type":"boolean","default":false,"description":"Create missing parent directories."},)"
-    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216,"default":16777216,"description":"Maximum bytes in content."},)"
-    R"("expected_version":{"type":"string","description":"Fingerprint from FileRead; rejects a changed or missing file."}},)"
+    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216,"default":16777216,"description":"UTF-8 byte cap for supplied content, not the final size of an appended file."},)"
+    R"("expected_version":{"type":"string","description":"Opaque fingerprint copied from FileRead of this existing file. Rejects a changed or missing file; omit when creating a new file."}},)"
     R"("required":["path","content"],"additionalProperties":false})";
 
 struct FileWriteRequest {
@@ -180,10 +180,11 @@ struct FileWriteRequest {
 core::Result<void> register_file_write(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kFileWriteName},
-      .description = "Create or replace a UTF-8 text file. The default mode overwrites existing content; "
-                     "prefer FileEdit for targeted changes. Read existing files first and pass their fingerprint "
-                     "as expected_version to reject stale writes. Use fail_if_exists when creating a new file "
-                     "without overwriting another file. Returns the written byte count.",
+      .description = "Create a UTF-8 text file, append text, or replace its complete contents. Prefer FileEdit for "
+                     "targeted changes. The default truncate mode overwrites existing content: read existing files "
+                     "first and pass their fingerprint as expected_version. For new files, use fail_if_exists to "
+                     "avoid overwriting an existing file. On a version conflict, read and reconcile current content "
+                     "before retrying. Returns the written byte count; it does not validate the resulting program.",
       .input_schema_json = std::string{kFileWriteSchema},
       .required_capabilities = {core::Capability::write_file},
   };

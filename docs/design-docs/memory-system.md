@@ -227,6 +227,10 @@ Rendering is a pure function of selected content. Timestamps, request IDs and
 scores stay out of prompt text. An existing row's update preserves its
 creation and last-read timestamps and keeps update time monotonic; correcting a
 lesson replaces that scoped ID and its indexed content instead of duplicating it.
+MemoryRemember supplies a complete replacement note rather than a partial update.
+Omitted importance uses 0.5; omitted tags and linked IDs become empty lists, so
+callers preserving those fields must include them in the replacement. The schema
+explains kind selection, discovery priority and these metadata defaults.
 
 Retrieval values, tool-result JSON and memory-read hook hits carry one lexical
 `score`.

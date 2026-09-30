@@ -171,7 +171,7 @@ join.
 Parent and child rule decisions intersect at every tool dispatch, including
 rewritten inputs and automatic recall. The permission contract owns precedence
 and approval limits. The self-contained task and returned final-report shape
-follows the reference [Agent usage notes](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/tool-description-agent-simple-usage-notes.md).
+follows the reference [Agent usage notes](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/tool-description-agent-usage-notes.md).
 
 [Tools](tool-runtime.md), [memory](memory-system.md),
 [permissions](permissions-and-hooks.md), [providers](api-portability.md) and

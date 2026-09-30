@@ -60,17 +60,25 @@ core::Result<void> register_agent_run(Registry& registry, std::span<const std::s
   const auto schema = nlohmann::json{
       {"type", "object"},
       {"properties",
-       {{"agent", {{"type", "string"}, {"enum", names}}},
-        {"prompt", {{"type", "string"}, {"minLength", 1}, {"maxLength", MAX_AGENT_PROMPT_BYTES}}}}},
+       {{"agent", {{"type", "string"}, {"enum", names}, {"description", "Configured child agent to run."}}},
+        {"prompt",
+         {{"type", "string"},
+          {"minLength", 1},
+          {"maxLength", MAX_AGENT_PROMPT_BYTES},
+          {"description", "Self-contained task: objective, relevant context and paths, constraints, whether edits "
+                          "are wanted, and the expected result. At most 16384 UTF-8 bytes, not characters."}}}}},
       {"required", {"agent", "prompt"}},
       {"additionalProperties", false},
   };
   return registry.add_prepared(
       core::ToolDef{
           .name = std::string{AGENT_RUN_NAME},
-          .description = "Run a configured child agent and return its completed answer. Supply a self-contained task; "
-                         "each call starts a fresh conversation. The child uses this workspace and memory scope "
-                         "under both agents' permissions.",
+          .description = "Delegate a separable subtask to a configured agent and receive its completed answer. "
+                         "Each call starts a fresh conversation with the task you supply; include needed context "
+                         "rather than referring to this conversation. The child shares this workspace and memory "
+                         "scope under both agents' permissions, so allowed edits affect the same files. State "
+                         "when inspection without edits is wanted and avoid overlapping writes. Review returned "
+                         "findings before using them. Admission is bounded; a refused run has not done the work.",
           .input_schema_json = schema.dump(),
           .required_capabilities = {core::Capability::spawn_agent},
       },

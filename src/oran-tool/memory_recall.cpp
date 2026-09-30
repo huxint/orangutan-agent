@@ -35,7 +35,13 @@ constexpr std::size_t kMaxMemoryRecallLimit = 20;
 constexpr auto kMemoryRecallFields = std::to_array<std::string_view>({"query", "limit", "kinds", "id", "offset"});
 
 constexpr std::string_view kMemoryRecallSchema =
-    R"({"type":"object","properties":{"query":{"type":"string","minLength":1,"description":"Short topic words to search; mutually exclusive with id."},"id":{"type":"string","minLength":1,"description":"Read this exact note from the index."},"limit":{"type":"integer","minimum":1,"maximum":20},"offset":{"type":"integer","minimum":0,"description":"Continue browsing the index; omit id and query."},"kinds":{"type":"array","items":{"type":"string","enum":["user","feedback","project","reference","team"]},"uniqueItems":true}},"required":[],"additionalProperties":false})";
+    R"({"type":"object","properties":{)"
+    R"("query":{"type":"string","minLength":1,"description":"Literal topic words for lexical search, up to 4096 UTF-8 bytes. Omit id and offset. Omit both query and id to browse the index.","maxLength":4096},)"
+    R"("id":{"type":"string","minLength":1,"description":"Exact note ID from this scope, typically discovered in the index. Omit query and offset."},)"
+    R"("limit":{"type":"integer","minimum":1,"maximum":20,"description":"Maximum results. When omitted: 20 index entries, 5 search hits, or 1 exact-ID result."},)"
+    R"("offset":{"type":"integer","minimum":0,"description":"Index browsing only: omission starts at 0. Continue with a returned next_offset and the same kind filters. Omit id and query."},)"
+    R"("kinds":{"type":"array","items":{"type":"string","enum":["user","feedback","project","reference","team"]},"uniqueItems":true,"default":[],"description":"Filter by stored note kind; omitted or empty includes every kind."}},)"
+    R"("required":[],"additionalProperties":false})";
 
 [[nodiscard]] core::Result<std::size_t> parse_limit(const json& parsed, std::size_t default_limit) {
   const auto it = parsed.find("limit");
@@ -178,9 +184,9 @@ core::Result<void> register_memory_recall(Registry& registry) {
                      "request, or the user asks about memory. Use relevant facts to answer the request. "
                      "Do not announce routine lookups or volunteer note recaps. Ignore unrelated memories. "
                      "Call {} to browse a compact index, {\"id\":\"note-id\"} to read a relevant note in full, "
-                     "or {\"query\":\"topic words\"} to search. Index cues are incomplete; read applicable notes "
-                     "before relying on them. Follow next_offset to browse more and use returned IDs when "
-                     "updating a lesson. Optional kinds filter the current scope, which is supplied by the host.",
+                     "or {\"query\":\"topic words\"} for full matching notes. Search is lexical: try different "
+                     "topic words or browse if wording misses. Index cues are incomplete; read applicable notes "
+                     "before relying on them. Follow next_offset with the same filters. The host supplies scope.",
       .input_schema_json = std::string{kMemoryRecallSchema},
       .required_capabilities = {core::Capability::read_memory},
   };

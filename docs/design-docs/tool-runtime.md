@@ -171,6 +171,13 @@ the handler rejects unknown names, extra fields and prompts outside 1–16384
 UTF-8 bytes before invoking the host binding. Identity, session, memory scope,
 provider route and policy come from the host.
 
+The prompt field describes the objective, needed context and paths, constraints,
+whether edits are wanted and the expected result. The child does not inherit the
+parent conversation automatically; allowed writes affect their shared workspace.
+The tool description warns against overlapping writes and asks the parent to
+review findings before using them. Each call starts a new conversation, not a
+resumption of an earlier child.
+
 The agent and prompt fields are prepared before authorization; the host binding
 receives only the typed request and supplies identity, session, memory scope,
 provider route and policy. The result text is the child's completed answer.
@@ -180,6 +187,32 @@ permissions, approvals, hooks and audit use the ordinary dispatch path. Child
 admission exhaustion returns `mailbox_overflowed` with `reason=child_limit` as a
 model-visible tool error. Disabled delegation returns `permission_denied`.
 [Agent execution](agent-platform.md) owns the host's child-session behavior.
+
+## Native Argument Guidance
+
+Native declarations describe the implemented operation rather than internal
+runtime plumbing. File content fields distinguish complete replacement from
+append text. Read metadata is not file content, edits use exact strings rather
+than patches or regular expressions, and opaque freshness tokens come from a
+read of the same file. A conflict requires reading and reconciling current content,
+not dropping the guard. FileRead's byte cap bounds source text separately from
+the dispatch output cap; FileWrite's cap bounds supplied content, including only
+the appended suffix in append mode; FileEdit's cap bounds both complete files.
+
+Schema annotations describe defaults only when they are valid across that field's
+uses. MemoryRecall has selector-dependent limits (20 index entries, 5 search hits,
+1 exact read), and offset applies only to browsing, so neither field advertises
+an unconditional JSON default. Its kinds filter defaults to an empty list.
+MemoryRemember advertises importance 0.5 and empty tag/link defaults, and explains
+that omitted tags or links clear them when replacing a note. MemoryForget is for
+requested removal; successful idempotent removal confirms absence, not prior
+existence. The [memory contract](memory-system.md) owns stored-note semantics.
+
+JSON Schema `maxLength` counts characters. The query and child-task descriptions
+also state their stricter UTF-8 byte limits (4096 and 16384); preparers enforce
+those limits, including multibyte input. Descriptions do not replace validation,
+authorization or approval. Schemas keep the existing simple object/property
+shape, and changed declaration bytes naturally change native cache identity.
 
 ## Capability Vocabulary
 

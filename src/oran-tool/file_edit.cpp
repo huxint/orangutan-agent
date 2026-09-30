@@ -34,11 +34,11 @@ namespace {
 constexpr std::string_view kFileEditSchema =
     R"({"type":"object","properties":{)"
     R"("path":{"type":"string","minLength":1,"description":"Absolute or workspace-relative file path."},)"
-    R"("old_string":{"type":"string","minLength":1,"description":"Exact text to replace, including whitespace."},)"
+    R"("old_string":{"type":"string","minLength":1,"description":"Exact file text copied from a read, including whitespace, without the metadata header. Include enough context to select the intended occurrence."},)"
     R"("new_string":{"type":"string","description":"Replacement text; empty deletes the match. Must differ from old_string."},)"
-    R"("replace_all":{"type":"boolean","default":false,"description":"Replace every non-overlapping match."},)"
-    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216,"default":16777216,"description":"Maximum bytes in both source and edited file."},)"
-    R"("expected_version":{"type":"string","description":"Fingerprint from FileRead; rejects a changed file."}},)"
+    R"("replace_all":{"type":"boolean","default":false,"description":"False requires exactly one match; true replaces every non-overlapping match in this file."},)"
+    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216,"default":16777216,"description":"UTF-8 byte cap for both the complete source and complete edited file."},)"
+    R"("expected_version":{"type":"string","description":"Opaque fingerprint copied from FileRead of this file. On conflict, read again and revise the edit; do not just drop the guard."}},)"
     R"("required":["path","old_string","new_string"],"additionalProperties":false})";
 
 struct FileEditRequest {
@@ -266,10 +266,12 @@ replacement_size(std::size_t source_size, std::size_t old_size, std::size_t new_
 core::Result<void> register_file_edit(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kFileEditName},
-      .description = "Perform an exact string replacement in an existing UTF-8 file. Read the file first and "
-                     "preserve whitespace. old_string must match exactly once unless replace_all is true. "
-                     "On missing or ambiguous matches, read again and include more surrounding text. "
-                     "Use expected_version from FileRead to reject a stale edit; re-read on conflict.",
+      .description = "Make a targeted exact string replacement in an existing UTF-8 file; this is not a regex or "
+                     "patch tool. Read the relevant text first and preserve whitespace. old_string must match "
+                     "exactly once unless replace_all is true. On missing or ambiguous matches, read again and "
+                     "include more context instead of widening the replacement blindly. Copy expected_version "
+                     "from FileRead to guard against stale content; re-read on conflict. Returns the replacement "
+                     "count.",
       .input_schema_json = std::string{kFileEditSchema},
       .required_capabilities = {core::Capability::edit_file},
   };

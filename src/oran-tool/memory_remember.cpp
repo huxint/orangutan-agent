@@ -34,7 +34,15 @@ constexpr auto kMemoryRememberFields = std::to_array<std::string_view>(
     {"id", "kind", "title", "body", "importance", "tags", "linked_record_ids"});
 
 constexpr std::string_view kMemoryRememberSchema =
-    R"({"type":"object","properties":{"id":{"type":"string","description":"Reuse the existing note ID when correcting the same lesson."},"kind":{"type":"string","enum":["user","feedback","project","reference","team"]},"title":{"type":"string","description":"A short topic title that helps decide relevance to future requests."},"body":{"type":"string","description":"One durable fact or lesson, why it matters, and when to apply it. Background knowledge, not a reply to the user."},"importance":{"type":"number","minimum":0,"maximum":1},"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true},"linked_record_ids":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["id","kind","title","body"],"additionalProperties":false})";
+    R"({"type":"object","properties":{)"
+    R"("id":{"type":"string","description":"Stable, nonblank ID for one lesson. Reuse the existing ID to replace that note; a new ID creates a separate note.","minLength":1},)"
+    R"("kind":{"type":"string","enum":["user","feedback","project","reference","team"],"description":"user: lasting user facts or preferences; feedback: correction or lesson; project: durable project decision; reference: useful pointer; team: shared working convention within this scope."},)"
+    R"("title":{"type":"string","description":"Short, nonblank topic title used to decide relevance to future requests.","minLength":1},)"
+    R"("body":{"type":"string","description":"Complete replacement note: one durable fact, why it matters, and when to apply it. The opening sentence becomes an index cue. Background knowledge, not a reply to the user.","minLength":1},)"
+    R"("importance":{"type":"number","minimum":0,"maximum":1,"default":0.5,"description":"Relative priority for discovery, from 0 to 1; not confidence or proof of truth."},)"
+    R"("tags":{"type":"array","items":{"type":"string","minLength":1},"uniqueItems":true,"default":[],"description":"Unique nonblank topic labels for lexical discovery. Replaces existing tags; omission clears them."},)"
+    R"("linked_record_ids":{"type":"array","items":{"type":"string","minLength":1},"uniqueItems":true,"default":[],"description":"Unique nonblank related note IDs in this scope. Replaces existing links; omission clears them."}},)"
+    R"("required":["id","kind","title","body"],"additionalProperties":false})";
 
 [[nodiscard]] core::Result<std::string> require_non_empty_string(const json& parsed, std::string_view field) {
   auto value = detail::require_string_field(parsed, kMemoryRememberName, field);
@@ -162,15 +170,13 @@ constexpr std::string_view kMemoryRememberSchema =
 core::Result<void> register_memory_remember(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kMemoryRememberName},
-      .description = "Save a durable preference, correction, decision, or reference for future work without waiting "
-                     "for the user to ask you to remember it. Write in the same turn that you learn it. Read an "
-                     "existing related note and reuse its id to correct it, instead of creating contradictory "
-                     "duplicates. Store one lesson per note: a discoverable title, then a concise fact followed "
-                     "by why it matters and when to apply it. The opening sentence becomes its index cue. "
-                     "Do not save guesses, secrets, transient task progress, or facts easily re-read from code. "
-                     "The host supplies scope and timestamps; a successful result confirms persistence. "
-                     "Routine saves need no announcement or note recap. If the user explicitly asks to remember "
-                     "something, confirm briefly after success, then continue with their request.",
+      .description = "Persist one durable preference, correction, decision, or reference for later sessions. Save "
+                     "it in the turn you learn it. Read an existing related note and reuse its id to correct it. "
+                     "An update replaces the note's content and supplied metadata, not just changed fields; "
+                     "preserve tags and links that still apply. Do not save guesses, secrets, one-off instructions, "
+                     "task progress or facts easily re-read from code. The host supplies scope and timestamps. "
+                     "Success confirms persistence. Routine saves need no announcement; briefly confirm an "
+                     "explicit save request only after success.",
       .input_schema_json = std::string{kMemoryRememberSchema},
       .required_capabilities = {core::Capability::write_memory},
   };

@@ -26,7 +26,9 @@ namespace {
 using json = nlohmann::json;
 
 constexpr std::string_view kMemoryForgetSchema =
-    R"({"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false})";
+    R"({"type":"object","properties":{)"
+    R"("id":{"type":"string","minLength":1,"description":"Exact, nonblank ID of the note the user wants removed. Use MemoryRecall to identify it when uncertain."}},)"
+    R"("required":["id"],"additionalProperties":false})";
 constexpr auto kMemoryForgetFields = std::to_array<std::string_view>({"id"});
 
 [[nodiscard]] core::Result<std::string> require_non_empty_id(const json& parsed) {
@@ -72,8 +74,10 @@ constexpr auto kMemoryForgetFields = std::to_array<std::string_view>({"id"});
 core::Result<void> register_memory_forget(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kMemoryForgetName},
-      .description = "Remove one long-term memory record in the current agent scope. Deletes are idempotent; the "
-                     "result returns confirmation text plus structured removed-key metadata.",
+      .description = "Remove one saved note when the user requests forgetting it. Resolve an unclear target with "
+                     "MemoryRecall or ask for clarification; do not guess the ID or remove unrelated notes. "
+                     "Use MemoryRemember to correct a lesson that should remain. The host supplies scope. "
+                     "Removal is idempotent: success confirms the ID is absent, not that it previously existed.",
       .input_schema_json = std::string{kMemoryForgetSchema},
       .required_capabilities = {core::Capability::write_memory},
   };

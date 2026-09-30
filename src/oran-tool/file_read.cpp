@@ -31,10 +31,10 @@ namespace {
 constexpr std::string_view kFileReadSchema =
     R"({"type":"object","properties":{)"
     R"("path":{"type":"string","minLength":1,"description":"Absolute or workspace-relative file path."},)"
-    R"("offset":{"type":"integer","minimum":1,"default":1,"description":"First line to read, 1-based."},)"
+    R"("offset":{"type":"integer","minimum":1,"default":1,"description":"First line to read, 1-based. Use the returned continuation offset for the next window."},)"
     R"("limit":{"type":"integer","minimum":1,"maximum":2000,"default":2000,"description":"Maximum lines to read."},)"
-    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216,"default":16777216,"description":"Maximum source bytes in this window."},)"
-    R"("allow_outside_workspace":{"type":"boolean","default":false,"description":"Request an outside-root read; requires approval."}},)"
+    R"("max_bytes":{"type":"integer","minimum":1,"maximum":16777216,"default":16777216,"description":"Source UTF-8 byte cap for this window; separate tool-output limits may shorten the result."},)"
+    R"("allow_outside_workspace":{"type":"boolean","default":false,"description":"Request an outside-root read through approval. This flag does not grant access."}},)"
     R"("required":["path"],"additionalProperties":false})";
 
 struct FileReadRequest {
@@ -197,10 +197,11 @@ format_header(std::string_view path, const io::ReadTextResult& result, const std
 core::Result<void> register_file_read(Registry& registry) {
   core::ToolDef def{
       .name = std::string{kFileReadName},
-      .description = "Read a UTF-8 text file in bounded line windows. Returns a metadata header followed by exact "
-                     "file text; the header gives continuation or end-of-file guidance. Read before editing. "
-                     "Use the fingerprint as expected_version for a guarded edit or write. If truncated, "
-                     "request a smaller window; do not treat partial text as the complete file.",
+      .description = "Inspect a UTF-8 text file before answering questions about it or editing it. Reads bounded "
+                     "line windows, not directories, images or PDFs. Returns a metadata header followed by exact "
+                     "file text; the header is not file content. Follow its continuation offset as needed. "
+                     "If the window or tool output is truncated, read a smaller relevant window before editing. "
+                     "Copy the fingerprint into expected_version for a guarded edit or write.",
       .input_schema_json = std::string{kFileReadSchema},
       .required_capabilities = {core::Capability::read_file},
   };

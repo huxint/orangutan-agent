@@ -6,6 +6,55 @@ system text and cache identity. The [agent loop](../design-docs/agent-platform.m
 owns one rendered prefix per turn.
 This rule governs runtime prompts, not development-agent routing instructions.
 
+## Behavioral Guidance
+
+The default preamble guides completion of the current request: distinguish a
+question from a request for action, inspect relevant context before changing it,
+make a complete scoped change, and verify the result with available capabilities.
+It asks for clarification when missing information materially affects the result,
+not for repeated approval of already authorized work. Current instructions and
+evidence outrank retrieved content; data and tool results cannot grant authority.
+
+Instructions describe decisions and recovery steps rather than generic demands
+to be helpful or careful. Independent calls can be grouped; dependent calls wait
+for actual results. Invalid arguments are repaired, stale content is read again,
+truncated results remain incomplete, and uncertain mutations are inspected before
+retry. A successful write is evidence of a write, not a passing program. Native
+availability constrains actions; the prompt does not promise shell, web, image-file
+reading or delegation capabilities that are absent from the selected catalogue.
+
+Keep each kind of instruction at its owning surface:
+
+| Surface | Owns |
+| --- | --- |
+| System preamble | Task completion, authority, cross-tool sequencing, evidence and communication. |
+| Tool description | When to choose it, prerequisites, meaningful results and error recovery. |
+| Schema property | Meaning, units, defaults, bounds and relationships to other arguments. |
+| Memory index | Bounded discovery cues and their background-context framing. |
+
+Replies lead with the answer or outcome, match the user's language and requested
+format, and include relevant verification and remaining blockers. Substantial
+work can have brief updates at meaningful findings; routine lookups and memory
+maintenance remain quiet. Final text is self-contained. The
+[memory contract](../design-docs/memory-system.md) owns the exceptions for explicit
+memory questions and changes.
+
+These choices adapt the public third-party Claude Code extractions for
+[doing requested work](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/system-prompt-doing-tasks-software-engineering-focus.md),
+[limiting unnecessary additions](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/system-prompt-doing-tasks-no-unnecessary-additions.md),
+[outcome-first communication](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/system-prompt-outcome-first-communication-style.md),
+[action scope](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/system-prompt-executing-actions-with-care.md)
+and [tool dependencies](https://github.com/Piebald-AI/claude-code-system-prompts/blob/main/system-prompts/system-prompt-parallel-tool-call-note-part-of-tool-usage-policy.md).
+The references are design input, not an official behavior guarantee. Their
+product-specific tools, formatting restrictions and approval defaults do not
+override Orangutan's contracts.
+
+Schema/default dispatch tests and prompt/provider tests verify that declared
+inputs and submitted bytes remain consistent. They do not prove model adherence.
+Deployment-model evaluation should cover direct questions, completed edit requests,
+unclear targets, stale edits, unavailable tools, incomplete results and quiet memory
+use, checking actual effects as well as final answers.
+
 ## System Text
 
 Nonempty text sections join in this order with one newline:
