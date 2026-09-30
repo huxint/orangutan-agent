@@ -8,7 +8,7 @@ owns behavior and the boundary between local actions and read-only channel views
 
 This is a demo: model replies, agent teams, file results and Telegram/QQ/Feishu
 connections are simulated. It sends no messages, calls no provider, reads no
-local workspace and stores no credentials. Nothing runs after the page closes.
+local workspace and stores no credentials. Demo execution stops when the page closes.
 
 ## Run
 
@@ -21,6 +21,20 @@ npm --prefix apps/desktop run dev
 
 Open <http://127.0.0.1:5173>. The server binds to loopback and requires that port
 to be free. This optional app does not participate in the C++/xmake build.
+
+The Vite process must remain running. Keep its terminal open, or explicitly
+manage a detached development-server process when working through an agent tool.
+A URL from an earlier session is not evidence that the server is still listening.
+If the page will not open, check the process before changing application code:
+
+```sh
+curl --fail --silent --output /dev/null http://127.0.0.1:5173/
+ss -ltnp 'sport = :5173'
+```
+
+If nothing is listening, run the development command again. For a remote
+workspace, forward the port to the browser's machine. Vite serving a page is
+separate from the page-owned demo execution, which stops when the page closes.
 
 ## Explore
 
@@ -41,18 +55,19 @@ to be free. This optional app does not participate in the C++/xmake build.
 
 ## State And Recovery
 
-The page owns one demo scheduler. State is saved under the browser storage key
-`orangutan.desktop.demo`. Reopening marks active attempts interrupted, expires
+The page owns one demo scheduler and saves its state in this browser.
+Reopening marks active attempts interrupted, expires
 pending approvals and disconnects the simulated transports. There is no automatic
 replay, cross-tab agent service or hidden background work. Explicitly reconnect
 channels or retry local work as needed.
 
 Malformed/unreadable state is preserved and automatic writes are blocked; a
 banner offers export and recovery. Settings can export the original snapshot or
-restart the demo. A reset backs up the previous value under
-`orangutan.desktop.demo.backup.<timestamp>` before replacement. A failed backup
+restart the demo. A reset backs up the previous snapshot before replacement. A failed backup
 or write does not claim success. These records contain only the demo data and
 text entered into this browser, not existing Orangutan runtime databases.
+The [implementation document](../../docs/design-docs/desktop-ui.md) owns the
+storage keys, validation and recovery details.
 
 ## Verify
 
@@ -75,17 +90,10 @@ An existing compatible Chromium can be used without another browser download:
 set `ORAN_BROWSER_PATH` to its executable when running `npm run test:e2e`.
 Playwright starts the development server when needed, or reuses port 5173.
 
-## Code Boundaries
+## Continue Development
 
-| Files | Responsibility |
-| --- | --- |
-| `schema.ts`, `model.ts` | Validated identities, pure user commands and separately applied demo observations. |
-| `fixtures.ts` | Example conversations, work, artifacts and scoped memories. |
-| `storage.ts`, `useAgent.ts` | Snapshot effects, safe recovery and page-owned scheduling. |
-| `App.tsx`, `context.ts` | Navigation, theme/language, notifications and UI composition. |
-| `Assistant.tsx`, `Pages.tsx`, `TaskPanel.tsx` | Five pages and artifact/progress/team views. |
-| `components.tsx`, `RichText.tsx`, `styles.css` | Shared controls, safe lazy-loaded Markdown and visual system. |
-
-The application imports no C++ runtime and exposes no live-host API. A future
-runtime adapter needs its own bounded integration plan and must preserve the
-read-only channel boundary; a frontend check is not a server authorization check.
+Read the [implementation and handoff document](../../docs/design-docs/desktop-ui.md)
+for the file map, command/observation flow, source identity, persistence,
+page lifecycle, presentation details and current limitations. It distinguishes
+the reusable UI boundaries from simulation code that a real host must replace,
+and gives a staged integration path into the existing C++ contracts.

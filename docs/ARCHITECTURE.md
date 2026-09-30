@@ -64,7 +64,8 @@ runners. See [BUILD_SYSTEM.md](BUILD_SYSTEM.md).
 
 The optional [desktop prototype](../apps/desktop/README.md) under `apps/desktop`
 is a browser UI with a pure state model, source-restricted commands and injected
-demo/storage effects. It does not link or call the runtime. Its
+demo/storage effects. [Desktop implementation](design-docs/desktop-ui.md) owns
+its module map, state/effect boundaries and development handoff. It does not link or call the runtime. Its
 [product contract](product-specs/desktop-prototype.md) owns local actions,
 read-only channel observation and the future integration boundary.
 

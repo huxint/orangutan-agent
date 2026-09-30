@@ -8,6 +8,7 @@
 | [`async-model.md`](async-model.md) | Executors, cancellation and child ownership |
 | [`bootstrap-runtime.md`](bootstrap-runtime.md) | Application composition and session ownership |
 | [`core-beliefs.md`](core-beliefs.md) | Core design principles |
+| [`desktop-ui.md`](desktop-ui.md) | Desktop prototype structure, state/effect boundaries and runtime integration handoff |
 | [`io-runtime.md`](io-runtime.md) | Filesystem authority and blocking IO |
 | [`messaging-channels.md`](messaging-channels.md) | QQ, Telegram and Feishu adapters, delivery and activity lifecycle |
 | [`memory-system.md`](memory-system.md) | Scoped memory and conversation history |

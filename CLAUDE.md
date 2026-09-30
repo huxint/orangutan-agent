@@ -20,6 +20,7 @@ effect boundaries. Preserve user data; delete replaced code and stale documents.
 
 | Work | Read |
 | --- | --- |
+| Desktop UI and host integration | [desktop-ui](docs/design-docs/desktop-ui.md), [desktop product](docs/product-specs/desktop-prototype.md) |
 | Agent execution and context | [agent-platform](docs/design-docs/agent-platform.md) |
 | Runtime composition and session hosting | [bootstrap-runtime](docs/design-docs/bootstrap-runtime.md) |
 | Tool dispatch and filesystem policy | [tool-runtime](docs/design-docs/tool-runtime.md) |
