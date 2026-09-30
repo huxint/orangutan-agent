@@ -29,12 +29,10 @@ import { Empty, Modal, PlatformIcon, Source, StatusBadge } from './components.ts
 import type { Connection, Note } from './schema.ts';
 
 function PageHeading({
-  eyebrow,
   title,
   detail,
   children,
 }: {
-  eyebrow: string;
   title: string;
   detail: string;
   children?: React.ReactNode;
@@ -42,7 +40,6 @@ function PageHeading({
   return (
     <div className="page-heading">
       <div>
-        <div className="eyebrow">{eyebrow}</div>
         <h1>{title}</h1>
         <p>{detail}</p>
       </div>
@@ -73,11 +70,10 @@ export function TasksPage() {
   return (
     <div className="page-scroll">
       <PageHeading
-        eyebrow={t('一步一步，都算数', 'ONE THING AT A TIME')}
-        title={t('每件事，都有着落。', 'A place for every little task.')}
+        title={t('任务', 'Tasks')}
         detail={t(
-          '看看正在推进的事，也回顾已经完成的工作。',
-          'Follow what’s moving, and come back to what’s done.',
+          '查看执行状态、待确认操作和历史结果。',
+          'Review execution status, pending actions and completed results.',
         )}
       />
       <div className="filter-toolbar">
@@ -140,7 +136,7 @@ export function TasksPage() {
                 <small>
                   {task.members.length
                     ? `${task.members.length} ${t('位协作成员', 'teammates')}`
-                    : t('Orangutan 正在照看', 'In good hands with Orangutan')}
+                    : t('独立执行', 'Single-agent execution')}
                 </small>
               </div>
             </div>
@@ -152,7 +148,7 @@ export function TasksPage() {
       </div>
       {!tasks.length && (
         <Empty
-          title={t('这里暂时很安静', 'A little quiet here')}
+          title={t('暂无匹配任务', 'No matching tasks')}
           detail={t(
             '换个筛选条件，或者在对话中交代一件新事情。',
             'Try a different filter, or start something in a conversation.',
@@ -184,11 +180,10 @@ export function ConnectionsPage() {
   return (
     <div className="page-scroll">
       <PageHeading
-        eyebrow={t('从你习惯的地方，找到我', 'REACH ME WHERE YOU ARE')}
-        title={t('不止一种联系的方式。', 'A familiar way to reach me.')}
+        title={t('连接', 'Connections')}
         detail={t(
-          '消息从哪里来，回复就回到哪里。每段对话都有自己的空间。',
-          'Replies go back to where they started. Every conversation has its own space.',
+          '管理消息渠道连接。各渠道的会话与权限独立。',
+          'Manage channel connections. Conversations and permissions remain separate.',
         )}
       />
       <div className="connections-grid">
@@ -258,9 +253,7 @@ export function ConnectionsPage() {
           <Cable size={24} />
         </div>
         <div>
-          <h3>
-            {t('会话各自独立，基础资料一起用。', 'Separate conversations. A shared foundation.')}
-          </h3>
+          <h3>{t('共享工作区，会话隔离', 'Shared workspace, isolated conversations')}</h3>
           <p>
             {t(
               '共享工作区和公共记忆，让不同入口的助手有相同的基础。个人偏好和聊天上下文各自保存。应用关闭后，连接和执行一起停止。',
@@ -342,11 +335,10 @@ export function MemoryPage() {
   return (
     <div className="page-scroll">
       <PageHeading
-        eyebrow={t('一点一滴，慢慢了解', 'THE THINGS WORTH KEEPING')}
-        title={t('记住的，是对你有用的。', 'A little understanding goes a long way.')}
+        title={t('记忆', 'Memory')}
         detail={t(
-          '常用的资料、做事的习惯，还有不必重复说明的小事。',
-          'Useful context, familiar preferences, and the little things you shouldn’t have to repeat.',
+          '管理共享知识和个人偏好，检查每条记录的来源与作用域。',
+          'Manage shared knowledge and personal preferences. Review each record’s source and scope.',
         )}
       >
         <button
@@ -400,7 +392,7 @@ export function MemoryPage() {
         <Search size={16} />
         <input
           aria-label={t('搜索记忆', 'Search memories')}
-          placeholder={t('找一条记忆…', 'Find a memory…')}
+          placeholder={t('搜索记忆…', 'Search memories…')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -456,7 +448,7 @@ export function MemoryPage() {
         )}
       </div>
       {editing && (
-        <Modal title={t('一条记忆', 'A little memory')} close={() => setEditing(null)}>
+        <Modal title={t('编辑记忆', 'Edit memory')} close={() => setEditing(null)}>
           <div className="modal-body">
             <span className="memory-scope-label">
               {editing.scope === 'shared' ? <Globe2 size={14} /> : <LockKeyhole size={14} />}
@@ -537,11 +529,10 @@ export function SettingsPage({
   return (
     <div className="page-scroll settings-page">
       <PageHeading
-        eyebrow={t('按你的习惯来', 'MAKE YOURSELF AT HOME')}
-        title={t('用着顺手，才是好助手。', 'A little more like you.')}
+        title={t('设置', 'Settings')}
         detail={t(
-          '调整外观和偏好，让 Orangutan 融入你的日常。',
-          'Settle on the look and habits that fit your everyday.',
+          '配置外观、模型和桌面对话的操作权限。',
+          'Configure appearance, the model and local conversation permissions.',
         )}
       />
       <section className="settings-section">
@@ -552,7 +543,9 @@ export function SettingsPage({
         <div className="setting-row">
           <div>
             <strong>{t('主题', 'Theme')}</strong>
-            <p>{t('浅色暖一点，深色安静一点。', 'A warmer light. A quieter dark.')}</p>
+            <p>
+              {t('选择浅色、深色或跟随系统。', 'Choose light, dark or your system preference.')}
+            </p>
           </div>
           <div className="theme-options">
             {(
@@ -728,7 +721,7 @@ export function SettingsPage({
       <div className="settings-signature">
         <img src="/orangutan.svg" alt="" />
         <span>
-          Orangutan <span>·</span> {t('留点空间，给生活。', 'A little more headspace.')}
+          Orangutan <span>·</span> {t('桌面原型', 'Desktop prototype')}
         </span>
       </div>
       {confirmReset && (

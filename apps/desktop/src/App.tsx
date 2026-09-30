@@ -67,7 +67,7 @@ export default function App() {
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       document
         .querySelector('meta[name="theme-color"]')
-        ?.setAttribute('content', dark ? '#20231f' : '#f8f7f3');
+        ?.setAttribute('content', dark ? '#252422' : '#faf9f6');
     };
     update();
     media.addEventListener('change', update);
@@ -75,7 +75,7 @@ export default function App() {
   }, [state.settings.theme]);
   useEffect(() => {
     document.documentElement.lang = state.settings.language === 'zh' ? 'zh-CN' : 'en';
-    document.title = t('Orangutan · 你的本地助手', 'Orangutan · Your local companion');
+    document.title = t('Orangutan · 你的本地助手', 'Orangutan · Your local assistant');
   }, [state.settings.language]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -131,16 +131,13 @@ export default function App() {
           >
             <Logo />
             <span>
-              <strong>
-                orangutan<span className="brand-period">.</span>
-              </strong>
-              <small>{t('你的本地助手', 'YOUR LOCAL COMPANION')}</small>
+              <strong>Orangutan</strong>
+              <small>{t('本地工作区', 'WORKSPACE')}</small>
             </span>
           </button>
           <button className="new-conversation" onClick={newConversation}>
             <Plus size={17} />
-            <span>{t('新的对话', 'New conversation')}</span>
-            <Sparkles className="new-spark" size={16} />
+            <span>{t('新对话', 'New conversation')}</span>
           </button>
           <nav>
             {navItems.map(({ id, icon: Icon, label }) => (
@@ -225,7 +222,7 @@ export default function App() {
               <ChevronDown size={13} />
             </button>
             <div className="sidebar-footer">
-              <span>MADE FOR YOUR EVERYDAY</span>
+              <span>{t('演示环境', 'Demo environment')}</span>
               <button
                 className="icon-button"
                 aria-label={t('关于演示', 'About this demo')}
@@ -394,7 +391,7 @@ export default function App() {
           </Modal>
         )}
         {dialog === 'notifications' && (
-          <Modal title={t('新的动静', 'A few updates')} close={() => setDialog(null)}>
+          <Modal title={t('通知', 'Notifications')} close={() => setDialog(null)}>
             <div className="notification-list">
               {state.notifications.map((n) => (
                 <div className={`notification-item ${n.read ? 'read' : ''}`} key={n.id}>
@@ -439,10 +436,10 @@ export default function App() {
           </Modal>
         )}
         {dialog === 'about' && (
-          <Modal title={t('认识一下 Orangutan', 'Meet Orangutan')} close={() => setDialog(null)}>
+          <Modal title={t('关于 Orangutan', 'About Orangutan')} close={() => setDialog(null)}>
             <div className="modal-body about-demo">
               <Logo />
-              <h3>{t('一个能搭把手的本地助手。', 'A local companion for the everyday.')}</h3>
+              <h3>{t('Orangutan 桌面原型', 'Orangutan desktop prototype')}</h3>
               <p>
                 {t(
                   '这是一个可交互的桌面界面原型。回复、小队工作和渠道连接均使用演示数据；不会发送真实消息、调用模型或修改本机文件。',
@@ -456,7 +453,7 @@ export default function App() {
                 )}
               </p>
               <button className="button primary" onClick={() => setDialog(null)}>
-                {t('开始逛逛', 'Make yourself at home')}
+                {t('关闭', 'Close')}
                 <ArrowRight size={15} />
               </button>
             </div>

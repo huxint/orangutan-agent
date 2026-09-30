@@ -50,7 +50,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
       <div className="panel-header">
         <span>
           <FileText size={16} />
-          {t('工作台', 'Workbench')}
+          {t('任务详情', 'Task details')}
         </span>
         <CloseButton onClick={close} />
       </div>
@@ -122,7 +122,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
           ) : (
             <div className="panel-empty">
               <FileText size={32} />
-              <h3>{t('成果会放在这里', 'A place for your results')}</h3>
+              <h3>{t('暂无成果', 'No artifact yet')}</h3>
               <p>
                 {t(
                   '任务完成后，可以在这里查看文档、文件和整理好的方案。',
@@ -192,15 +192,15 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
           <>
             <p className="panel-intro">
               {t(
-                '各自专注，一起完成。Orangutan 负责分工和最终汇总。',
-                'A few focused minds, working together. Orangutan coordinates and brings the result back.',
+                '成员按任务分工，Orangutan 负责检查和汇总结果。',
+                'Members work on assigned tasks. Orangutan reviews and consolidates their results.',
               )}
             </p>
             <div className="team-members">
-              {task.members.map((member, i) => (
+              {task.members.map((member) => (
                 <details className="team-member" key={member.id} open={member.state === 'failed'}>
                   <summary>
-                    <span className={`member-avatar color-${i}`}>{member.name[0]}</span>
+                    <span className="member-avatar">{member.name[0]}</span>
                     <div>
                       <strong>{member.name}</strong>
                       <span>{member.role}</span>
@@ -268,7 +268,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
             ) : (
               <span>
                 <Check size={12} />
-                {t('已完成', 'All done')}
+                {t('已完成', 'Completed')}
               </span>
             )}
           </>

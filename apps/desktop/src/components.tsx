@@ -206,9 +206,7 @@ export function TaskCard({ task }: { task: Task }) {
       <div className="task-card-top">
         <span className="task-type">
           <Sparkles size={14} />
-          {task.members.length
-            ? t('小队协作', 'A little teamwork')
-            : t('任务进展', 'Task progress')}
+          {task.members.length ? t('协作任务', 'Agent team') : t('任务进展', 'Task progress')}
         </span>
         <StatusBadge status={task.status} />
       </div>
@@ -216,8 +214,8 @@ export function TaskCard({ task }: { task: Task }) {
       {task.members.length > 0 && (
         <div className="team-mini">
           <span className="stacked-avatars">
-            {task.members.map((m, i) => (
-              <span key={m.id} className={`member-avatar color-${i}`}>
+            {task.members.map((m) => (
+              <span key={m.id} className="member-avatar">
                 {m.name[0]}
               </span>
             ))}
@@ -292,38 +290,5 @@ export function Approval({ task }: { task: Task }) {
         </div>
       )}
     </div>
-  );
-}
-
-export function PlantIllustration() {
-  return (
-    <svg className="plant-illustration" viewBox="0 0 210 190" fill="none" aria-hidden="true">
-      <ellipse cx="111" cy="169" rx="69" ry="9" fill="var(--illustration-shadow)" />
-      <circle cx="112" cy="87" r="65" fill="var(--illustration-halo)" />
-      <path
-        d="M103 153c-4-31 1-61 17-97m-15 65c-17-15-27-34-31-56m32 38c22-7 34-19 40-37"
-        stroke="#687c58"
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
-      <path d="M119 69c-8-24 2-42 18-43 6 17 0 32-18 43Z" fill="#83966e" />
-      <path d="M109 100c-18-22-15-39-3-48 16 12 17 31 3 48Z" fill="#a2af8a" />
-      <path d="M86 91c-23-5-31-18-25-33 17-1 30 12 25 33Z" fill="#879675" />
-      <path d="M126 91c4-26 20-38 38-32-2 19-15 33-38 32Z" fill="#adb895" />
-      <path d="M102 129c-30-4-44-15-41-32 25-4 42 11 41 32Z" fill="#a7b68c" />
-      <path d="M87 139h40l-6 30H94l-7-30Z" fill="#ca8664" />
-      <path d="M86 140h42" stroke="#aa6a4c" strokeWidth="4" strokeLinecap="round" />
-      <path d="m144 144 32-4 3 22-32 4-3-22Z" fill="#e3cfaa" />
-      <path d="m143 148 34-4m-27 14 21-3" stroke="#a69069" strokeWidth="1.5" />
-      <path d="M45 153h28v11H45z" fill="#d4b89b" />
-      <path d="M46 153h26" stroke="#8c775d" strokeWidth="2" />
-      <path d="M50 146h26v7H50z" fill="#99a98a" />
-      <path
-        d="m43 72 3-7m-3 7-8-1m135 29 5 3m-5-3 1-7"
-        stroke="#c79861"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }

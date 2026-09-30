@@ -1,10 +1,12 @@
 import { test, expect } from '@playwright/test';
 
-test('warm home, read-only channel previews and notification routing', async ({ page }) => {
+test('content-first home, read-only channel previews and notification routing', async ({
+  page,
+}) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /把手头的事，\s*交给我吧。/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '今天想处理什么？' })).toBeVisible();
   await page.screenshot({
     path: 'test-results/home-light.png',
     fullPage: true,
@@ -68,7 +70,7 @@ test('close/reload interrupts runs, drafts survive appearance changes, both lang
   await page.getByTestId('theme-dark').click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.getByTestId('language-select').selectOption('en');
-  await expect(page.getByRole('heading', { name: 'A little more like you.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
   await page.screenshot({
     path: 'test-results/settings-dark-en.png',
     fullPage: true,
@@ -126,7 +128,7 @@ test('narrow layout, search shortcut and dialog focus remain usable', async ({ p
   await page.goto('/');
   await page.getByRole('button', { name: '打开导航' }).click();
   await page.getByTestId('nav-tasks').click();
-  await expect(page.getByRole('heading', { name: '每件事，都有着落。' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '任务', exact: true })).toBeVisible();
   await page.keyboard.press('Control+k');
   const search = page.getByRole('textbox', { name: '搜索关键词' });
   await expect(search).toBeFocused();
