@@ -3,8 +3,9 @@ import {
   Check,
   ChevronRight,
   FileText,
-  GitBranch,
+  Activity,
   LockKeyhole,
+  MessageCircle,
   RotateCcw,
   Square,
   Users,
@@ -14,13 +15,12 @@ import { active, canControl } from './model.ts';
 import { Approval, CloseButton, Markdown, Source, StatusBadge } from './components.tsx';
 
 export function TaskPanel({ id, close }: { id: string; close: () => void }) {
-  const { state, dispatch, t } = useApp();
+  const { state, dispatch, selectConversation, t } = useApp();
   const task = state.tasks.find((task) => task.id === id);
   const [tab, setTab] = useState<'result' | 'progress' | 'team'>(
     task?.artifact ? 'result' : 'progress',
   );
   const [raw, setRaw] = useState(false);
-  const [diff, setDiff] = useState(false);
   const panel = useRef<HTMLElement>(null);
   const previousFocus = useRef(document.activeElement as HTMLElement | null);
   useEffect(() => {
@@ -33,13 +33,42 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
   }, []);
   if (!task) return null;
   const local = canControl(state, task.conversationId);
-  const stages = [
-    t('理解请求', 'Understand the request'),
-    t('查阅相关资料', 'Gather the context'),
-    t('执行与检查', 'Work and review'),
-    t('整理成果', 'Bring it together'),
-  ];
-  const stage = task.status === 'completed' ? 4 : Math.min(3, Math.floor(task.step / 2));
+  const executionSummary = {
+    queued: t('任务已进入队列，尚未开始执行。', 'This task is queued and has not started.'),
+    running: t(
+      '任务正在执行。完成后，回复与成果会保留在所属会话。',
+      'Work is in progress. The response and any artifact will remain in this conversation.',
+    ),
+    awaiting_approval: t(
+      '执行已暂停，等待确认下方的文件操作。',
+      'Execution is paused for the file action below.',
+    ),
+    cancelling: t(
+      '已请求停止，正在等待本次执行结束。',
+      'Stop requested. Waiting for this run to finish.',
+    ),
+    completed: task.artifact
+      ? t(
+          '执行已结束，成果可在「成果」中查看。',
+          'The run has finished. Open Result to review the artifact.',
+        )
+      : t(
+          '执行已结束，回复已保留在会话中。',
+          'The run has finished. The response is in the conversation.',
+        ),
+    failed: t(
+      '本次执行未完成，请查看下方说明。',
+      'This run did not finish. See the details below.',
+    ),
+    cancelled: t(
+      '本次执行已停止，已有会话记录仍然保留。',
+      'This run has stopped. Existing conversation history is preserved.',
+    ),
+    interrupted: t(
+      '本次执行已中断，尚未重新开始。',
+      'This run was interrupted and has not restarted.',
+    ),
+  }[task.status];
   return (
     <aside
       ref={panel}
@@ -58,18 +87,37 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
         <Source conversationId={task.conversationId} />
         <h2>{task.title}</h2>
         <StatusBadge status={task.status} />
+        <button
+          className="text-button task-conversation-link"
+          onClick={() => selectConversation(task.conversationId)}
+        >
+          <MessageCircle size={14} />
+          {t('查看所属对话', 'Open conversation')}
+        </button>
       </div>
       <div className="panel-tabs">
-        <button className={tab === 'result' ? 'active' : ''} onClick={() => setTab('result')}>
+        <button
+          aria-pressed={tab === 'result'}
+          className={tab === 'result' ? 'active' : ''}
+          onClick={() => setTab('result')}
+        >
           <FileText size={14} />
           {t('成果', 'Result')}
         </button>
-        <button className={tab === 'progress' ? 'active' : ''} onClick={() => setTab('progress')}>
-          <GitBranch size={14} />
+        <button
+          aria-pressed={tab === 'progress'}
+          className={tab === 'progress' ? 'active' : ''}
+          onClick={() => setTab('progress')}
+        >
+          <Activity size={14} />
           {t('进度', 'Progress')}
         </button>
         {task.members.length > 0 && (
-          <button className={tab === 'team' ? 'active' : ''} onClick={() => setTab('team')}>
+          <button
+            aria-pressed={tab === 'team'}
+            className={tab === 'team' ? 'active' : ''}
+            onClick={() => setTab('team')}
+          >
             <Users size={14} />
             {t('小队', 'Team')}
           </button>
@@ -81,35 +129,15 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
             <>
               <div className="artifact-toolbar">
                 <span>{task.artifact.name}</span>
-                <button
-                  onClick={() => {
-                    setRaw(!raw);
-                    setDiff(false);
-                  }}
-                >
+                <button aria-pressed={raw} onClick={() => setRaw(!raw)}>
                   {raw ? t('预览', 'Preview') : t('原文', 'Source')}
                 </button>
-                {task.kind === 'file' && (
-                  <button
-                    onClick={() => {
-                      setDiff(!diff);
-                      setRaw(false);
-                    }}
-                  >
-                    {t('变更', 'Changes')}
-                  </button>
-                )}
               </div>
               <article className="artifact-paper">
-                {diff ? (
-                  <pre className="diff-preview">
-                    {task.artifact.body
-                      .split('\n')
-                      .map((line) => `+ ${line}`)
-                      .join('\n')}
+                {raw ? (
+                  <pre>
+                    <code>{task.artifact.body}</code>
                   </pre>
-                ) : raw ? (
-                  <pre>{task.artifact.body}</pre>
                 ) : (
                   <Markdown>{task.artifact.body}</Markdown>
                 )}
@@ -133,26 +161,29 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
           ))}
         {tab === 'progress' && (
           <>
-            <div className="execution-steps">
-              {stages.map((label, i) => (
-                <div
-                  className={`execution-step ${i < stage ? 'done' : i === stage && active(task.status) ? 'current' : ''}`}
-                  key={label}
-                >
-                  <span>{i < stage ? <Check size={13} /> : i + 1}</span>
-                  <div>
-                    <strong>{label}</strong>
-                    <p>
-                      {i < stage
-                        ? t('已完成', 'Completed')
-                        : i === stage && active(task.status)
-                          ? t('正在处理', 'In progress')
-                          : t('等待前一步完成', 'Waiting for the previous step')}
-                    </p>
-                  </div>
+            <section className="execution-summary" aria-label={t('执行状态', 'Execution status')}>
+              <p>{executionSummary}</p>
+              <dl className="execution-facts">
+                <div>
+                  <dt>{t('当前尝试', 'Current attempt')}</dt>
+                  <dd>#{task.attempt}</dd>
                 </div>
-              ))}
-            </div>
+                <div>
+                  <dt>{t('发起时间', 'Requested')}</dt>
+                  <dd>
+                    <time dateTime={new Date(task.createdAt).toISOString()}>
+                      {new Intl.DateTimeFormat(state.settings.language === 'zh' ? 'zh-CN' : 'en', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false,
+                      }).format(task.createdAt)}
+                    </time>
+                  </dd>
+                </div>
+              </dl>
+            </section>
             <Approval task={task} />
             {task.status === 'failed' && (
               <div className="error-note">
@@ -192,49 +223,34 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
           <>
             <p className="panel-intro">
               {t(
-                '成员按任务分工，Orangutan 负责检查和汇总结果。',
-                'Members work on assigned tasks. Orangutan reviews and consolidates their results.',
+                '查看成员的分工、当前状态与已有结果。',
+                'Review each member’s assignment, current state and recorded result.',
               )}
             </p>
             <div className="team-members">
               {task.members.map((member) => (
                 <details className="team-member" key={member.id} open={member.state === 'failed'}>
                   <summary>
-                    <span className="member-avatar">{member.name[0]}</span>
                     <div>
-                      <strong>{member.name}</strong>
-                      <span>{member.role}</span>
+                      <strong>{member.role}</strong>
+                      <span>{member.name}</span>
                     </div>
-                    <span className={`member-dot ${member.state}`} />
+                    <span className={`member-state ${member.state}`}>
+                      {
+                        {
+                          waiting: t('等待中', 'Waiting'),
+                          working: t('工作中', 'Working'),
+                          done: t('已完成', 'Done'),
+                          failed: t('遇到问题', 'Needs attention'),
+                          stopped: t('已停止', 'Stopped'),
+                        }[member.state]
+                      }
+                    </span>
                     <ChevronRight size={14} />
                   </summary>
-                  <p>
-                    {member.result ||
-                      t(
-                        '收到分工后，工作记录会显示在这里。',
-                        'Work notes appear here after the assignment begins.',
-                      )}
-                  </p>
-                  <span className="member-state">
-                    {
-                      {
-                        waiting: t('等待中', 'Waiting'),
-                        working: t('工作中', 'Working'),
-                        done: t('已完成', 'Done'),
-                        failed: t('遇到问题', 'Needs attention'),
-                        stopped: t('已停止', 'Stopped'),
-                      }[member.state]
-                    }
-                  </span>
+                  <p>{member.result || t('暂无结果记录。', 'No result recorded yet.')}</p>
                 </details>
               ))}
-            </div>
-            <div className="team-leader">
-              <img src="/orangutan.svg" alt="" />
-              <div>
-                <strong>Orangutan</strong>
-                <span>{t('负责协调、检查与汇总', 'Coordinates, reviews and delivers')}</span>
-              </div>
             </div>
           </>
         )}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   Bell,
@@ -31,6 +31,8 @@ export default function App() {
   const [view, setView] = useState<View>('assistant');
   const [taskId, setTaskId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebar = useRef<HTMLElement>(null);
+  const menu = useRef<HTMLButtonElement>(null);
   const [dialog, setDialog] = useState<'search' | 'notifications' | 'about' | 'reset' | null>(null);
   const [query, setQuery] = useState('');
   const [toast, setToast] = useState('');
@@ -67,7 +69,7 @@ export default function App() {
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       document
         .querySelector('meta[name="theme-color"]')
-        ?.setAttribute('content', dark ? '#20242c' : '#f7f8fa');
+        ?.setAttribute('content', dark ? '#232622' : '#fcfcfa');
     };
     update();
     media.addEventListener('change', update);
@@ -81,6 +83,7 @@ export default function App() {
     const handler = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
+        setSidebarOpen(false);
         setDialog((previous) => (previous === 'search' ? null : 'search'));
       }
       if (event.key === 'Escape') setSidebarOpen(false);
@@ -93,6 +96,49 @@ export default function App() {
     const timer = setTimeout(() => setToast(''), 3000);
     return () => clearTimeout(timer);
   }, [toast]);
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 781px)');
+    const closeWide = () => {
+      if (media.matches) setSidebarOpen(false);
+    };
+    media.addEventListener('change', closeWide);
+    return () => media.removeEventListener('change', closeWide);
+  }, []);
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const buttons = () =>
+      Array.from(
+        sidebar.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [],
+      );
+    let disposed = false;
+    const frame = requestAnimationFrame(() => {
+      const transitions = sidebar.current?.getAnimations() ?? [];
+      void Promise.allSettled(transitions.map((animation) => animation.finished)).then(() => {
+        if (!disposed) buttons()[0]?.focus();
+      });
+    });
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const items = buttons();
+      const first = items[0];
+      const last = items.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    document.addEventListener('keydown', trap);
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', trap);
+      if (!document.querySelector('dialog[open]') && menu.current?.getClientRects().length)
+        menu.current.focus();
+    };
+  }, [sidebarOpen]);
   const matchingConversations = state.conversations.filter((c) =>
     `${c.name} ${c.connectionId}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
   );
@@ -123,7 +169,7 @@ export default function App() {
             onClick={() => setSidebarOpen(false)}
           />
         )}
-        <aside className="sidebar" aria-label={t('主导航', 'Main navigation')}>
+        <aside ref={sidebar} className="sidebar" aria-label={t('主导航', 'Main navigation')}>
           <button
             className="brand"
             onClick={() => navigate('assistant')}
@@ -140,7 +186,7 @@ export default function App() {
             <span>{t('新对话', 'New conversation')}</span>
           </button>
           <nav>
-            {navItems.map(({ id, icon: Icon, label }) => (
+            {navItems.slice(0, 2).map(({ id, icon: Icon, label }) => (
               <button
                 key={id}
                 data-testid={`nav-${id}`}
@@ -208,6 +254,20 @@ export default function App() {
               })}
           </div>
           <div className="sidebar-bottom">
+            <nav className="utility-nav" aria-label={t('工作区管理', 'Workspace management')}>
+              {navItems.slice(2).map(({ id, icon: Icon, label }) => (
+                <button
+                  key={id}
+                  data-testid={`nav-${id}`}
+                  className={`nav-item ${view === id ? 'active' : ''}`}
+                  aria-current={view === id ? 'page' : undefined}
+                  onClick={() => navigate(id)}
+                >
+                  <Icon size={17} strokeWidth={1.6} />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </nav>
             <button className="workspace-switch" onClick={() => navigate('settings')}>
               <span className="workspace-avatar">
                 <FolderOpen size={17} />
@@ -222,7 +282,7 @@ export default function App() {
               <ChevronDown size={13} />
             </button>
             <div className="sidebar-footer">
-              <span>{t('演示环境', 'Demo environment')}</span>
+              <span>{t('本地存储', 'Stored locally')}</span>
               <button
                 className="icon-button"
                 aria-label={t('关于演示', 'About this demo')}
@@ -233,9 +293,10 @@ export default function App() {
             </div>
           </div>
         </aside>
-        <div className="workspace">
+        <div className="workspace" inert={sidebarOpen}>
           <header className="topbar">
             <button
+              ref={menu}
               className="icon-button menu-button"
               aria-label={t('打开导航', 'Open navigation')}
               aria-expanded={sidebarOpen}
@@ -269,7 +330,6 @@ export default function App() {
                 <span />
                 {t('演示模式', 'Demo mode')}
               </button>
-              <span className="topbar-divider" />
               <button
                 className="icon-button theme-shortcut"
                 aria-label={t('切换明暗主题', 'Toggle color theme')}
@@ -307,7 +367,7 @@ export default function App() {
             </div>
           )}
           <div className="workspace-body">
-            <main className="main-content" id="main-content" tabIndex={-1}>
+            <main key={view} className="main-content" id="main-content" tabIndex={-1}>
               {view === 'assistant' ? (
                 <Assistant />
               ) : view === 'tasks' ? (

@@ -21,6 +21,10 @@ test('content-first home, read-only channel previews and notification routing', 
   await expect(panel.getByRole('button', { name: '停止任务' })).toHaveCount(0);
   await expect(panel.getByRole('button', { name: '重新尝试' })).toHaveCount(0);
   await expect(panel.getByText('渠道任务仅供预览')).toBeVisible();
+  await panel.getByRole('button', { name: '查看所属对话' }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByTestId('composer')).toHaveCount(0);
+  await expect(page.getByTestId('task-card-qq-files')).toBeVisible();
   await page.getByRole('button', { name: '通知', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: /找一个周末可以散步的地方/ }).click();
@@ -42,6 +46,7 @@ test('local approval, denial, retry and artifacts work through the interface', a
   await page.getByRole('button', { name: '发送消息' }).click();
   await page.clock.runFor(2400);
   await expect(page.getByRole('button', { name: '允许这次操作' })).toBeVisible();
+  await expect(page.locator('.thinking-dots')).toHaveCount(0);
   await page.getByRole('button', { name: '拒绝', exact: true }).click();
   await expect(page.getByText('你已拒绝此操作')).toBeVisible();
   await page.locator('.thread .task-card').click();
@@ -51,8 +56,12 @@ test('local approval, denial, retry and artifacts work through the interface', a
   await page.clock.runFor(10_000);
   await page.getByTestId('task-panel').getByRole('button', { name: '成果', exact: true }).click();
   await expect(page.locator('.artifact-paper')).toContainText('帮我整理文件');
-  await page.getByRole('button', { name: '变更', exact: true }).click();
-  await expect(page.locator('.diff-preview')).toContainText('+ # 帮我整理文件');
+  await page.getByRole('button', { name: '原文', exact: true }).click();
+  await expect(page.locator('.artifact-paper pre code')).toContainText('# 帮我整理文件');
+  await expect(page.locator('.artifact-paper [data-rich-text]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '变更', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '预览', exact: true }).click();
+  await expect(page.locator('.artifact-paper [data-rich-text]')).toBeVisible();
 });
 
 test('close/reload interrupts runs, drafts survive appearance changes, both languages work', async ({
@@ -175,10 +184,10 @@ test('page lifecycle stops demo effects and a cached page resumes interrupted', 
   await page.clock.runFor(800);
   const snapshot = () =>
     page.evaluate(() => JSON.parse(localStorage.getItem('orangutan.desktop.demo')!).tasks[0]);
-  const before = await snapshot();
-  await page.evaluate(() =>
-    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })),
-  );
+  const before = await page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    return JSON.parse(localStorage.getItem('orangutan.desktop.demo')!).tasks[0];
+  });
   await page.clock.runFor(6000);
   expect((await snapshot()).step).toBe(before.step);
   await page.evaluate(() =>
@@ -187,4 +196,81 @@ test('page lifecycle stops demo effects and a cached page resumes interrupted', 
   await expect(page.locator('.thread .status')).toHaveText('已中断');
   await page.clock.runFor(1500);
   expect((await snapshot()).status).toBe('interrupted');
+});
+
+test('execution summaries stay beside the request that created them', async ({ page }) => {
+  await page.clock.install();
+  await page.goto('/');
+  const input = page.getByRole('textbox', { name: '给助手发消息' });
+  await input.fill('第一项：讨论产品目标');
+  await page.getByRole('button', { name: '发送消息' }).click();
+  await expect(page.locator('.thread > .message.user + .thread-task')).toHaveCount(1);
+  const firstTaskId = await page.locator('.thread-task .task-card').getAttribute('data-testid');
+  await page.clock.runFor(12_000);
+  await expect(page.locator('.thread-task .status')).toHaveText('已完成');
+  await input.fill('第二项：讨论下一步');
+  await page.getByRole('button', { name: '发送消息' }).click();
+  await expect(page.locator('.thread > .message.user + .thread-task')).toHaveCount(2);
+  await expect(page.locator('.thread-task .task-card').first()).toHaveAttribute(
+    'data-testid',
+    firstTaskId!,
+  );
+  await expect(page.locator('.thread > .thread-task + .message.assistant')).toHaveCount(1);
+  await expect(page.locator('.thread > .message.user').first()).toContainText('第一项');
+  await expect(page.locator('.thread > .message.user').last()).toContainText('第二项');
+});
+
+test('navigation drawer contains focus and hands off to search', async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 850 });
+  await page.goto('/');
+  const menu = page.getByRole('button', { name: '打开导航', exact: true });
+  const first = page.locator('.sidebar button').first();
+  const last = page.locator('.sidebar button').last();
+  await menu.click();
+  await expect(first).toBeFocused();
+  await expect(page.locator('.workspace')).toHaveAttribute('inert', '');
+  await page.keyboard.press('Shift+Tab');
+  await expect(last).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(first).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeFocused();
+  await expect(menu).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.workspace')).not.toHaveAttribute('inert', '');
+  await menu.click();
+  await page.keyboard.press('Control+k');
+  await expect(menu).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: '搜索关键词' })).toBeFocused();
+});
+
+test('reading earlier messages pauses following until Jump to latest is used', async ({ page }) => {
+  await page.clock.install();
+  await page.goto('/');
+  const longRequest = Array.from(
+    { length: 50 },
+    (_, index) => `第 ${index + 1} 点：讨论产品目标与使用场景。`,
+  ).join('\n\n');
+  await page.getByRole('textbox', { name: '给助手发消息' }).fill(longRequest);
+  await page.getByRole('button', { name: '发送消息' }).click();
+  await page.clock.runFor(800);
+  const scroll = page.locator('.conversation-scroll');
+  await expect
+    .poll(() => scroll.evaluate((element) => element.scrollHeight > element.clientHeight + 200))
+    .toBe(true);
+  await scroll.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect(page.getByRole('button', { name: '回到最新' })).toBeVisible();
+  await page.clock.runFor(4000);
+  expect(await scroll.evaluate((element) => element.scrollTop)).toBeLessThan(2);
+  await page.getByRole('button', { name: '回到最新' }).click();
+  await expect(page.getByRole('button', { name: '回到最新' })).toHaveCount(0);
+  await expect(scroll).toBeFocused();
+  await page.clock.runFor(2000);
+  await expect
+    .poll(() =>
+      scroll.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight),
+    )
+    .toBeLessThan(64);
 });

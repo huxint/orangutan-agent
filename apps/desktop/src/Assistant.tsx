@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { Fragment, useEffect, useRef, useState, type RefObject } from 'react';
 import {
   ArrowRight,
   ArrowUp,
@@ -72,7 +72,6 @@ function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null
             <Paperclip size={16} />
           </button>
           <label className="composer-model">
-            <span className="model-indicator" />
             <select
               aria-label={t('选择示例模型', 'Choose sample model')}
               value={state.settings.model}
@@ -137,11 +136,35 @@ export function Assistant() {
   const running = tasks.find((task) => active(task.status));
   const scroll = useRef<HTMLDivElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const pinned = useRef(true);
+  const jumping = useRef(false);
+  const [atBottom, setAtBottom] = useState(true);
   const [source, setSource] = useState('all');
   const lastText = messages.at(-1)?.text;
   useEffect(() => {
-    if (scroll.current && messages.length) scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [conversation.id, lastText, running?.status]);
+    pinned.current = true;
+    jumping.current = false;
+    setAtBottom(true);
+    const element = scroll.current;
+    const content = element?.firstElementChild;
+    if (!element || !content) return;
+    element.scrollTop = element.scrollHeight;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current && !jumping.current) element.scrollTop = element.scrollHeight;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [conversation.id, messages.length === 0]);
+  useEffect(() => {
+    if (scroll.current && pinned.current && !jumping.current)
+      scroll.current.scrollTop = scroll.current.scrollHeight;
+  }, [lastText, running?.status]);
+  const cancelJump = () => {
+    if (!jumping.current) return;
+    jumping.current = false;
+    pinned.current = false;
+    setAtBottom(false);
+  };
   const suggest = (text: string) => {
     dispatch({ type: 'draft', conversationId: conversation.id, text });
     textarea.current?.focus();
@@ -150,7 +173,6 @@ export function Assistant() {
     {
       icon: FileText,
       title: t('整理资料', 'Organize files'),
-      detail: t('把零散信息变成清晰的行动', 'Turn scattered notes into next steps'),
       prompt: t(
         '汇总工作区中的会议记录，列出决策、负责人和待办事项。',
         'Summarize the workspace meeting notes, including decisions, owners and action items.',
@@ -159,7 +181,6 @@ export function Assistant() {
     {
       icon: Users,
       title: t('拆解计划', 'Plan a task'),
-      detail: t('让小队一起梳理下一步', 'Work out the next steps with a team'),
       prompt: t(
         '组织小队，制定下周的工作计划，对比优先级和时间安排。',
         'Plan next week’s work with a team. Compare priorities and scheduling options.',
@@ -168,7 +189,6 @@ export function Assistant() {
     {
       icon: Search,
       title: t('分析问题', 'Analyze a question'),
-      detail: t('理清思路，找到新的可能', 'Find clarity and explore possibilities'),
       prompt: t(
         '帮我分析这个问题：如何减少日常工作中的重复整理？',
         'Help me analyze ways to reduce repetitive organization in my daily work.',
@@ -181,8 +201,10 @@ export function Assistant() {
         source === 'all' ||
         state.conversations.find((c) => c.id === task.conversationId)?.origin === source,
     )
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, 3);
+    .sort(
+      (a, b) => Number(active(b.status)) - Number(active(a.status)) || b.createdAt - a.createdAt,
+    )
+    .slice(0, 4);
   const empty = messages.length === 0 && local;
   return (
     <div className={'assistant-view' + (empty ? ' is-empty' : '')}>
@@ -192,36 +214,26 @@ export function Assistant() {
             className="start-session"
             aria-label={t('开始本地会话', 'Start a local session')}
           >
-            <div className="start-context">
-              <Monitor size={15} />
-              {t('本地助手', 'Local assistant')}
-            </div>
+            <Logo />
             <div className="start-heading">
               <h1>{t('今天想处理什么？', 'What can I help with?')}</h1>
             </div>
             <p className="start-description">
-              {t(
-                '可以讨论一个问题，也可以交给助手一项具体任务。',
-                'Explore a question, or hand over a task you want to get done.',
-              )}
+              {t('说说你的目标，接下来一起推进。', 'Share a goal. Let’s take it from here.')}
             </p>
             <Composer inputRef={textarea} />
             <div className="request-shortcuts">
-              {prompts.map(({ icon: Icon, title, detail, prompt }) => (
+              {prompts.map(({ icon: Icon, title, prompt }) => (
                 <button key={title} onClick={() => suggest(prompt)}>
                   <Icon size={18} />
-                  <span className="shortcut-copy">
-                    <strong>{title}</strong>
-                    <small>{detail}</small>
-                  </span>
-                  <ArrowUp size={12} />
+                  <span>{title}</span>
                 </button>
               ))}
             </div>
           </section>
           <section className="recent-section" aria-label={t('最近任务', 'Recent tasks')}>
             <div className="section-heading">
-              <h2>{t('最近任务', 'Recent tasks')}</h2>
+              <h2>{t('工作动态', 'Your work')}</h2>
               <button className="text-button" onClick={() => navigate('tasks')}>
                 {t('查看全部', 'View all')}
                 <ArrowRight size={13} />
@@ -266,15 +278,16 @@ export function Assistant() {
                     <strong>{task.title}</strong>
                     <Source conversationId={task.conversationId} />
                   </div>
-                  <StatusBadge status={task.status} />
-                  <time>
-                    {new Intl.DateTimeFormat(state.settings.language === 'zh' ? 'zh-CN' : 'en', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      hour12: false,
-                    }).format(task.createdAt)}
-                  </time>
-                  <ArrowRight size={14} className="row-arrow" />
+                  <div className="activity-meta">
+                    <StatusBadge status={task.status} />
+                    <time>
+                      {new Intl.DateTimeFormat(state.settings.language === 'zh' ? 'zh-CN' : 'en', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false,
+                      }).format(task.createdAt)}
+                    </time>
+                  </div>
                 </button>
               ))}
             </div>
@@ -290,7 +303,36 @@ export function Assistant() {
         </div>
       ) : (
         <>
-          <div className="conversation-scroll" ref={scroll}>
+          <div
+            className="conversation-scroll"
+            ref={scroll}
+            tabIndex={-1}
+            aria-label={t('会话记录', 'Conversation history')}
+            onWheel={cancelJump}
+            onTouchStart={cancelJump}
+            onPointerDown={cancelJump}
+            onKeyDown={(event) => {
+              if (
+                ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(
+                  event.key,
+                )
+              )
+                cancelJump();
+            }}
+            onScrollEnd={() => {
+              if (!jumping.current || !scroll.current) return;
+              jumping.current = false;
+              scroll.current.scrollTop = scroll.current.scrollHeight;
+              pinned.current = true;
+              setAtBottom(true);
+            }}
+            onScroll={() => {
+              const element = scroll.current;
+              if (!element || jumping.current) return;
+              pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 64;
+              setAtBottom(pinned.current);
+            }}
+          >
             <div className="thread">
               {!local && (
                 <div className="channel-readonly">
@@ -303,35 +345,49 @@ export function Assistant() {
               )}
               <div className="thread-date">{t('会话记录', 'Conversation history')}</div>
               {messages.map((message) => (
-                <div key={message.id} className={'message ' + message.role}>
-                  {message.role === 'assistant' && <Logo small />}
-                  <div className="message-body">
-                    {message.role === 'assistant' && (
-                      <div className="message-author">
-                        Orangutan <span>{t('助手', 'Assistant')}</span>
-                      </div>
-                    )}
-                    <Markdown>{message.text}</Markdown>
-                    {message.state === 'streaming' && <span className="stream-caret" />}
-                    {message.state === 'interrupted' && (
-                      <small className="muted">{t('回复已中断', 'Response interrupted')}</small>
-                    )}
+                <Fragment key={message.id}>
+                  <div className={'message ' + message.role}>
+                    {message.role === 'assistant' && <Logo small />}
+                    <div className="message-body">
+                      {message.role === 'assistant' && (
+                        <div className="message-author">
+                          Orangutan <span>{t('助手', 'Assistant')}</span>
+                        </div>
+                      )}
+                      <Markdown>{message.text}</Markdown>
+                      {message.state === 'streaming' && <span className="stream-caret" />}
+                      {message.state === 'interrupted' && (
+                        <small className="muted">{t('回复已中断', 'Response interrupted')}</small>
+                      )}
+                    </div>
                   </div>
-                </div>
+                  {tasks
+                    .filter((task) => message.id === `${task.id}:user`)
+                    .map((task) => (
+                      <div key={task.id} className="thread-task">
+                        <TaskCard task={task} />
+                        <Approval task={task} />
+                      </div>
+                    ))}
+                </Fragment>
               ))}
-              {tasks.map((task) => (
-                <div key={task.id} className="thread-task">
-                  <TaskCard task={task} />
-                  <Approval task={task} />
-                </div>
-              ))}
+              {tasks
+                .filter((task) => !messages.some((message) => message.id === `${task.id}:user`))
+                .map((task) => (
+                  <div key={task.id} className="thread-task">
+                    <TaskCard task={task} />
+                    <Approval task={task} />
+                  </div>
+                ))}
               {running && (
                 <div className="thinking">
-                  <span className="thinking-dots">
-                    <i />
-                    <i />
-                    <i />
-                  </span>
+                  {running.status === 'running' && (
+                    <span className="thinking-dots" aria-hidden="true">
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                  )}
                   {running.status === 'awaiting_approval'
                     ? t('等待操作确认', 'Awaiting approval')
                     : running.status === 'cancelling'
@@ -341,6 +397,27 @@ export function Assistant() {
               )}
             </div>
           </div>
+          {!atBottom && (
+            <button
+              className="jump-latest"
+              onClick={() => {
+                const element = scroll.current;
+                if (!element) return;
+                const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+                jumping.current = !reduced;
+                pinned.current = true;
+                setAtBottom(true);
+                element.focus({ preventScroll: true });
+                element.scrollTo({
+                  top: element.scrollHeight,
+                  behavior: reduced ? 'instant' : 'smooth',
+                });
+              }}
+            >
+              {t('回到最新', 'Jump to latest')}
+              <ArrowUp size={14} />
+            </button>
+          )}
           {local ? (
             <Composer inputRef={textarea} />
           ) : (

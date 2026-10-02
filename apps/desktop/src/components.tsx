@@ -10,7 +10,7 @@ import {
   Sparkles,
   X,
   CircleAlert,
-  CheckCheck,
+  FileText,
   Radio,
 } from 'lucide-react';
 import { useApp } from './context.ts';
@@ -87,7 +87,7 @@ export function StatusBadge({ status }: { status: Status }) {
             : Circle;
   return (
     <span className={`status ${status}`}>
-      <Icon size={12} className={status === 'running' || status === 'cancelling' ? 'spin' : ''} />
+      <Icon size={12} className={status === 'running' ? 'spin' : ''} />
       {t(...labels[status])}
     </span>
   );
@@ -205,28 +205,19 @@ export function TaskCard({ task }: { task: Task }) {
     >
       <div className="task-card-top">
         <span className="task-type">
-          <Sparkles size={14} />
-          {task.members.length ? t('协作任务', 'Agent team') : t('任务进展', 'Task progress')}
+          <FileText size={15} />
+          {task.artifact ? t('成果已就绪', 'Artifact ready') : t('执行记录', 'Task activity')}
         </span>
         <StatusBadge status={task.status} />
       </div>
       <strong>{task.title}</strong>
       {task.members.length > 0 && (
         <div className="team-mini">
-          <span className="stacked-avatars">
-            {task.members.map((m) => (
-              <span key={m.id} className="member-avatar">
-                {m.name[0]}
-              </span>
-            ))}
-          </span>
-          <span>{task.members.map((m) => m.name).join(' · ')}</span>
+          <span>{task.members.map((member) => member.role).join(' · ')}</span>
         </div>
       )}
       <div className="task-card-bottom">
-        <span>
-          {task.artifact ? task.artifact.name : t('查看执行步骤与详情', 'View steps and details')}
-        </span>
+        <span>{task.artifact ? task.artifact.name : t('查看执行详情', 'View activity')}</span>
         {canControl(state, task.conversationId) ? (
           <ArrowUpRight size={15} />
         ) : (
@@ -252,7 +243,13 @@ export function Approval({ task }: { task: Task }) {
   return (
     <div className={`approval-card ${pending ? '' : 'settled'}`} data-testid="approval-card">
       <div className="approval-heading">
-        {pending ? <LockKeyhole size={17} /> : <CheckCheck size={17} />}
+        {pending ? (
+          <LockKeyhole size={17} />
+        ) : task.approval.status === 'approved' ? (
+          <Check size={17} />
+        ) : (
+          <Circle size={17} />
+        )}
         <strong>{approvalLabels[task.approval.status]}</strong>
       </div>
       <p>
