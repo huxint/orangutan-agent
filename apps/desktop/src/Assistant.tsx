@@ -150,6 +150,7 @@ export function Assistant() {
     {
       icon: FileText,
       title: t('整理资料', 'Organize files'),
+      detail: t('把零散信息变成清晰的行动', 'Turn scattered notes into next steps'),
       prompt: t(
         '汇总工作区中的会议记录，列出决策、负责人和待办事项。',
         'Summarize the workspace meeting notes, including decisions, owners and action items.',
@@ -158,6 +159,7 @@ export function Assistant() {
     {
       icon: Users,
       title: t('拆解计划', 'Plan a task'),
+      detail: t('让小队一起梳理下一步', 'Work out the next steps with a team'),
       prompt: t(
         '组织小队，制定下周的工作计划，对比优先级和时间安排。',
         'Plan next week’s work with a team. Compare priorities and scheduling options.',
@@ -166,6 +168,7 @@ export function Assistant() {
     {
       icon: Search,
       title: t('分析问题', 'Analyze a question'),
+      detail: t('理清思路，找到新的可能', 'Find clarity and explore possibilities'),
       prompt: t(
         '帮我分析这个问题：如何减少日常工作中的重复整理？',
         'Help me analyze ways to reduce repetitive organization in my daily work.',
@@ -189,8 +192,11 @@ export function Assistant() {
             className="start-session"
             aria-label={t('开始本地会话', 'Start a local session')}
           >
+            <div className="start-context">
+              <Monitor size={15} />
+              {t('本地助手', 'Local assistant')}
+            </div>
             <div className="start-heading">
-              <Logo />
               <h1>{t('今天想处理什么？', 'What can I help with?')}</h1>
             </div>
             <p className="start-description">
@@ -201,10 +207,13 @@ export function Assistant() {
             </p>
             <Composer inputRef={textarea} />
             <div className="request-shortcuts">
-              {prompts.map(({ icon: Icon, title, prompt }) => (
+              {prompts.map(({ icon: Icon, title, detail, prompt }) => (
                 <button key={title} onClick={() => suggest(prompt)}>
-                  <Icon size={14} />
-                  {title}
+                  <Icon size={18} />
+                  <span className="shortcut-copy">
+                    <strong>{title}</strong>
+                    <small>{detail}</small>
+                  </span>
                   <ArrowUp size={12} />
                 </button>
               ))}

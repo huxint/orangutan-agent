@@ -67,7 +67,7 @@ export default function App() {
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       document
         .querySelector('meta[name="theme-color"]')
-        ?.setAttribute('content', dark ? '#252422' : '#faf9f6');
+        ?.setAttribute('content', dark ? '#20242c' : '#f7f8fa');
     };
     update();
     media.addEventListener('change', update);
@@ -132,7 +132,7 @@ export default function App() {
             <Logo />
             <span>
               <strong>Orangutan</strong>
-              <small>{t('本地工作区', 'WORKSPACE')}</small>
+              <small>{t('本地工作区', 'Workspace')}</small>
             </span>
           </button>
           <button className="new-conversation" onClick={newConversation}>
@@ -164,7 +164,7 @@ export default function App() {
           </nav>
           <div className="sidebar-history">
             <div className="sidebar-section-label">
-              {t('对话空间', 'CONVERSATIONS')}
+              {t('对话空间', 'Conversations')}
               <span>{state.conversations.length}</span>
             </div>
             <div className="conversation-group-label">
@@ -184,7 +184,7 @@ export default function App() {
                 </button>
               ))}
             <div className="conversation-group-label channels-label">
-              {t('来自消息渠道', 'FROM YOUR CHANNELS')}
+              {t('来自消息渠道', 'From your channels')}
             </div>
             {state.conversations
               .filter((c) => c.origin === 'channel')
