@@ -214,12 +214,14 @@ export function Assistant() {
             className="start-session"
             aria-label={t('开始本地会话', 'Start a local session')}
           >
-            <Logo />
             <div className="start-heading">
               <h1>{t('今天想处理什么？', 'What can I help with?')}</h1>
             </div>
             <p className="start-description">
-              {t('说说你的目标，接下来一起推进。', 'Share a goal. Let’s take it from here.')}
+              {t(
+                '交代一件事，或继续手边的工作。',
+                'Start something new, or pick up where you left off.',
+              )}
             </p>
             <Composer inputRef={textarea} />
             <div className="request-shortcuts">

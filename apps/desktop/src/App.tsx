@@ -24,7 +24,7 @@ import { useAgent } from './useAgent.ts';
 import { Assistant } from './Assistant.tsx';
 import { ConnectionsPage, MemoryPage, SettingsPage, TasksPage } from './Pages.tsx';
 import { TaskPanel } from './TaskPanel.tsx';
-import { Empty, Logo, Modal, PlatformIcon, Source, StatusBadge } from './components.tsx';
+import { Empty, Modal, PlatformIcon, Source, StatusBadge } from './components.tsx';
 
 export default function App() {
   const { state, dispatch, storageError, reset, exportSnapshot } = useAgent();
@@ -69,7 +69,7 @@ export default function App() {
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       document
         .querySelector('meta[name="theme-color"]')
-        ?.setAttribute('content', dark ? '#232622' : '#fcfcfa');
+        ?.setAttribute('content', dark ? '#202126' : '#ffffff');
     };
     update();
     media.addEventListener('change', update);
@@ -175,7 +175,6 @@ export default function App() {
             onClick={() => navigate('assistant')}
             aria-label={t('Orangutan 首页', 'Orangutan home')}
           >
-            <Logo />
             <span>
               <strong>Orangutan</strong>
               <small>{t('本地工作区', 'Workspace')}</small>
@@ -498,7 +497,6 @@ export default function App() {
         {dialog === 'about' && (
           <Modal title={t('关于 Orangutan', 'About Orangutan')} close={() => setDialog(null)}>
             <div className="modal-body about-demo">
-              <Logo />
               <h3>{t('Orangutan 桌面原型', 'Orangutan desktop prototype')}</h3>
               <p>
                 {t(

@@ -18,7 +18,11 @@ import type { Status, Task } from './schema.ts';
 import { active, canControl } from './model.ts';
 
 export function Logo({ small = false }: { small?: boolean }) {
-  return <img src="/orangutan.svg" className={small ? 'logo small' : 'logo'} alt="Orangutan" />;
+  return (
+    <span className={small ? 'logo small' : 'logo'} aria-hidden="true">
+      o.
+    </span>
+  );
 }
 
 export function PlatformIcon({ platform, size = 18 }: { platform: string; size?: number }) {
