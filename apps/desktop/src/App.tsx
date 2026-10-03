@@ -13,6 +13,7 @@ import {
   MessageCircle,
   Moon,
   Plus,
+  Pencil,
   Radio,
   Search,
   Settings2,
@@ -33,8 +34,11 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const sidebar = useRef<HTMLElement>(null);
   const menu = useRef<HTMLButtonElement>(null);
-  const [dialog, setDialog] = useState<'search' | 'notifications' | 'about' | 'reset' | null>(null);
+  const [dialog, setDialog] = useState<
+    'search' | 'notifications' | 'about' | 'reset' | 'rename' | null
+  >(null);
   const [query, setQuery] = useState('');
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [toast, setToast] = useState('');
   const t = (zh: string, en: string) => (state.settings.language === 'zh' ? zh : en);
   const navigate = (next: View) => {
@@ -309,6 +313,19 @@ export default function App() {
                 <>
                   <ChevronRight size={12} />
                   <strong>{selected.name}</strong>
+                  {selected.origin === 'desktop' && (
+                    <button
+                      className="icon-button"
+                      aria-label={t('重命名对话', 'Rename conversation')}
+                      title={t('重命名对话', 'Rename conversation')}
+                      onClick={() => {
+                        setRenaming({ id: selected.id, name: selected.name });
+                        setDialog('rename');
+                      }}
+                    >
+                      <Pencil size={13} />
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -492,6 +509,37 @@ export default function App() {
                 />
               )}
             </div>
+          </Modal>
+        )}
+        {dialog === 'rename' && renaming && (
+          <Modal title={t('重命名对话', 'Rename conversation')} close={() => setDialog(null)}>
+            <form
+              className="modal-body"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!renaming.name.trim() || renaming.name.trim().length > 80) return;
+                dispatch({ type: 'rename', conversationId: renaming.id, name: renaming.name });
+                setDialog(null);
+              }}
+            >
+              <label className="form-field">
+                {t('对话名称', 'Conversation name')}
+                <input
+                  value={renaming.name}
+                  maxLength={80}
+                  onFocus={(event) => event.currentTarget.select()}
+                  onChange={(event) => setRenaming({ ...renaming, name: event.target.value })}
+                />
+              </label>
+              <div className="modal-actions">
+                <button type="button" className="button secondary" onClick={() => setDialog(null)}>
+                  {t('取消', 'Cancel')}
+                </button>
+                <button className="button primary" disabled={!renaming.name.trim()}>
+                  {t('保存名称', 'Save name')}
+                </button>
+              </div>
+            </form>
           </Modal>
         )}
         {dialog === 'about' && (

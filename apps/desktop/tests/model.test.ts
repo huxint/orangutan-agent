@@ -34,6 +34,7 @@ test('desktop commands cannot mutate channel conversations, tasks or approvals',
   const actions = [
     { type: 'send', conversationId: task.conversationId, id: 'forbidden', text: 'write', now: 0 },
     { type: 'draft', conversationId: task.conversationId, text: 'forbidden' },
+    { type: 'rename', conversationId: task.conversationId, name: 'forbidden' },
     { type: 'stop', taskId: task.id, now: 0 },
     { type: 'retry', taskId: task.id, now: 0 },
     { type: 'approve', taskId: task.id, approvalId: task.approval!.id },
@@ -239,4 +240,27 @@ test('storage rejects corrupt snapshots without overwriting and backs up explici
   assert.equal(loadState(unavailable).blocked, true);
   assert.equal(saveState(unavailable, createInitialState()), false);
   assert.equal(resetState(unavailable), null);
+});
+
+test('custom conversation names survive first send and recovery without changing identities', () => {
+  const original = createInitialState(1000);
+  for (const name of ['', '   ', 'x'.repeat(81)]) {
+    assert.strictEqual(command(original, { type: 'rename', conversationId: HOME, name }), original);
+  }
+  assert.strictEqual(
+    command(original, { type: 'rename', conversationId: 'missing', name: 'Name' }),
+    original,
+  );
+  const renamed = command(original, { type: 'rename', conversationId: HOME, name: '  产品设计  ' });
+  assert.strictEqual(renamed.messages, original.messages);
+  assert.strictEqual(renamed.tasks, original.tasks);
+  const before = original.conversations.find((c) => c.id === HOME)!;
+  assert.deepEqual(
+    renamed.conversations.find((c) => c.id === HOME),
+    { ...before, name: '产品设计', customName: true },
+  );
+  const restored = recover(stateSchema.parse(JSON.parse(JSON.stringify(renamed))));
+  const sent = start('讨论下一步', restored);
+  assert.equal(sent.conversations.find((c) => c.id === HOME)!.name, '产品设计');
+  assert.equal(stateSchema.safeParse(original).success, true);
 });

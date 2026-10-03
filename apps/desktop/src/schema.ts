@@ -29,6 +29,7 @@ export const conversationSchema = z.object({
   requesterId: z.string(),
   sessionId: z.string(),
   name: z.string(),
+  customName: z.boolean().optional(),
   origin: z.enum(['desktop', 'channel']),
   unread: z.number().int().nonnegative(),
 });

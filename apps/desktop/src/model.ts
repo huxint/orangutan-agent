@@ -10,6 +10,7 @@ const say = (language: Language, zh: string, en: string) => (language === 'zh' ?
 export type Command =
   | { type: 'select'; id: string }
   | { type: 'new'; id: string; now: number }
+  | { type: 'rename'; conversationId: string; name: string }
   | { type: 'draft'; conversationId: string; text: string }
   | { type: 'send'; conversationId: string; text: string; id: string; now: number }
   | { type: 'stop' | 'retry'; taskId: string; now: number }
@@ -98,6 +99,16 @@ export function command(state: AppState, action: Command): AppState {
         ],
       };
     }
+    case 'rename': {
+      const name = action.name.trim();
+      if (!canControl(state, action.conversationId) || !name || name.length > 80) return state;
+      return {
+        ...state,
+        conversations: state.conversations.map((c) =>
+          c.id === action.conversationId ? { ...c, name, customName: true } : c,
+        ),
+      };
+    }
     case 'draft':
       return canControl(state, action.conversationId)
         ? { ...state, drafts: { ...state.drafts, [action.conversationId]: action.text } }
@@ -167,7 +178,7 @@ export function command(state: AppState, action: Command): AppState {
         tasks: [task, ...state.tasks],
         drafts: { ...state.drafts, [c.id]: '' },
         conversations: state.conversations.map((v) =>
-          v.id === c.id && !state.messages.some((m) => m.conversationId === c.id)
+          v.id === c.id && !v.customName && !state.messages.some((m) => m.conversationId === c.id)
             ? { ...v, name: text.slice(0, 20) }
             : v,
         ),

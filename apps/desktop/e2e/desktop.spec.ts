@@ -274,3 +274,32 @@ test('reading earlier messages pauses following until Jump to latest is used', a
     )
     .toBeLessThan(64);
 });
+
+test('rename preserves a custom title after sending and reload, with cancel and channel restrictions', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const rename = page.getByRole('button', { name: '重命名对话', exact: true });
+  await rename.click();
+  const input = page.getByRole('textbox', { name: '对话名称' });
+  await expect(input).toBeFocused();
+  await input.fill('   ');
+  await expect(page.getByRole('button', { name: '保存名称' })).toBeDisabled();
+  await input.fill('不应保存');
+  await page.keyboard.press('Escape');
+  await expect(rename).toBeFocused();
+  await expect(page.locator('.breadcrumb')).not.toContainText('不应保存');
+  await rename.click();
+  await input.fill('产品设计讨论');
+  await input.press('Enter');
+  await expect(page.locator('.breadcrumb')).toContainText('产品设计讨论');
+  await page.getByRole('textbox', { name: '给助手发消息' }).fill('讨论界面');
+  await page.getByRole('button', { name: '发送消息' }).click();
+  await page.reload();
+  await expect(page.locator('.breadcrumb')).toContainText('产品设计讨论');
+  await expect(
+    page.locator('.sidebar').getByRole('button', { name: '产品设计讨论', exact: true }),
+  ).toBeVisible();
+  await page.getByTestId('conversation-qq-main').click();
+  await expect(rename).toHaveCount(0);
+});
