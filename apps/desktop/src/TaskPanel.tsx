@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Check,
-  ChevronRight,
-  FileText,
   Activity,
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  FileText,
   LockKeyhole,
   MessageCircle,
   RotateCcw,
@@ -12,10 +13,19 @@ import {
 } from 'lucide-react';
 import { useApp } from './context.ts';
 import { active, canControl } from './model.ts';
-import { Approval, CloseButton, Markdown, Source, StatusBadge } from './components.tsx';
+import {
+  Approval,
+  CloseButton,
+  Markdown,
+  Source,
+  StatusBadge,
+  Time,
+  useMemberState,
+} from './components.tsx';
 
 export function TaskPanel({ id, close }: { id: string; close: () => void }) {
   const { state, dispatch, selectConversation, t } = useApp();
+  const memberState = useMemberState();
   const task = state.tasks.find((task) => task.id === id);
   const [tab, setTab] = useState<'result' | 'progress' | 'team'>(
     task?.artifact ? 'result' : 'progress',
@@ -69,6 +79,13 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
       'This run was interrupted and has not restarted.',
     ),
   }[task.status];
+  const tabs = [
+    { id: 'result' as const, icon: FileText, label: t('成果', 'Result') },
+    { id: 'progress' as const, icon: Activity, label: t('进度', 'Progress') },
+    ...(task.members.length
+      ? [{ id: 'team' as const, icon: Users, label: t('小队', 'Team') }]
+      : []),
+  ];
   return (
     <aside
       ref={panel}
@@ -78,7 +95,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
     >
       <div className="panel-header">
         <span>
-          <FileText size={16} />
+          <FileText size={14} />
           {t('任务详情', 'Task details')}
         </span>
         <CloseButton onClick={close} />
@@ -86,52 +103,43 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
       <div className="panel-title">
         <Source conversationId={task.conversationId} />
         <h2>{task.title}</h2>
-        <StatusBadge status={task.status} />
-        <button
-          className="text-button task-conversation-link"
-          onClick={() => selectConversation(task.conversationId)}
-        >
-          <MessageCircle size={14} />
-          {t('查看所属对话', 'Open conversation')}
-        </button>
-      </div>
-      <div className="panel-tabs">
-        <button
-          aria-pressed={tab === 'result'}
-          className={tab === 'result' ? 'active' : ''}
-          onClick={() => setTab('result')}
-        >
-          <FileText size={14} />
-          {t('成果', 'Result')}
-        </button>
-        <button
-          aria-pressed={tab === 'progress'}
-          className={tab === 'progress' ? 'active' : ''}
-          onClick={() => setTab('progress')}
-        >
-          <Activity size={14} />
-          {t('进度', 'Progress')}
-        </button>
-        {task.members.length > 0 && (
-          <button
-            aria-pressed={tab === 'team'}
-            className={tab === 'team' ? 'active' : ''}
-            onClick={() => setTab('team')}
-          >
-            <Users size={14} />
-            {t('小队', 'Team')}
+        <div className="panel-meta">
+          <StatusBadge status={task.status} />
+          <button className="text-button" onClick={() => selectConversation(task.conversationId)}>
+            <MessageCircle size={14} />
+            {t('查看所属对话', 'Open conversation')}
           </button>
-        )}
+        </div>
+      </div>
+      <div className="segmented panel-tabs" role="group" aria-label={t('详情视图', 'Detail view')}>
+        {tabs.map(({ id, icon: Icon, label }) => (
+          <button key={id} aria-pressed={tab === id} onClick={() => setTab(id)}>
+            <Icon size={14} />
+            {label}
+          </button>
+        ))}
       </div>
       <div className="panel-content">
         {tab === 'result' &&
           (task.artifact ? (
             <>
               <div className="artifact-toolbar">
-                <span>{task.artifact.name}</span>
-                <button aria-pressed={raw} onClick={() => setRaw(!raw)}>
-                  {raw ? t('预览', 'Preview') : t('原文', 'Source')}
-                </button>
+                <span className="artifact-name">
+                  <FileText size={14} />
+                  <span>{task.artifact.name}</span>
+                </span>
+                <div
+                  className="segmented"
+                  role="group"
+                  aria-label={t('成果显示方式', 'Artifact view')}
+                >
+                  <button aria-pressed={!raw} onClick={() => setRaw(false)}>
+                    {t('预览', 'Preview')}
+                  </button>
+                  <button aria-pressed={raw} onClick={() => setRaw(true)}>
+                    {t('原文', 'Source')}
+                  </button>
+                </div>
               </div>
               <article className="artifact-paper">
                 {raw ? (
@@ -149,7 +157,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
             </>
           ) : (
             <div className="panel-empty">
-              <FileText size={32} />
+              <FileText size={22} />
               <h3>{t('暂无成果', 'No artifact yet')}</h3>
               <p>
                 {t(
@@ -163,7 +171,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
           <>
             <section className="execution-summary" aria-label={t('执行状态', 'Execution status')}>
               <p>{executionSummary}</p>
-              <dl className="execution-facts">
+              <dl className="facts">
                 <div>
                   <dt>{t('当前尝试', 'Current attempt')}</dt>
                   <dd>#{task.attempt}</dd>
@@ -171,15 +179,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
                 <div>
                   <dt>{t('发起时间', 'Requested')}</dt>
                   <dd>
-                    <time dateTime={new Date(task.createdAt).toISOString()}>
-                      {new Intl.DateTimeFormat(state.settings.language === 'zh' ? 'zh-CN' : 'en', {
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: false,
-                      }).format(task.createdAt)}
-                    </time>
+                    <Time value={task.createdAt} format="datetime" />
                   </dd>
                 </div>
               </dl>
@@ -187,6 +187,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
             <Approval task={task} />
             {task.status === 'failed' && (
               <div className="error-note">
+                <CircleAlert size={15} />
                 {task.approval?.status === 'rejected'
                   ? t(
                       '操作已被拒绝，未产生文件变更。',
@@ -200,6 +201,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
             )}
             {task.status === 'interrupted' && (
               <div className="error-note">
+                <CircleAlert size={15} />
                 {t(
                   '上次页面关闭时，这项工作还没有完成。历史已保留，未自动重新执行。',
                   'This work was unfinished when the page closed. History is kept; it has not been restarted.',
@@ -228,29 +230,25 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
               )}
             </p>
             <div className="team-members">
-              {task.members.map((member) => (
-                <details className="team-member" key={member.id} open={member.state === 'failed'}>
-                  <summary>
-                    <div>
-                      <strong>{member.role}</strong>
-                      <span>{member.name}</span>
-                    </div>
-                    <span className={`member-state ${member.state}`}>
-                      {
-                        {
-                          waiting: t('等待中', 'Waiting'),
-                          working: t('工作中', 'Working'),
-                          done: t('已完成', 'Done'),
-                          failed: t('遇到问题', 'Needs attention'),
-                          stopped: t('已停止', 'Stopped'),
-                        }[member.state]
-                      }
-                    </span>
-                    <ChevronRight size={14} />
-                  </summary>
-                  <p>{member.result || t('暂无结果记录。', 'No result recorded yet.')}</p>
-                </details>
-              ))}
+              {task.members.map((member) => {
+                const { label, icon } = memberState(member.state);
+                return (
+                  <details className="team-member" key={member.id} open={member.state === 'failed'}>
+                    <summary>
+                      <span className="team-member-name">
+                        <strong>{member.role}</strong>
+                        <span>{member.name}</span>
+                      </span>
+                      <span className={`member-state ${member.state}`}>
+                        {icon}
+                        {label}
+                      </span>
+                      <ChevronRight size={14} />
+                    </summary>
+                    <p>{member.result || t('暂无结果记录。', 'No result recorded yet.')}</p>
+                  </details>
+                );
+              })}
             </div>
           </>
         )}
@@ -266,16 +264,16 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
             <span>{t('本地工作区', 'Local workspace')}</span>
             {active(task.status) ? (
               <button
-                className="button secondary small-button"
+                className="button secondary small"
                 disabled={task.status === 'cancelling'}
                 onClick={() => dispatch({ type: 'stop', taskId: task.id, now: Date.now() })}
               >
-                <Square size={12} />
+                <Square size={11} />
                 {t('停止任务', 'Stop task')}
               </button>
             ) : ['failed', 'cancelled', 'interrupted'].includes(task.status) ? (
               <button
-                className="button secondary small-button"
+                className="button secondary small"
                 onClick={() => dispatch({ type: 'retry', taskId: task.id, now: Date.now() })}
               >
                 <RotateCcw size={12} />
@@ -283,7 +281,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
               </button>
             ) : (
               <span>
-                <Check size={12} />
+                <CircleCheck size={13} />
                 {t('已完成', 'Completed')}
               </span>
             )}

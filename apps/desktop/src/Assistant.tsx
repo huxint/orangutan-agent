@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useRef, useState, type RefObject } from 'react';
 import {
+  ArrowDown,
   ArrowRight,
   ArrowUp,
-  Check,
   FileText,
+  ListChecks,
   LockKeyhole,
   Monitor,
   Paperclip,
@@ -13,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useApp } from './context.ts';
 import { active } from './model.ts';
-import { Approval, Logo, Markdown, Source, StatusBadge, TaskCard } from './components.tsx';
+import { Approval, Logo, Markdown, Source, StatusBadge, TaskCard, Time } from './components.tsx';
 
 function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null> }) {
   const { state, dispatch, t, toast } = useApp();
@@ -53,6 +54,7 @@ function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null
           <button
             className="icon-button"
             aria-label={t('添加示例资料', 'Attach sample notes')}
+            title={t('添加示例资料', 'Attach sample notes')}
             onClick={() => {
               dispatch({
                 type: 'draft',
@@ -71,21 +73,20 @@ function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null
           >
             <Paperclip size={16} />
           </button>
-          <label className="composer-model">
-            <select
-              aria-label={t('选择示例模型', 'Choose sample model')}
-              value={state.settings.model}
-              onChange={(e) =>
-                dispatch({
-                  type: 'settings',
-                  value: { model: e.target.value as typeof state.settings.model },
-                })
-              }
-            >
-              <option>Claude Sonnet</option>
-              <option>GPT-5</option>
-            </select>
-          </label>
+          <select
+            className="composer-model"
+            aria-label={t('选择示例模型', 'Choose sample model')}
+            value={state.settings.model}
+            onChange={(e) =>
+              dispatch({
+                type: 'settings',
+                value: { model: e.target.value as typeof state.settings.model },
+              })
+            }
+          >
+            <option>Claude Sonnet</option>
+            <option>GPT-5</option>
+          </select>
           <span className="composer-spacer" />
           <span className="composer-scope">
             <Monitor size={12} />
@@ -93,12 +94,12 @@ function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null
           </span>
           {running ? (
             <button
-              className="send-button stop"
+              className="send-button"
               aria-label={t('停止本地任务', 'Stop local task')}
               disabled={running.status === 'cancelling'}
               onClick={() => dispatch({ type: 'stop', taskId: running.id, now: Date.now() })}
             >
-              <Square size={14} fill="currentColor" />
+              <Square size={12} fill="currentColor" />
             </button>
           ) : (
             <button
@@ -119,13 +120,15 @@ function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null
             'Demo · Model replies and execution are simulated',
           )}
         </span>
-        <span>
+        <span className="composer-hint">
           {t('Enter 发送 · Shift + Enter 换行', 'Enter to send · Shift + Enter for a new line')}
         </span>
       </div>
     </div>
   );
 }
+
+const dayOf = (time: number) => new Date(time).toDateString();
 
 export function Assistant() {
   const { state, dispatch, t, openTask, selectConversation, navigate } = useApp();
@@ -206,102 +209,105 @@ export function Assistant() {
     )
     .slice(0, 4);
   const empty = messages.length === 0 && local;
+  const threadTask = (task: (typeof tasks)[number]) => (
+    <div key={task.id} className="thread-task">
+      <TaskCard task={task} />
+      <Approval task={task} />
+    </div>
+  );
   return (
     <div className={'assistant-view' + (empty ? ' is-empty' : '')}>
       {empty ? (
         <div className="start-workspace">
-          <section
-            className="start-session"
-            aria-label={t('开始本地会话', 'Start a local session')}
-          >
-            <div className="start-heading">
+          <div className="start-inner">
+            <section
+              className="start-session"
+              aria-label={t('开始本地会话', 'Start a local session')}
+            >
               <h1>{t('今天想处理什么？', 'What can I help with?')}</h1>
-            </div>
-            <p className="start-description">
-              {t(
-                '交代一件事，或继续手边的工作。',
-                'Start something new, or pick up where you left off.',
-              )}
-            </p>
-            <Composer inputRef={textarea} />
-            <div className="request-shortcuts">
-              {prompts.map(({ icon: Icon, title, prompt }) => (
-                <button key={title} onClick={() => suggest(prompt)}>
-                  <Icon size={18} />
-                  <span>{title}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-          <section className="recent-section" aria-label={t('最近任务', 'Recent tasks')}>
-            <div className="section-heading">
-              <h2>{t('工作动态', 'Your work')}</h2>
-              <button className="text-button" onClick={() => navigate('tasks')}>
-                {t('查看全部', 'View all')}
-                <ArrowRight size={13} />
-              </button>
-            </div>
-            <div className="activity-filters" aria-label={t('筛选任务来源', 'Filter task sources')}>
-              {[
-                ['all', t('全部', 'All')],
-                ['desktop', t('桌面', 'Desktop')],
-                ['channel', t('消息渠道', 'Channels')],
-              ].map(([value, label]) => (
-                <button
-                  key={value}
-                  aria-pressed={source === value}
-                  className={source === value ? 'active' : ''}
-                  onClick={() => setSource(value)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="activity-list">
-              {recent.map((task) => (
-                <button
-                  className="activity-row"
-                  key={task.id}
-                  onClick={() => {
-                    selectConversation(task.conversationId);
-                    openTask(task.id);
-                  }}
-                >
-                  <span className="activity-icon">
-                    {task.members.length ? (
-                      <Users size={16} />
-                    ) : task.status === 'completed' ? (
-                      <Check size={16} />
-                    ) : (
-                      <FileText size={16} />
-                    )}
-                  </span>
-                  <div className="activity-title">
-                    <strong>{task.title}</strong>
-                    <Source conversationId={task.conversationId} />
-                  </div>
-                  <div className="activity-meta">
-                    <StatusBadge status={task.status} />
-                    <time>
-                      {new Intl.DateTimeFormat(state.settings.language === 'zh' ? 'zh-CN' : 'en', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: false,
-                      }).format(task.createdAt)}
-                    </time>
-                  </div>
-                </button>
-              ))}
-            </div>
-            {!recent.length && (
-              <p className="activity-empty">
+              <p className="start-description">
                 {t(
-                  '暂无任务。发送请求后，执行记录会显示在这里。',
-                  'No tasks yet. Send a request to create an execution record.',
+                  '交代一件事，或继续手边的工作。',
+                  'Start something new, or pick up where you left off.',
                 )}
               </p>
-            )}
-          </section>
+              <Composer inputRef={textarea} />
+              <div className="request-shortcuts">
+                {prompts.map(({ icon: Icon, title, prompt }) => (
+                  <button key={title} onClick={() => suggest(prompt)}>
+                    <Icon size={15} />
+                    <span>{title}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+            <section className="recent-section" aria-label={t('最近任务', 'Recent tasks')}>
+              <div className="section-heading">
+                <h2>{t('工作动态', 'Your work')}</h2>
+                <div
+                  className="segmented"
+                  role="group"
+                  aria-label={t('筛选任务来源', 'Filter task sources')}
+                >
+                  {[
+                    ['all', t('全部', 'All')],
+                    ['desktop', t('桌面', 'Desktop')],
+                    ['channel', t('消息渠道', 'Channels')],
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      aria-pressed={source === value}
+                      onClick={() => setSource(value)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <button className="text-button" onClick={() => navigate('tasks')}>
+                  {t('查看全部', 'View all')}
+                  <ArrowRight size={13} />
+                </button>
+              </div>
+              <div className="activity-list">
+                {recent.map((task) => (
+                  <button
+                    className="activity-row"
+                    key={task.id}
+                    onClick={() => {
+                      selectConversation(task.conversationId);
+                      openTask(task.id);
+                    }}
+                  >
+                    <span className="activity-icon">
+                      {task.members.length ? (
+                        <Users size={16} />
+                      ) : task.kind === 'file' ? (
+                        <FileText size={16} />
+                      ) : (
+                        <ListChecks size={16} />
+                      )}
+                    </span>
+                    <span className="activity-title">
+                      <strong>{task.title}</strong>
+                      <Source conversationId={task.conversationId} />
+                    </span>
+                    <span className="activity-meta">
+                      <StatusBadge status={task.status} />
+                      <Time value={task.createdAt} format="time" />
+                    </span>
+                  </button>
+                ))}
+              </div>
+              {!recent.length && (
+                <p className="activity-empty">
+                  {t(
+                    '暂无任务。发送请求后，执行记录会显示在这里。',
+                    'No tasks yet. Send a request to create an execution record.',
+                  )}
+                </p>
+              )}
+            </section>
+          </div>
         </div>
       ) : (
         <>
@@ -345,42 +351,41 @@ export function Assistant() {
                   <Source conversationId={conversation.id} />
                 </div>
               )}
-              <div className="thread-date">{t('会话记录', 'Conversation history')}</div>
-              {messages.map((message) => (
+              {messages.map((message, index) => (
                 <Fragment key={message.id}>
-                  <div className={'message ' + message.role}>
-                    {message.role === 'assistant' && <Logo small />}
+                  {(index === 0 ||
+                    dayOf(messages[index - 1].createdAt) !== dayOf(message.createdAt)) && (
+                    <div className="thread-date">
+                      <Time value={message.createdAt} format="day" />
+                    </div>
+                  )}
+                  <div className={`message ${message.role} ${message.state}`}>
+                    {message.role === 'assistant' && (
+                      <span className="message-avatar">
+                        <Logo />
+                      </span>
+                    )}
                     <div className="message-body">
                       {message.role === 'assistant' && (
                         <div className="message-author">
-                          Orangutan <span>{t('助手', 'Assistant')}</span>
+                          <strong>Orangutan</strong>
+                          <Time value={message.createdAt} format="time" />
                         </div>
                       )}
                       <Markdown>{message.text}</Markdown>
-                      {message.state === 'streaming' && <span className="stream-caret" />}
                       {message.state === 'interrupted' && (
-                        <small className="muted">{t('回复已中断', 'Response interrupted')}</small>
+                        <small className="message-note">
+                          {t('回复已中断', 'Response interrupted')}
+                        </small>
                       )}
                     </div>
                   </div>
-                  {tasks
-                    .filter((task) => message.id === `${task.id}:user`)
-                    .map((task) => (
-                      <div key={task.id} className="thread-task">
-                        <TaskCard task={task} />
-                        <Approval task={task} />
-                      </div>
-                    ))}
+                  {tasks.filter((task) => message.id === `${task.id}:user`).map(threadTask)}
                 </Fragment>
               ))}
               {tasks
                 .filter((task) => !messages.some((message) => message.id === `${task.id}:user`))
-                .map((task) => (
-                  <div key={task.id} className="thread-task">
-                    <TaskCard task={task} />
-                    <Approval task={task} />
-                  </div>
-                ))}
+                .map(threadTask)}
               {running && (
                 <div className="thinking">
                   {running.status === 'running' && (
@@ -399,43 +404,45 @@ export function Assistant() {
               )}
             </div>
           </div>
-          {!atBottom && (
-            <button
-              className="jump-latest"
-              onClick={() => {
-                const element = scroll.current;
-                if (!element) return;
-                const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-                jumping.current = !reduced;
-                pinned.current = true;
-                setAtBottom(true);
-                element.focus({ preventScroll: true });
-                element.scrollTo({
-                  top: element.scrollHeight,
-                  behavior: reduced ? 'instant' : 'smooth',
-                });
-              }}
-            >
-              {t('回到最新', 'Jump to latest')}
-              <ArrowUp size={14} />
-            </button>
-          )}
-          {local ? (
-            <Composer inputRef={textarea} />
-          ) : (
-            <div className="readonly-footer">
-              <LockKeyhole size={14} />
-              <div>
-                <strong>{t('渠道会话只读', 'Read-only channel conversation')}</strong>
-                <span>
-                  {t(
-                    '发送消息、审批和任务控制请在原渠道进行。',
-                    'Send messages, approve actions and control tasks in the original channel.',
-                  )}
-                </span>
+          <div className="thread-dock">
+            {!atBottom && (
+              <button
+                className="jump-latest"
+                onClick={() => {
+                  const element = scroll.current;
+                  if (!element) return;
+                  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+                  jumping.current = !reduced;
+                  pinned.current = true;
+                  setAtBottom(true);
+                  element.focus({ preventScroll: true });
+                  element.scrollTo({
+                    top: element.scrollHeight,
+                    behavior: reduced ? 'instant' : 'smooth',
+                  });
+                }}
+              >
+                <ArrowDown size={14} />
+                {t('回到最新', 'Jump to latest')}
+              </button>
+            )}
+            {local ? (
+              <Composer inputRef={textarea} />
+            ) : (
+              <div className="readonly-footer">
+                <LockKeyhole size={15} />
+                <div>
+                  <strong>{t('渠道会话只读', 'Read-only channel conversation')}</strong>
+                  <span>
+                    {t(
+                      '发送消息、审批和任务控制请在原渠道进行。',
+                      'Send messages, approve actions and control tasks in the original channel.',
+                    )}
+                  </span>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </>
       )}
     </div>

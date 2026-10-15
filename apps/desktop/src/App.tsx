@@ -1,37 +1,48 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   ArrowRight,
   Bell,
   Check,
   CheckCheck,
-  ChevronDown,
   ChevronRight,
+  CircleAlert,
+  CircleCheck,
   CircleHelp,
-  FolderOpen,
+  Clock3,
+  HardDrive,
   Leaf,
+  ListChecks,
   Menu,
   MessageCircle,
   Moon,
-  Plus,
   Pencil,
   Radio,
   Search,
   Settings2,
-  Sparkles,
+  SquarePen,
   Sun,
+  Unplug,
 } from 'lucide-react';
 import { AppContext, type View } from './context.ts';
 import { useAgent } from './useAgent.ts';
 import { Assistant } from './Assistant.tsx';
 import { ConnectionsPage, MemoryPage, SettingsPage, TasksPage } from './Pages.tsx';
 import { TaskPanel } from './TaskPanel.tsx';
-import { Empty, Modal, PlatformIcon, Source, StatusBadge } from './components.tsx';
+import { Empty, Logo, Modal, PlatformIcon, Source, StatusBadge } from './components.tsx';
+
+const notificationIcons = {
+  completed: CircleCheck,
+  failed: CircleAlert,
+  approval: Clock3,
+  connection: Unplug,
+};
 
 export default function App() {
   const { state, dispatch, storageError, reset, exportSnapshot } = useAgent();
   const [view, setView] = useState<View>('assistant');
   const [taskId, setTaskId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [dark, setDark] = useState(false);
   const sidebar = useRef<HTMLElement>(null);
   const menu = useRef<HTMLButtonElement>(null);
   const [dialog, setDialog] = useState<
@@ -58,22 +69,28 @@ export default function App() {
   };
   const selected = state.conversations.find((c) => c.id === state.selectedId)!;
   const unread = state.notifications.filter((n) => !n.read).length;
+  const activeTasks = state.tasks.filter((task) =>
+    ['queued', 'running', 'awaiting_approval'].includes(task.status),
+  ).length;
   const navItems = [
     { id: 'assistant' as const, icon: MessageCircle, label: t('助手', 'Assistant') },
-    { id: 'tasks' as const, icon: CheckCheck, label: t('任务', 'Tasks') },
+    { id: 'tasks' as const, icon: ListChecks, label: t('任务', 'Tasks') },
     { id: 'connections' as const, icon: Radio, label: t('连接', 'Connections') },
     { id: 'memory' as const, icon: Leaf, label: t('记忆', 'Memory') },
     { id: 'settings' as const, icon: Settings2, label: t('设置', 'Settings') },
   ];
+  const connectionName = (connectionId: string) =>
+    state.connections.find((c) => c.id === connectionId)?.name ?? t('桌面', 'Desktop');
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const update = () => {
-      const dark =
+      const next =
         state.settings.theme === 'dark' || (state.settings.theme === 'system' && media.matches);
-      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      document.documentElement.dataset.theme = next ? 'dark' : 'light';
       document
         .querySelector('meta[name="theme-color"]')
-        ?.setAttribute('content', dark ? '#202126' : '#ffffff');
+        ?.setAttribute('content', next ? '#1f2024' : '#ffffff');
+      setDark(next);
     };
     update();
     media.addEventListener('change', update);
@@ -88,6 +105,7 @@ export default function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setSidebarOpen(false);
+        setQuery('');
         setDialog((previous) => (previous === 'search' ? null : 'search'));
       }
       if (event.key === 'Escape') setSidebarOpen(false);
@@ -143,12 +161,25 @@ export default function App() {
         menu.current.focus();
     };
   }, [sidebarOpen]);
+  const needle = query.trim().toLocaleLowerCase();
   const matchingConversations = state.conversations.filter((c) =>
-    `${c.name} ${c.connectionId}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+    `${c.name} ${connectionName(c.connectionId)}`.toLocaleLowerCase().includes(needle),
   );
   const matchingTasks = state.tasks.filter((task) =>
-    task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+    task.title.toLocaleLowerCase().includes(needle),
   );
+  const movePaletteFocus = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const items = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('input, .palette-results button'),
+    );
+    const index = items.indexOf(document.activeElement as HTMLElement);
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    event.preventDefault();
+    items[(index + step + items.length) % items.length]?.focus();
+  };
+  const conversationLink = (id: string) =>
+    view === 'assistant' && state.selectedId === id ? 'true' : undefined;
 
   return (
     <AppContext.Provider
@@ -174,124 +205,112 @@ export default function App() {
           />
         )}
         <aside ref={sidebar} className="sidebar" aria-label={t('主导航', 'Main navigation')}>
-          <button
-            className="brand"
-            onClick={() => navigate('assistant')}
-            aria-label={t('Orangutan 首页', 'Orangutan home')}
-          >
-            <span>
+          <div className="sidebar-head">
+            <button
+              className="brand"
+              onClick={() => navigate('assistant')}
+              aria-label={t('Orangutan 首页', 'Orangutan home')}
+            >
+              <Logo />
               <strong>Orangutan</strong>
-              <small>{t('本地工作区', 'Workspace')}</small>
-            </span>
-          </button>
+            </button>
+          </div>
           <button className="new-conversation" onClick={newConversation}>
-            <Plus size={17} />
+            <SquarePen size={15} />
             <span>{t('新对话', 'New conversation')}</span>
           </button>
-          <nav>
+          <nav className="nav-list">
             {navItems.slice(0, 2).map(({ id, icon: Icon, label }) => (
               <button
                 key={id}
                 data-testid={`nav-${id}`}
-                className={`nav-item ${view === id ? 'active' : ''}`}
+                className="nav-item"
                 aria-current={view === id ? 'page' : undefined}
                 onClick={() => navigate(id)}
               >
-                <Icon size={18} strokeWidth={1.6} />
+                <Icon size={16} strokeWidth={1.75} />
                 <span>{label}</span>
-                {id === 'tasks' && (
-                  <span className="nav-count">
-                    {
-                      state.tasks.filter((task) =>
-                        ['queued', 'running', 'awaiting_approval'].includes(task.status),
-                      ).length
-                    }
-                  </span>
+                {id === 'tasks' && activeTasks > 0 && (
+                  <span className="nav-count">{activeTasks}</span>
                 )}
               </button>
             ))}
           </nav>
           <div className="sidebar-history">
-            <div className="sidebar-section-label">
-              {t('对话空间', 'Conversations')}
-              <span>{state.conversations.length}</span>
-            </div>
-            <div className="conversation-group-label">
-              <span className="source-dot desktop" />
-              {t('在这台电脑上', 'On this computer')}
-            </div>
-            {state.conversations
-              .filter((c) => c.origin === 'desktop')
-              .map((c) => (
-                <button
-                  className={`conversation-link ${view === 'assistant' && state.selectedId === c.id ? 'selected' : ''}`}
-                  key={c.id}
-                  onClick={() => selectConversation(c.id)}
-                >
-                  <MessageCircle size={13} />
-                  <span>{c.name}</span>
-                </button>
-              ))}
-            <div className="conversation-group-label channels-label">
-              {t('来自消息渠道', 'From your channels')}
-            </div>
-            {state.conversations
-              .filter((c) => c.origin === 'channel')
-              .map((c) => {
-                const connection = state.connections.find((v) => v.id === c.connectionId)!;
-                return (
+            <div className="sidebar-group">
+              <div className="sidebar-label">
+                {t('在这台电脑上', 'On this computer')}
+                <span>{state.conversations.filter((c) => c.origin === 'desktop').length}</span>
+              </div>
+              {state.conversations
+                .filter((c) => c.origin === 'desktop')
+                .map((c) => (
                   <button
-                    className={`conversation-link channel-link ${view === 'assistant' && state.selectedId === c.id ? 'selected' : ''}`}
+                    className="conversation-link"
+                    aria-current={conversationLink(c.id)}
                     key={c.id}
-                    data-testid={`conversation-${connection.id}`}
                     onClick={() => selectConversation(c.id)}
                   >
-                    <PlatformIcon platform={connection.platform} size={12} />
-                    <span>
-                      {c.name}
-                      <small>{connection.name}</small>
-                    </span>
-                    {c.unread > 0 && <span className="unread-dot" />}
+                    <MessageCircle size={14} />
+                    <span className="conversation-text">{c.name}</span>
                   </button>
-                );
-              })}
+                ))}
+            </div>
+            <div className="sidebar-group">
+              <div className="sidebar-label">
+                {t('来自消息渠道', 'From your channels')}
+                <span>{state.conversations.filter((c) => c.origin === 'channel').length}</span>
+              </div>
+              {state.conversations
+                .filter((c) => c.origin === 'channel')
+                .map((c) => {
+                  const connection = state.connections.find((v) => v.id === c.connectionId)!;
+                  return (
+                    <button
+                      className="conversation-link channel-link"
+                      aria-current={conversationLink(c.id)}
+                      key={c.id}
+                      data-testid={`conversation-${connection.id}`}
+                      onClick={() => selectConversation(c.id)}
+                    >
+                      <PlatformIcon platform={connection.platform} size={14} />
+                      <span className="conversation-text">
+                        {c.name}
+                        <small>{connection.name}</small>
+                      </span>
+                      {c.unread > 0 && <span className="unread-dot" />}
+                    </button>
+                  );
+                })}
+            </div>
           </div>
           <div className="sidebar-bottom">
-            <nav className="utility-nav" aria-label={t('工作区管理', 'Workspace management')}>
+            <nav className="nav-list" aria-label={t('工作区管理', 'Workspace management')}>
               {navItems.slice(2).map(({ id, icon: Icon, label }) => (
                 <button
                   key={id}
                   data-testid={`nav-${id}`}
-                  className={`nav-item ${view === id ? 'active' : ''}`}
+                  className="nav-item"
                   aria-current={view === id ? 'page' : undefined}
                   onClick={() => navigate(id)}
                 >
-                  <Icon size={17} strokeWidth={1.6} />
+                  <Icon size={16} strokeWidth={1.75} />
                   <span>{label}</span>
                 </button>
               ))}
             </nav>
-            <button className="workspace-switch" onClick={() => navigate('settings')}>
-              <span className="workspace-avatar">
-                <FolderOpen size={17} />
-              </span>
+            <div className="sidebar-footer">
+              <HardDrive size={15} />
               <span>
                 <strong>{t('本地工作区', 'Local workspace')}</strong>
-                <small>
-                  <span />
-                  {t('此设备 · 演示模式', 'This device · Demo')}
-                </small>
+                <small>{t('保存在此浏览器', 'Stored in this browser')}</small>
               </span>
-              <ChevronDown size={13} />
-            </button>
-            <div className="sidebar-footer">
-              <span>{t('本地存储', 'Stored locally')}</span>
               <button
-                className="icon-button"
+                className="icon-button small"
                 aria-label={t('关于演示', 'About this demo')}
                 onClick={() => setDialog('about')}
               >
-                <CircleHelp size={14} />
+                <CircleHelp size={15} />
               </button>
             </div>
           </div>
@@ -305,17 +324,17 @@ export default function App() {
               aria-expanded={sidebarOpen}
               onClick={() => setSidebarOpen(!sidebarOpen)}
             >
-              <Menu size={19} />
+              <Menu size={18} />
             </button>
             <div className="breadcrumb">
-              <span>{navItems.find((n) => n.id === view)?.label}</span>
-              {view === 'assistant' && (
+              {view === 'assistant' ? (
                 <>
-                  <ChevronRight size={12} />
+                  <span>{navItems[0].label}</span>
+                  <ChevronRight size={13} />
                   <strong>{selected.name}</strong>
                   {selected.origin === 'desktop' && (
                     <button
-                      className="icon-button"
+                      className="icon-button small"
                       aria-label={t('重命名对话', 'Rename conversation')}
                       title={t('重命名对话', 'Rename conversation')}
                       onClick={() => {
@@ -327,6 +346,8 @@ export default function App() {
                     </button>
                   )}
                 </>
+              ) : (
+                <strong>{navItems.find((n) => n.id === view)?.label}</strong>
               )}
             </div>
             <div className="topbar-actions">
@@ -350,36 +371,36 @@ export default function App() {
                 className="icon-button theme-shortcut"
                 aria-label={t('切换明暗主题', 'Toggle color theme')}
                 onClick={() =>
-                  dispatch({
-                    type: 'settings',
-                    value: {
-                      theme: document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark',
-                    },
-                  })
+                  dispatch({ type: 'settings', value: { theme: dark ? 'light' : 'dark' } })
                 }
               >
-                {state.settings.theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+                {dark ? <Sun size={17} /> : <Moon size={17} />}
               </button>
               <button
                 className="icon-button notification-button"
                 aria-label={t('通知', 'Notifications')}
                 onClick={() => setDialog('notifications')}
               >
-                <Bell size={18} />
+                <Bell size={17} />
                 {unread > 0 && <span className="notification-count">{unread}</span>}
               </button>
             </div>
           </header>
           {storageError && (
             <div className="storage-banner" role="alert">
+              <CircleAlert size={15} />
               <span>
                 {t(
                   '本地快照暂时无法读取或保存。已有数据不会被自动清除。',
                   'The local snapshot could not be read or saved. Existing data will not be automatically cleared.',
                 )}
               </span>
-              <button onClick={exportSnapshot}>{t('导出', 'Export')}</button>
-              <button onClick={() => setDialog('reset')}>{t('恢复演示', 'Recover demo')}</button>
+              <button className="text-button" onClick={exportSnapshot}>
+                {t('导出', 'Export')}
+              </button>
+              <button className="text-button" onClick={() => setDialog('reset')}>
+                {t('恢复演示', 'Recover demo')}
+              </button>
             </div>
           )}
           <div className="workspace-body">
@@ -407,41 +428,60 @@ export default function App() {
         )}
         {dialog === 'search' && (
           <Modal
-            title={t('找一段对话，或一件事', 'Find a conversation or a task')}
+            title={t('搜索对话和任务', 'Search conversations and tasks')}
             close={() => setDialog(null)}
-            wide
+            variant="palette"
           >
-            <div className="modal-body">
-              <label className="search-field modal-search">
+            <div className="palette" onKeyDown={movePaletteFocus}>
+              <label className="palette-input">
                 <Search size={18} />
                 <input
-                  autoFocus
                   aria-label={t('搜索关键词', 'Search query')}
                   value={query}
-                  placeholder={t('输入名称、渠道或任务…', 'Search names, channels or tasks…')}
+                  placeholder={t(
+                    '搜索对话、渠道或任务…',
+                    'Search conversations, channels or tasks…',
+                  )}
                   onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+                    e.preventDefault();
+                    e.currentTarget
+                      .closest('.palette')
+                      ?.querySelector<HTMLButtonElement>('.palette-results button')
+                      ?.click();
+                  }}
                 />
                 <kbd>Esc</kbd>
               </label>
-              <div className="search-results">
-                <h3>{t('对话', 'Conversations')}</h3>
-                {matchingConversations.map((c) => (
-                  <button
-                    key={c.id}
-                    onClick={() => {
-                      selectConversation(c.id);
-                      setDialog(null);
-                    }}
-                  >
-                    <MessageCircle size={16} />
-                    <span>
-                      {c.name}
-                      <small>{c.connectionId}</small>
-                    </span>
-                    <ArrowRight size={14} />
-                  </button>
-                ))}
-                <h3>{t('任务', 'Tasks')}</h3>
+              <div className="palette-results">
+                {matchingConversations.length > 0 && <h3>{t('对话', 'Conversations')}</h3>}
+                {matchingConversations.map((c) => {
+                  const connection = state.connections.find((v) => v.id === c.connectionId);
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        selectConversation(c.id);
+                        setDialog(null);
+                      }}
+                    >
+                      <span className="palette-icon">
+                        {connection ? (
+                          <PlatformIcon platform={connection.platform} size={15} />
+                        ) : (
+                          <MessageCircle size={15} />
+                        )}
+                      </span>
+                      <span className="palette-text">
+                        {c.name}
+                        <small>{connectionName(c.connectionId)}</small>
+                      </span>
+                      <ArrowRight size={14} className="palette-arrow" />
+                    </button>
+                  );
+                })}
+                {matchingTasks.length > 0 && <h3>{t('任务', 'Tasks')}</h3>}
                 {matchingTasks.map((task) => (
                   <button
                     key={task.id}
@@ -451,17 +491,38 @@ export default function App() {
                       setDialog(null);
                     }}
                   >
-                    <Sparkles size={16} />
-                    <span>{task.title}</span>
+                    <span className="palette-icon">
+                      <ListChecks size={15} />
+                    </span>
+                    <span className="palette-text">
+                      {task.title}
+                      <Source conversationId={task.conversationId} />
+                    </span>
                     <StatusBadge status={task.status} />
                   </button>
                 ))}
                 {!matchingConversations.length && !matchingTasks.length && (
                   <Empty
+                    icon={<Search size={22} />}
                     title={t('没有找到', 'No matches yet')}
                     detail={t('换个关键词再试试。', 'Try another word.')}
                   />
                 )}
+              </div>
+              <div className="palette-footer" aria-hidden="true">
+                <span>
+                  <kbd>↑</kbd>
+                  <kbd>↓</kbd>
+                  {t('选择', 'Move')}
+                </span>
+                <span>
+                  <kbd>Enter</kbd>
+                  {t('打开', 'Open')}
+                </span>
+                <span>
+                  <kbd>Esc</kbd>
+                  {t('关闭', 'Close')}
+                </span>
               </div>
             </div>
           </Modal>
@@ -469,38 +530,43 @@ export default function App() {
         {dialog === 'notifications' && (
           <Modal title={t('通知', 'Notifications')} close={() => setDialog(null)}>
             <div className="notification-list">
-              {state.notifications.map((n) => (
-                <div className={`notification-item ${n.read ? 'read' : ''}`} key={n.id}>
-                  <span className={`activity-icon ${n.kind === 'approval' ? 'orange' : 'green'}`}>
-                    {n.kind === 'completed' ? <Check size={17} /> : <Bell size={17} />}
-                  </span>
-                  <button
-                    className="notification-content"
-                    onClick={() => {
-                      dispatch({ type: 'read-notification', id: n.id });
-                      if (n.conversationId) selectConversation(n.conversationId);
-                      else navigate('connections');
-                      if (n.taskId) setTaskId(n.taskId);
-                      setDialog(null);
-                    }}
-                  >
-                    <strong>{n.title}</strong>
-                    <p>{n.detail}</p>
-                    {n.conversationId && <Source conversationId={n.conversationId} />}
-                  </button>
-                  {!n.read && (
+              {state.notifications.map((n) => {
+                const Icon = notificationIcons[n.kind];
+                return (
+                  <div className={`notification-item ${n.read ? 'read' : ''}`} key={n.id}>
+                    <span className={`notification-icon ${n.kind}`}>
+                      <Icon size={15} />
+                    </span>
                     <button
-                      className="icon-button"
-                      aria-label={t('标记已读', 'Mark as read')}
-                      onClick={() => dispatch({ type: 'read-notification', id: n.id })}
+                      className="notification-content"
+                      onClick={() => {
+                        dispatch({ type: 'read-notification', id: n.id });
+                        if (n.conversationId) selectConversation(n.conversationId);
+                        else navigate('connections');
+                        if (n.taskId) setTaskId(n.taskId);
+                        setDialog(null);
+                      }}
                     >
-                      <CheckCheck size={15} />
+                      <strong>{n.title}</strong>
+                      <p>{n.detail}</p>
+                      {n.conversationId && <Source conversationId={n.conversationId} />}
                     </button>
-                  )}
-                </div>
-              ))}
+                    {!n.read && (
+                      <button
+                        className="icon-button small"
+                        aria-label={t('标记已读', 'Mark as read')}
+                        title={t('标记已读', 'Mark as read')}
+                        onClick={() => dispatch({ type: 'read-notification', id: n.id })}
+                      >
+                        <CheckCheck size={15} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
               {!state.notifications.length && (
                 <Empty
+                  icon={<Bell size={22} />}
                   title={t('暂时没有新消息', 'All caught up')}
                   detail={t(
                     '有新的进展时，会出现在这里。',
@@ -544,8 +610,14 @@ export default function App() {
         )}
         {dialog === 'about' && (
           <Modal title={t('关于 Orangutan', 'About Orangutan')} close={() => setDialog(null)}>
-            <div className="modal-body about-demo">
-              <h3>{t('Orangutan 桌面原型', 'Orangutan desktop prototype')}</h3>
+            <div className="modal-body">
+              <div className="about-brand">
+                <Logo />
+                <span>
+                  <strong>Orangutan</strong>
+                  <small>{t('桌面原型 · 演示模式', 'Desktop prototype · Demo mode')}</small>
+                </span>
+              </div>
               <p>
                 {t(
                   '这是一个可交互的桌面界面原型。回复、小队工作和渠道连接均使用演示数据；不会发送真实消息、调用模型或修改本机文件。',
@@ -558,10 +630,11 @@ export default function App() {
                   'History is saved in this browser. Unfinished work is marked interrupted after closing or refreshing the page.',
                 )}
               </p>
-              <button className="button primary" onClick={() => setDialog(null)}>
-                {t('关闭', 'Close')}
-                <ArrowRight size={15} />
-              </button>
+              <div className="modal-actions">
+                <button className="button primary" onClick={() => setDialog(null)}>
+                  {t('知道了', 'Got it')}
+                </button>
+              </div>
             </div>
           </Modal>
         )}

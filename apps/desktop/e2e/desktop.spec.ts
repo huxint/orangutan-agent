@@ -74,6 +74,7 @@ test('close/reload interrupts runs, drafts survive appearance changes, both lang
   await page.clock.runFor(800);
   await page.reload();
   await expect(page.locator('.thread .status')).toHaveText('已中断');
+  await expect(page.locator('.thread .member-chip').first()).toContainText('已停止');
   await page.getByRole('textbox', { name: '给助手发消息' }).fill('还没发送的想法');
   await page.getByTestId('nav-settings').click();
   await page.getByTestId('theme-dark').click();
@@ -205,6 +206,7 @@ test('execution summaries stay beside the request that created them', async ({ p
   await input.fill('第一项：讨论产品目标');
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect(page.locator('.thread > .message.user + .thread-task')).toHaveCount(1);
+  await expect(page.locator('.thread-date')).toHaveText(['今天']);
   const firstTaskId = await page.locator('.thread-task .task-card').getAttribute('data-testid');
   await page.clock.runFor(12_000);
   await expect(page.locator('.thread-task .status')).toHaveText('已完成');
@@ -302,4 +304,48 @@ test('rename preserves a custom title after sending and reload, with cancel and 
   ).toBeVisible();
   await page.getByTestId('conversation-qq-main').click();
   await expect(rename).toHaveCount(0);
+});
+
+test('search palette names sources and opens results from the keyboard', async ({ page }) => {
+  await page.goto('/');
+  await page.keyboard.press('Control+k');
+  const dialog = page.getByRole('dialog');
+  const search = dialog.getByRole('textbox', { name: '搜索关键词' });
+  await search.fill('QQ · 工作');
+  const result = dialog.getByRole('button', { name: /周然 · 工作/ });
+  await expect(result).toContainText('QQ · 工作');
+  await expect(dialog).not.toContainText('qq-studio');
+  await search.press('ArrowDown');
+  await expect(result).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(search).toBeFocused();
+  await search.press('Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.breadcrumb')).toContainText('周然 · 工作');
+  await expect(page.getByText('渠道会话 · 只读预览')).toBeVisible();
+});
+
+test('secondary text keeps AA contrast on every surface in both themes', async ({ page }) => {
+  await page.goto('/');
+  for (const theme of ['light', 'dark']) {
+    const ratios = await page.evaluate((theme) => {
+      document.documentElement.dataset.theme = theme;
+      const style = getComputedStyle(document.documentElement);
+      const luminance = (name: string) => {
+        const hex = style.getPropertyValue(name).trim().slice(1);
+        const [r, g, b] = [0, 2, 4].map((i) => {
+          const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+          return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      return ['--muted', '--subtext'].flatMap((text) =>
+        ['--bg', '--sidebar', '--surface', '--panel', '--hover'].map((surface) => {
+          const [light, dark] = [luminance(text), luminance(surface)].sort((a, b) => b - a);
+          return { pair: `${theme} ${text} on ${surface}`, ratio: (light + 0.05) / (dark + 0.05) };
+        }),
+      );
+    }, theme);
+    for (const { pair, ratio } of ratios) expect(ratio, pair).toBeGreaterThanOrEqual(4.5);
+  }
 });

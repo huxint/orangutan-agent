@@ -50,8 +50,9 @@ separate from the page-owned demo execution, which stops when the page closes.
   the original conversation without sending anything.
 - In Connections, configure a sample account and choose a successful or failed
   demo connection. Connecting the second QQ account starts its queued team example.
-- Use `Ctrl+K` (or `Cmd+K`) to search conversations and tasks. Dialogs support Escape
-  and restore keyboard focus. The right panel replaces the main content at narrow widths.
+- Use `Ctrl+K` (or `Cmd+K`) to search conversations and tasks; arrow keys move
+  through results and Enter opens the first match. Dialogs support Escape and
+  restore keyboard focus. The right panel replaces the main content at narrow widths.
 
 ## State And Recovery
 

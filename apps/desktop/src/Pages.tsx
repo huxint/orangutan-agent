@@ -1,9 +1,8 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   ArrowDownToLine,
   ArrowRight,
   Cable,
-  Check,
   ChevronRight,
   FileText,
   FolderOpen,
@@ -25,75 +24,144 @@ import {
 } from 'lucide-react';
 import { useApp } from './context.ts';
 import { active } from './model.ts';
-import { Empty, Modal, PlatformIcon, Source, StatusBadge } from './components.tsx';
+import {
+  Empty,
+  Logo,
+  Modal,
+  PlatformIcon,
+  Source,
+  StatusBadge,
+  Switch,
+  Time,
+} from './components.tsx';
 import type { Connection, Note } from './schema.ts';
 
-function PageHeading({
+function Page({
   title,
   detail,
+  action,
   children,
 }: {
   title: string;
   detail: string;
-  children?: React.ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <div className="page-heading">
-      <div>
-        <h1>{title}</h1>
-        <p>{detail}</p>
+    <div className="page-scroll">
+      <div className="page">
+        <div className="page-heading">
+          <div>
+            <h1>{title}</h1>
+            <p>{detail}</p>
+          </div>
+          {action}
+        </div>
+        {children}
       </div>
-      {children}
     </div>
   );
 }
 
+function Segmented({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: { value: string; label: string; count?: number }[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="segmented" role="group" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          aria-pressed={value === option.value}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+          {option.count !== undefined && <span className="count">{option.count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SearchField({
+  label,
+  placeholder,
+  value,
+  onChange,
+}: {
+  label: string;
+  placeholder: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="search-field">
+      <Search size={15} />
+      <input
+        aria-label={label}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
+}
+
+const taskFilters = {
+  all: () => true,
+  active,
+  completed: (status: string) => status === 'completed',
+  other: (status: string) => ['failed', 'interrupted', 'cancelled'].includes(status),
+};
+
 export function TasksPage() {
   const { state, t, openTask } = useApp();
-  const [filter, setFilter] = useState('all');
+  const [filter, setFilter] = useState<keyof typeof taskFilters>('all');
   const [source, setSource] = useState('all');
   const [query, setQuery] = useState('');
+  const origin = (conversationId: string) =>
+    state.conversations.find((c) => c.id === conversationId)?.origin;
   const tasks = state.tasks.filter(
     (task) =>
-      (filter === 'all' ||
-        (filter === 'active'
-          ? active(task.status)
-          : filter === 'completed'
-            ? task.status === 'completed'
-            : ['failed', 'interrupted', 'cancelled'].includes(task.status))) &&
-      (source === 'all' ||
-        (source === 'desktop'
-          ? state.conversations.find((c) => c.id === task.conversationId)?.origin === 'desktop'
-          : state.conversations.find((c) => c.id === task.conversationId)?.origin === 'channel')) &&
-      task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+      taskFilters[filter](task.status) &&
+      (source === 'all' || origin(task.conversationId) === source) &&
+      task.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
   );
+  const count = (key: keyof typeof taskFilters) =>
+    state.tasks.filter((task) => taskFilters[key](task.status)).length;
   return (
-    <div className="page-scroll">
-      <PageHeading
-        title={t('任务', 'Tasks')}
-        detail={t(
-          '查看执行状态、待确认操作和历史结果。',
-          'Review execution status, pending actions and completed results.',
-        )}
-      />
-      <div className="filter-toolbar">
-        <div className="segmented">
-          {[
-            ['all', t('全部', 'All')],
-            ['active', t('进行中', 'In progress')],
-            ['completed', t('已完成', 'Completed')],
-            ['other', t('需关注', 'Needs attention')],
-          ].map(([value, label]) => (
-            <button
-              key={value}
-              className={filter === value ? 'active' : ''}
-              onClick={() => setFilter(value)}
-            >
-              {label}
-              {value === 'all' && <span>{state.tasks.length}</span>}
-            </button>
-          ))}
-        </div>
+    <Page
+      title={t('任务', 'Tasks')}
+      detail={t(
+        '查看执行状态、待确认操作和历史结果。',
+        'Review execution status, pending actions and completed results.',
+      )}
+    >
+      <div className="toolbar">
+        <Segmented
+          label={t('任务状态', 'Task status')}
+          value={filter}
+          onChange={(value) => setFilter(value as keyof typeof taskFilters)}
+          options={[
+            { value: 'all', label: t('全部', 'All'), count: count('all') },
+            { value: 'active', label: t('进行中', 'In progress'), count: count('active') },
+            { value: 'completed', label: t('已完成', 'Completed'), count: count('completed') },
+            { value: 'other', label: t('需关注', 'Needs attention'), count: count('other') },
+          ]}
+        />
+        <SearchField
+          label={t('搜索任务', 'Search tasks')}
+          placeholder={t('找一件事…', 'Find a task…')}
+          value={query}
+          onChange={setQuery}
+        />
         <select
           aria-label={t('任务来源', 'Task source')}
           value={source}
@@ -104,48 +172,43 @@ export function TasksPage() {
           <option value="channel">{t('消息渠道', 'Channels')}</option>
         </select>
       </div>
-      <label className="search-field task-search">
-        <Search size={16} />
-        <input
-          aria-label={t('搜索任务', 'Search tasks')}
-          placeholder={t('找一件事…', 'Find a task…')}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </label>
-      <div className="task-table">
-        <div className="task-table-heading">
-          <span>{t('任务', 'Task')}</span>
-          <span>{t('状态', 'Status')}</span>
-          <span>{t('来源', 'Source')}</span>
-          <span />
-        </div>
-        {tasks.map((task) => (
-          <button
-            className="task-row"
-            key={task.id}
-            onClick={() => openTask(task.id)}
-            data-testid={`task-row-${task.id}`}
-          >
-            <div className="task-row-main">
-              <span className={`activity-icon ${task.kind === 'team' ? 'green' : ''}`}>
-                {task.kind === 'team' ? <Users size={18} /> : <FileText size={18} />}
+      {tasks.length > 0 && (
+        <div className="task-table">
+          <div className="task-table-heading" aria-hidden="true">
+            <span>{t('任务', 'Task')}</span>
+            <span>{t('状态', 'Status')}</span>
+            <span>{t('来源', 'Source')}</span>
+            <span />
+          </div>
+          {tasks.map((task) => (
+            <button
+              className="task-row"
+              key={task.id}
+              onClick={() => openTask(task.id)}
+              data-testid={`task-row-${task.id}`}
+            >
+              <span className="task-row-main">
+                <span className="activity-icon">
+                  {task.kind === 'team' ? <Users size={16} /> : <FileText size={16} />}
+                </span>
+                <span>
+                  <strong>{task.title}</strong>
+                  <small>
+                    {task.members.length
+                      ? `${task.members.length} ${t('位协作成员', 'teammates')}`
+                      : t('独立执行', 'Single-agent execution')}
+                    {' · '}
+                    <Time value={task.createdAt} format="datetime" />
+                  </small>
+                </span>
               </span>
-              <div>
-                <strong>{task.title}</strong>
-                <small>
-                  {task.members.length
-                    ? `${task.members.length} ${t('位协作成员', 'teammates')}`
-                    : t('独立执行', 'Single-agent execution')}
-                </small>
-              </div>
-            </div>
-            <StatusBadge status={task.status} />
-            <Source conversationId={task.conversationId} />
-            <ChevronRight size={16} />
-          </button>
-        ))}
-      </div>
+              <StatusBadge status={task.status} />
+              <Source conversationId={task.conversationId} />
+              <ChevronRight size={15} className="row-chevron" />
+            </button>
+          ))}
+        </div>
+      )}
       {!tasks.length && (
         <Empty
           title={t('暂无匹配任务', 'No matching tasks')}
@@ -162,7 +225,7 @@ export function TasksPage() {
           'Channel tasks are here to view. Take action in their original channel.',
         )}
       </div>
-    </div>
+    </Page>
   );
 }
 
@@ -178,80 +241,79 @@ export function ConnectionsPage() {
     error: t('连接异常', 'Connection error'),
   };
   return (
-    <div className="page-scroll">
-      <PageHeading
-        title={t('连接', 'Connections')}
-        detail={t(
-          '管理消息渠道连接。各渠道的会话与权限独立。',
-          'Manage channel connections. Conversations and permissions remain separate.',
-        )}
-      />
-      <div className="connections-grid">
-        {state.connections.map((connection) => (
-          <article className="connection-card" key={connection.id}>
-            <div className="connection-top">
-              <PlatformIcon platform={connection.platform} size={25} />
+    <Page
+      title={t('连接', 'Connections')}
+      detail={t(
+        '管理消息渠道连接。各渠道的会话与权限独立。',
+        'Manage channel connections. Conversations and permissions remain separate.',
+      )}
+    >
+      <div className="connection-list">
+        {state.connections.map((connection) => {
+          const conversations = state.conversations.filter((c) => c.connectionId === connection.id);
+          return (
+            <article className="connection-card" key={connection.id}>
+              <PlatformIcon platform={connection.platform} size={18} />
+              <div className="connection-main">
+                <h2>{connection.name}</h2>
+                <p>
+                  {connection.account}
+                  <span>
+                    {t(
+                      `${conversations.length} 段独立会话`,
+                      `${conversations.length} ${conversations.length === 1 ? 'conversation' : 'conversations'}`,
+                    )}
+                  </span>
+                </p>
+              </div>
               <span className={`connection-status ${connection.status}`}>
                 <span />
                 {labels[connection.status]}
               </span>
-            </div>
-            <h2>{connection.name}</h2>
-            <p className="account-name">{connection.account}</p>
-            <div className="connection-meta">
-              <span>
-                {state.conversations.filter((c) => c.connectionId === connection.id).length}{' '}
-                {t('段独立会话', 'separate conversations')}
-              </span>
-              <span>{t('演示连接', 'Demo connection')}</span>
-            </div>
-            <div className="connection-actions">
+              <div className="connection-actions">
+                <button
+                  className="button secondary small"
+                  onClick={() => {
+                    setEditing(connection);
+                    setAccount(connection.account);
+                    setSimulateFailure(connection.simulateFailure);
+                  }}
+                >
+                  <Settings2 size={13} />
+                  {t('配置', 'Configure')}
+                </button>
+                {connection.status === 'connected' || connection.status === 'connecting' ? (
+                  <button
+                    className="button ghost small"
+                    onClick={() => dispatch({ type: 'disconnect', connectionId: connection.id })}
+                  >
+                    <WifiOff size={13} />
+                    {t('断开', 'Disconnect')}
+                  </button>
+                ) : (
+                  <button
+                    className="button primary small"
+                    onClick={() => dispatch({ type: 'connect', connectionId: connection.id })}
+                  >
+                    <Wifi size={13} />
+                    {t('连接', 'Connect')}
+                  </button>
+                )}
+              </div>
               <button
-                className="button secondary"
-                onClick={() => {
-                  setEditing(connection);
-                  setAccount(connection.account);
-                  setSimulateFailure(connection.simulateFailure);
-                }}
+                className="text-button connection-preview"
+                disabled={!conversations.length}
+                onClick={() => selectConversation(conversations[0].id)}
               >
-                <Settings2 size={14} />
-                {t('配置', 'Configure')}
+                {t('查看会话', 'View conversations')}
+                <ArrowRight size={13} />
               </button>
-              {connection.status === 'connected' || connection.status === 'connecting' ? (
-                <button
-                  className="text-button"
-                  onClick={() => dispatch({ type: 'disconnect', connectionId: connection.id })}
-                >
-                  <WifiOff size={14} />
-                  {t('断开', 'Disconnect')}
-                </button>
-              ) : (
-                <button
-                  className="button primary"
-                  onClick={() => dispatch({ type: 'connect', connectionId: connection.id })}
-                >
-                  <Wifi size={14} />
-                  {t('连接', 'Connect')}
-                </button>
-              )}
-            </div>
-            <button
-              className="connection-preview"
-              onClick={() => {
-                const c = state.conversations.find((c) => c.connectionId === connection.id);
-                if (c) selectConversation(c.id);
-              }}
-            >
-              {t('查看会话', 'View conversations')}
-              <ArrowRight size={14} />
-            </button>
-          </article>
-        ))}
+            </article>
+          );
+        })}
       </div>
-      <div className="connection-explainer">
-        <div className="explainer-icon">
-          <Cable size={24} />
-        </div>
+      <div className="page-callout">
+        <Cable size={17} />
         <div>
           <h3>{t('共享工作区，会话隔离', 'Shared workspace, isolated conversations')}</h3>
           <p>
@@ -269,12 +331,15 @@ export function ConnectionsPage() {
         >
           <div className="modal-body">
             <div className="connection-modal-brand">
-              <PlatformIcon platform={editing.platform} size={26} />
-              <strong>{editing.name}</strong>
+              <PlatformIcon platform={editing.platform} size={18} />
+              <span>
+                <strong>{editing.name}</strong>
+                <small>{t('演示连接', 'Demo connection')}</small>
+              </span>
             </div>
             <label className="form-field">
               {t('示例账号名称', 'Sample account name')}
-              <input value={account} onChange={(e) => setAccount(e.target.value)} autoFocus />
+              <input value={account} onChange={(e) => setAccount(e.target.value)} />
             </label>
             <label className="form-field">
               {t('演示连接结果', 'Demo connection result')}
@@ -315,7 +380,7 @@ export function ConnectionsPage() {
           </div>
         </Modal>
       )}
-    </div>
+    </Page>
   );
 }
 
@@ -326,57 +391,62 @@ export function MemoryPage() {
   const [source, setSource] = useState('all');
   const [editing, setEditing] = useState<Note | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const needle = query.trim().toLocaleLowerCase();
   const notes = state.notes.filter(
     (n) =>
       (scope === 'all' || n.scope === scope) &&
       (source === 'all' || n.source === source) &&
-      `${n.title} ${n.body}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+      `${n.title} ${n.body}`.toLocaleLowerCase().includes(needle),
   );
   return (
-    <div className="page-scroll">
-      <PageHeading
-        title={t('记忆', 'Memory')}
-        detail={t(
-          '管理共享知识和个人偏好，检查每条记录的来源与作用域。',
-          'Manage shared knowledge and personal preferences. Review each record’s source and scope.',
-        )}
-      >
-        <button
-          className={`switch-label ${state.settings.memory ? 'on' : ''}`}
-          role="switch"
-          aria-checked={state.settings.memory}
-          onClick={() => dispatch({ type: 'settings', value: { memory: !state.settings.memory } })}
-        >
-          <span className="switch">
-            <i />
-          </span>
-          {t('自动记忆', 'Auto memory')}
-        </button>
-      </PageHeading>
+    <Page
+      title={t('记忆', 'Memory')}
+      detail={t(
+        '管理共享知识和个人偏好，检查每条记录的来源与作用域。',
+        'Manage shared knowledge and personal preferences. Review each record’s source and scope.',
+      )}
+      action={
+        <Switch
+          checked={state.settings.memory}
+          label={t('自动记忆', 'Auto memory')}
+          showLabel
+          onChange={(memory) => dispatch({ type: 'settings', value: { memory } })}
+        />
+      }
+    >
       {!state.settings.memory && (
-        <div className="gentle-notice">
+        <div className="notice">
           {t(
             '自动记忆已关闭，已有记录会继续保留。',
             'Auto memory is off. Your existing notes are kept.',
           )}
         </div>
       )}
-      <div className="filter-toolbar">
-        <div className="segmented">
-          {[
-            ['all', t('全部记忆', 'All memories')],
-            ['shared', t('共享基础', 'Shared')],
-            ['personal', t('个人记忆', 'Personal')],
-          ].map(([value, label]) => (
-            <button
-              className={scope === value ? 'active' : ''}
-              key={value}
-              onClick={() => setScope(value)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+      <div className="toolbar">
+        <Segmented
+          label={t('记忆作用域', 'Memory scope')}
+          value={scope}
+          onChange={setScope}
+          options={[
+            { value: 'all', label: t('全部记忆', 'All memories'), count: state.notes.length },
+            {
+              value: 'shared',
+              label: t('共享基础', 'Shared'),
+              count: state.notes.filter((n) => n.scope === 'shared').length,
+            },
+            {
+              value: 'personal',
+              label: t('个人记忆', 'Personal'),
+              count: state.notes.filter((n) => n.scope === 'personal').length,
+            },
+          ]}
+        />
+        <SearchField
+          label={t('搜索记忆', 'Search memories')}
+          placeholder={t('搜索记忆…', 'Search memories…')}
+          value={query}
+          onChange={setQuery}
+        />
         <select
           aria-label={t('记忆来源', 'Memory source')}
           value={source}
@@ -388,51 +458,37 @@ export function MemoryPage() {
           ))}
         </select>
       </div>
-      <label className="search-field">
-        <Search size={16} />
-        <input
-          aria-label={t('搜索记忆', 'Search memories')}
-          placeholder={t('搜索记忆…', 'Search memories…')}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </label>
-      <div className="memory-grid">
-        {notes.map((note) => (
-          <button
-            className={`memory-card ${note.scope}`}
-            key={note.id}
-            onClick={() => {
-              setEditing({ ...note });
-              setDeleting(false);
-            }}
-          >
-            <div className="memory-card-top">
-              <span>
-                {note.scope === 'shared' ? <Globe2 size={15} /> : <Leaf size={15} />}
-                {note.scope === 'shared'
-                  ? t('共享基础', 'Shared foundation')
-                  : t('个人记忆', 'Personal memory')}
+      {notes.length > 0 && (
+        <div className="memory-list">
+          {notes.map((note) => (
+            <button
+              className={`memory-card ${note.scope}`}
+              key={note.id}
+              onClick={() => {
+                setEditing({ ...note });
+                setDeleting(false);
+              }}
+            >
+              <span className={`memory-scope ${note.scope}`}>
+                {note.scope === 'shared' ? <Globe2 size={13} /> : <Leaf size={13} />}
+                {note.scope === 'shared' ? t('共享基础', 'Shared') : t('个人记忆', 'Personal')}
               </span>
-              <Pencil size={14} />
-            </div>
-            <h3>{note.title}</h3>
-            <p>{note.body}</p>
-            <div className="memory-card-bottom">
-              <span>{note.source}</span>
-              <span>
-                {new Intl.DateTimeFormat(state.settings.language === 'zh' ? 'zh-CN' : 'en', {
-                  month: 'short',
-                  day: 'numeric',
-                }).format(note.updatedAt)}
+              <span className="memory-text">
+                <strong>{note.title}</strong>
+                <span>{note.body}</span>
               </span>
-            </div>
-          </button>
-        ))}
-      </div>
+              <span className="memory-meta">
+                <span>{note.source}</span>
+                <Time value={note.updatedAt} format="date" />
+              </span>
+              <Pencil size={14} className="row-chevron" />
+            </button>
+          ))}
+        </div>
+      )}
       {!notes.length && (
         <Empty
-          icon={<Leaf size={30} />}
+          icon={<Leaf size={24} />}
           title={t('还没有这样的记忆', 'Nothing here just yet')}
           detail={t(
             '换一个搜索词，或在对话里告诉助手值得记住的事。',
@@ -450,8 +506,8 @@ export function MemoryPage() {
       {editing && (
         <Modal title={t('编辑记忆', 'Edit memory')} close={() => setEditing(null)}>
           <div className="modal-body">
-            <span className="memory-scope-label">
-              {editing.scope === 'shared' ? <Globe2 size={14} /> : <LockKeyhole size={14} />}
+            <span className={`memory-scope ${editing.scope}`}>
+              {editing.scope === 'shared' ? <Globe2 size={13} /> : <LockKeyhole size={13} />}
               {editing.scope === 'shared' ? t('共享基础', 'Shared foundation') : editing.source}
             </span>
             <label className="form-field">
@@ -459,7 +515,6 @@ export function MemoryPage() {
               <input
                 value={editing.title}
                 onChange={(e) => setEditing({ ...editing, title: e.target.value })}
-                autoFocus
               />
             </label>
             <label className="form-field">
@@ -483,7 +538,7 @@ export function MemoryPage() {
             )}
             <div className="modal-actions">
               <button
-                className="text-button danger"
+                className="button ghost danger"
                 onClick={() => {
                   if (!deleting) {
                     setDeleting(true);
@@ -512,6 +567,26 @@ export function MemoryPage() {
           </div>
         </Modal>
       )}
+    </Page>
+  );
+}
+
+function SettingRow({
+  title,
+  detail,
+  children,
+}: {
+  title: string;
+  detail: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="setting-row">
+      <div>
+        <strong>{title}</strong>
+        <p>{detail}</p>
+      </div>
+      {children}
     </div>
   );
 }
@@ -527,27 +602,23 @@ export function SettingsPage({
   const [confirmReset, setConfirmReset] = useState(false);
   const update = (value: Partial<typeof state.settings>) => dispatch({ type: 'settings', value });
   return (
-    <div className="page-scroll settings-page">
-      <PageHeading
-        title={t('设置', 'Settings')}
-        detail={t(
-          '配置外观、模型和桌面对话的操作权限。',
-          'Configure appearance, the model and local conversation permissions.',
-        )}
-      />
+    <Page
+      title={t('设置', 'Settings')}
+      detail={t(
+        '配置外观、模型和桌面对话的操作权限。',
+        'Configure appearance, the model and local conversation permissions.',
+      )}
+    >
       <section className="settings-section">
         <h2>
-          <SlidersHorizontal size={17} />
+          <SlidersHorizontal size={15} />
           {t('外观与语言', 'Appearance & language')}
         </h2>
-        <div className="setting-row">
-          <div>
-            <strong>{t('主题', 'Theme')}</strong>
-            <p>
-              {t('选择浅色、深色或跟随系统。', 'Choose light, dark or your system preference.')}
-            </p>
-          </div>
-          <div className="theme-options">
+        <SettingRow
+          title={t('主题', 'Theme')}
+          detail={t('选择浅色、深色或跟随系统。', 'Choose light, dark or your system preference.')}
+        >
+          <div className="segmented" role="group" aria-label={t('主题', 'Theme')}>
             {(
               [
                 { id: 'light', icon: Sun, label: t('浅色', 'Light') },
@@ -558,24 +629,22 @@ export function SettingsPage({
               <button
                 key={id}
                 data-testid={`theme-${id}`}
-                className={state.settings.theme === id ? 'active' : ''}
                 aria-pressed={state.settings.theme === id}
                 onClick={() => update({ theme: id })}
               >
-                <Icon size={17} />
+                <Icon size={14} />
                 {label}
-                {state.settings.theme === id && <Check size={12} />}
               </button>
             ))}
           </div>
-        </div>
-        <div className="setting-row">
-          <div>
-            <strong>{t('界面语言', 'Interface language')}</strong>
-            <p>
-              {t('只切换界面，不改写聊天内容。', 'Changes the interface, not your conversations.')}
-            </p>
-          </div>
+        </SettingRow>
+        <SettingRow
+          title={t('界面语言', 'Interface language')}
+          detail={t(
+            '只切换界面，不改写聊天内容。',
+            'Changes the interface, not your conversations.',
+          )}
+        >
           <select
             aria-label={t('界面语言', 'Interface language')}
             data-testid="language-select"
@@ -585,23 +654,20 @@ export function SettingsPage({
             <option value="zh">简体中文</option>
             <option value="en">English</option>
           </select>
-        </div>
+        </SettingRow>
       </section>
       <section className="settings-section">
         <h2>
-          <Settings2 size={17} />
+          <Settings2 size={15} />
           {t('助手偏好', 'Assistant preferences')}
         </h2>
-        <div className="setting-row">
-          <div>
-            <strong>{t('示例模型', 'Sample model')}</strong>
-            <p>
-              {t(
-                '用于展示模型选择，未连接真实服务。',
-                'A model picker demonstration. No live service is connected.',
-              )}
-            </p>
-          </div>
+        <SettingRow
+          title={t('示例模型', 'Sample model')}
+          detail={t(
+            '用于展示模型选择，未连接真实服务。',
+            'A model picker demonstration. No live service is connected.',
+          )}
+        >
           <select
             aria-label={t('示例模型', 'Sample model')}
             value={state.settings.model}
@@ -610,63 +676,46 @@ export function SettingsPage({
             <option>Claude Sonnet</option>
             <option>GPT-5</option>
           </select>
-        </div>
-        <div className="setting-row">
-          <div>
-            <strong>{t('应用内通知', 'In-app notifications')}</strong>
-            <p>
-              {t(
-                '任务有了结果，或有事情需要你关注时提醒。',
-                'A heads-up when something is ready or needs attention.',
-              )}
-            </p>
-          </div>
-          <button
-            className={`toggle ${state.settings.notifications ? 'on' : ''}`}
-            role="switch"
-            aria-label={t('应用内通知', 'In-app notifications')}
-            aria-checked={state.settings.notifications}
-            onClick={() => update({ notifications: !state.settings.notifications })}
-          >
-            <i />
-          </button>
-        </div>
-        <div className="setting-row">
-          <div>
-            <strong>{t('自动记忆', 'Auto memory')}</strong>
-            <p>
-              {t(
-                '积累有用的信息，关闭后保留已有记录。',
-                'Keep useful context. Turning this off preserves existing notes.',
-              )}
-            </p>
-          </div>
-          <button
-            className={`toggle ${state.settings.memory ? 'on' : ''}`}
-            role="switch"
-            aria-label={t('自动记忆', 'Auto memory')}
-            aria-checked={state.settings.memory}
-            onClick={() => update({ memory: !state.settings.memory })}
-          >
-            <i />
-          </button>
-        </div>
+        </SettingRow>
+        <SettingRow
+          title={t('应用内通知', 'In-app notifications')}
+          detail={t(
+            '任务有了结果，或有事情需要你关注时提醒。',
+            'A heads-up when something is ready or needs attention.',
+          )}
+        >
+          <Switch
+            checked={state.settings.notifications}
+            label={t('应用内通知', 'In-app notifications')}
+            onChange={(notifications) => update({ notifications })}
+          />
+        </SettingRow>
+        <SettingRow
+          title={t('自动记忆', 'Auto memory')}
+          detail={t(
+            '积累有用的信息，关闭后保留已有记录。',
+            'Keep useful context. Turning this off preserves existing notes.',
+          )}
+        >
+          <Switch
+            checked={state.settings.memory}
+            label={t('自动记忆', 'Auto memory')}
+            onChange={(memory) => update({ memory })}
+          />
+        </SettingRow>
       </section>
       <section className="settings-section">
         <h2>
-          <ShieldCheck size={17} />
+          <ShieldCheck size={15} />
           {t('桌面对话权限', 'Desktop conversation permissions')}
         </h2>
-        <div className="setting-row">
-          <div>
-            <strong>{t('文件操作', 'File actions')}</strong>
-            <p>
-              {t(
-                '仅影响桌面自己的对话，不改变其他渠道。',
-                'Applies to desktop conversations only. Channel rules stay separate.',
-              )}
-            </p>
-          </div>
+        <SettingRow
+          title={t('文件操作', 'File actions')}
+          detail={t(
+            '仅影响桌面自己的对话，不改变其他渠道。',
+            'Applies to desktop conversations only. Channel rules stay separate.',
+          )}
+        >
           <select
             aria-label={t('文件操作权限', 'File action permission')}
             value={state.settings.permission}
@@ -678,50 +727,44 @@ export function SettingsPage({
             <option value="allow">{t('允许演示操作', 'Allow demo actions')}</option>
             <option value="deny">{t('拒绝文件操作', 'Deny file actions')}</option>
           </select>
-        </div>
+        </SettingRow>
       </section>
       <section className="settings-section">
         <h2>
-          <FolderOpen size={17} />
+          <FolderOpen size={15} />
           {t('工作区与演示数据', 'Workspace & demo data')}
         </h2>
-        <div className="setting-row">
-          <div>
-            <strong>{t('共享工作区', 'Shared workspace')}</strong>
-            <p>
-              {t(
-                '所有示例资料都在演示空间里，不读取本机文件。',
-                'Sample materials live in the demo. Local files are not accessed.',
-              )}
-            </p>
-          </div>
-          <code>workspace/</code>
-        </div>
-        <div className="setting-row">
-          <div>
-            <strong>{t('本地数据', 'Local data')}</strong>
-            <p>
-              {t(
-                '存储在此浏览器中，关闭应用后执行停止。',
-                'Saved in this browser. Execution stops when the app closes.',
-              )}
-            </p>
-          </div>
+        <SettingRow
+          title={t('共享工作区', 'Shared workspace')}
+          detail={t(
+            '所有示例资料都在演示空间里，不读取本机文件。',
+            'Sample materials live in the demo. Local files are not accessed.',
+          )}
+        >
+          <code className="path-chip">workspace/</code>
+        </SettingRow>
+        <SettingRow
+          title={t('本地数据', 'Local data')}
+          detail={t(
+            '存储在此浏览器中，关闭应用后执行停止。',
+            'Saved in this browser. Execution stops when the app closes.',
+          )}
+        >
           <div className="setting-actions">
+            <button className="button ghost" onClick={() => setConfirmReset(true)}>
+              {t('重新开始演示', 'Restart demo')}
+            </button>
             <button className="button secondary" onClick={exportSnapshot}>
               <ArrowDownToLine size={14} />
               {t('导出', 'Export')}
             </button>
-            <button className="text-button" onClick={() => setConfirmReset(true)}>
-              {t('重新开始演示', 'Restart demo')}
-            </button>
           </div>
-        </div>
+        </SettingRow>
       </section>
       <div className="settings-signature">
-        <img src="/orangutan.svg" alt="" />
+        <Logo />
         <span>
-          Orangutan <span>·</span> {t('桌面原型', 'Desktop prototype')}
+          Orangutan <span aria-hidden="true">·</span> {t('桌面原型', 'Desktop prototype')}
         </span>
       </div>
       {confirmReset && (
@@ -754,6 +797,6 @@ export function SettingsPage({
           </div>
         </Modal>
       )}
-    </div>
+    </Page>
   );
 }
