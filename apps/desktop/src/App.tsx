@@ -89,7 +89,7 @@ export default function App() {
       document.documentElement.dataset.theme = next ? 'dark' : 'light';
       document
         .querySelector('meta[name="theme-color"]')
-        ?.setAttribute('content', next ? '#1f2024' : '#ffffff');
+        ?.setAttribute('content', next ? '#211c16' : '#f6f2ea');
       setDark(next);
     };
     update();
@@ -326,30 +326,26 @@ export default function App() {
             >
               <Menu size={18} />
             </button>
-            <div className="breadcrumb">
-              {view === 'assistant' ? (
-                <>
-                  <span>{navItems[0].label}</span>
-                  <ChevronRight size={13} />
-                  <strong>{selected.name}</strong>
-                  {selected.origin === 'desktop' && (
-                    <button
-                      className="icon-button small"
-                      aria-label={t('重命名对话', 'Rename conversation')}
-                      title={t('重命名对话', 'Rename conversation')}
-                      onClick={() => {
-                        setRenaming({ id: selected.id, name: selected.name });
-                        setDialog('rename');
-                      }}
-                    >
-                      <Pencil size={13} />
-                    </button>
-                  )}
-                </>
-              ) : (
-                <strong>{navItems.find((n) => n.id === view)?.label}</strong>
-              )}
-            </div>
+            {view === 'assistant' && (
+              <div className="breadcrumb">
+                <span>{navItems[0].label}</span>
+                <ChevronRight size={13} />
+                <strong>{selected.name}</strong>
+                {selected.origin === 'desktop' && (
+                  <button
+                    className="icon-button small"
+                    aria-label={t('重命名对话', 'Rename conversation')}
+                    title={t('重命名对话', 'Rename conversation')}
+                    onClick={() => {
+                      setRenaming({ id: selected.id, name: selected.name });
+                      setDialog('rename');
+                    }}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                )}
+              </div>
+            )}
             <div className="topbar-actions">
               <button
                 className="topbar-search"

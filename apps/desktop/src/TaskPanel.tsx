@@ -119,7 +119,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
           </button>
         ))}
       </div>
-      <div className="panel-content">
+      <div className="panel-content" key={tab}>
         {tab === 'result' &&
           (task.artifact ? (
             <>
@@ -141,7 +141,7 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
                   </button>
                 </div>
               </div>
-              <article className="artifact-paper">
+              <article className="artifact-paper" key={raw ? 'source' : 'preview'}>
                 {raw ? (
                   <pre>
                     <code>{task.artifact.body}</code>

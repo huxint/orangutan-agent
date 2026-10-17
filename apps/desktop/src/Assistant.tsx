@@ -41,7 +41,8 @@ function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null
           aria-label={t('给助手发消息', 'Message your assistant')}
           placeholder={t('描述任务，或输入问题…', 'Describe a task or ask a question…')}
           value={draft}
-          rows={3}
+          rows={1}
+          autoFocus
           onChange={(e) => dispatch({ type: 'draft', conversationId, text: e.target.value })}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -94,7 +95,7 @@ function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null
           </span>
           {running ? (
             <button
-              className="send-button"
+              className="send-button stop"
               aria-label={t('停止本地任务', 'Stop local task')}
               disabled={running.status === 'cancelling'}
               onClick={() => dispatch({ type: 'stop', taskId: running.id, now: Date.now() })}
@@ -210,7 +211,7 @@ export function Assistant() {
     .slice(0, 4);
   const empty = messages.length === 0 && local;
   const threadTask = (task: (typeof tasks)[number]) => (
-    <div key={task.id} className="thread-task">
+    <div key={task.id} className={`thread-task${active(task.status) ? ' active' : ''}`}>
       <TaskCard task={task} />
       <Approval task={task} />
     </div>
