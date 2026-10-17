@@ -22,6 +22,7 @@ import {
   Time,
   useMemberState,
 } from './components.tsx';
+import { Inspector } from './layout.tsx';
 
 export function TaskPanel({ id, close }: { id: string; close: () => void }) {
   const { state, dispatch, selectConversation, t } = useApp();
@@ -86,20 +87,52 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
       ? [{ id: 'team' as const, icon: Users, label: t('小队', 'Team') }]
       : []),
   ];
-  return (
-    <aside
-      ref={panel}
-      className="detail-panel"
-      aria-label={t('任务详情', 'Task details')}
-      data-testid="task-panel"
-    >
-      <div className="panel-header">
+  const footer = !local ? (
+    <span>
+      <LockKeyhole size={13} />
+      {t('渠道任务仅供预览', 'Channel task · Read only')}
+    </span>
+  ) : (
+    <>
+      <span>{t('本地工作区', 'Local workspace')}</span>
+      {active(task.status) ? (
+        <button
+          className="button secondary small"
+          disabled={task.status === 'cancelling'}
+          onClick={() => dispatch({ type: 'stop', taskId: task.id, now: Date.now() })}
+        >
+          <Square size={11} />
+          {t('停止任务', 'Stop task')}
+        </button>
+      ) : ['failed', 'cancelled', 'interrupted'].includes(task.status) ? (
+        <button
+          className="button secondary small"
+          onClick={() => dispatch({ type: 'retry', taskId: task.id, now: Date.now() })}
+        >
+          <RotateCcw size={12} />
+          {t('重新尝试', 'Try again')}
+        </button>
+      ) : (
         <span>
-          <FileText size={14} />
-          {t('任务详情', 'Task details')}
+          <CircleCheck size={13} />
+          {t('已完成', 'Completed')}
         </span>
-        <CloseButton onClick={close} />
-      </div>
+      )}
+    </>
+  );
+  return (
+    <Inspector
+      label={t('任务详情', 'Task details')}
+      testId="task-panel"
+      innerRef={panel}
+      header={
+        <>
+          <span>{t('任务', 'Task')}</span>
+          <CloseButton onClick={close} />
+        </>
+      }
+      footer={footer}
+    >
       <div className="panel-title">
         <Source conversationId={task.conversationId} />
         <h2>{task.title}</h2>
@@ -253,41 +286,6 @@ export function TaskPanel({ id, close }: { id: string; close: () => void }) {
           </>
         )}
       </div>
-      <div className="panel-footer">
-        {!local ? (
-          <span>
-            <LockKeyhole size={13} />
-            {t('渠道任务仅供预览', 'Channel task · Read only')}
-          </span>
-        ) : (
-          <>
-            <span>{t('本地工作区', 'Local workspace')}</span>
-            {active(task.status) ? (
-              <button
-                className="button secondary small"
-                disabled={task.status === 'cancelling'}
-                onClick={() => dispatch({ type: 'stop', taskId: task.id, now: Date.now() })}
-              >
-                <Square size={11} />
-                {t('停止任务', 'Stop task')}
-              </button>
-            ) : ['failed', 'cancelled', 'interrupted'].includes(task.status) ? (
-              <button
-                className="button secondary small"
-                onClick={() => dispatch({ type: 'retry', taskId: task.id, now: Date.now() })}
-              >
-                <RotateCcw size={12} />
-                {t('重新尝试', 'Try again')}
-              </button>
-            ) : (
-              <span>
-                <CircleCheck size={13} />
-                {t('已完成', 'Completed')}
-              </span>
-            )}
-          </>
-        )}
-      </div>
-    </aside>
+    </Inspector>
   );
 }

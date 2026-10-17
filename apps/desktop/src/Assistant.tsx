@@ -4,9 +4,7 @@ import {
   ArrowRight,
   ArrowUp,
   FileText,
-  ListChecks,
   LockKeyhole,
-  Monitor,
   Paperclip,
   Search,
   Square,
@@ -14,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useApp } from './context.ts';
 import { active } from './model.ts';
-import { Approval, Logo, Markdown, Source, StatusBadge, TaskCard, Time } from './components.tsx';
+import { Approval, Logo, Markdown, TaskCard, Time } from './components.tsx';
 
 function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null> }) {
   const { state, dispatch, t, toast } = useApp();
@@ -43,6 +41,10 @@ function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null
           value={draft}
           rows={1}
           autoFocus
+          title={t(
+            'Enter 发送 · Shift + Enter 换行',
+            'Enter to send · Shift + Enter for a new line',
+          )}
           onChange={(e) => dispatch({ type: 'draft', conversationId, text: e.target.value })}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -74,25 +76,7 @@ function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null
           >
             <Paperclip size={16} />
           </button>
-          <select
-            className="composer-model"
-            aria-label={t('选择示例模型', 'Choose sample model')}
-            value={state.settings.model}
-            onChange={(e) =>
-              dispatch({
-                type: 'settings',
-                value: { model: e.target.value as typeof state.settings.model },
-              })
-            }
-          >
-            <option>Claude Sonnet</option>
-            <option>GPT-5</option>
-          </select>
           <span className="composer-spacer" />
-          <span className="composer-scope">
-            <Monitor size={12} />
-            {t('本地会话', 'Local session')}
-          </span>
           {running ? (
             <button
               className="send-button stop"
@@ -114,17 +98,6 @@ function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null
           )}
         </div>
       </div>
-      <div className="composer-caption">
-        <span>
-          {t(
-            '演示模式 · 模型与执行结果为模拟数据',
-            'Demo · Model replies and execution are simulated',
-          )}
-        </span>
-        <span className="composer-hint">
-          {t('Enter 发送 · Shift + Enter 换行', 'Enter to send · Shift + Enter for a new line')}
-        </span>
-      </div>
     </div>
   );
 }
@@ -132,7 +105,7 @@ function Composer({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null
 const dayOf = (time: number) => new Date(time).toDateString();
 
 export function Assistant() {
-  const { state, dispatch, t, openTask, selectConversation, navigate } = useApp();
+  const { state, dispatch, t, navigate } = useApp();
   const conversation = state.conversations.find((c) => c.id === state.selectedId)!;
   const local = conversation.origin === 'desktop';
   const messages = state.messages.filter((m) => m.conversationId === conversation.id);
@@ -143,7 +116,6 @@ export function Assistant() {
   const pinned = useRef(true);
   const jumping = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
-  const [source, setSource] = useState('all');
   const lastText = messages.at(-1)?.text;
   useEffect(() => {
     pinned.current = true;
@@ -199,16 +171,7 @@ export function Assistant() {
       ),
     },
   ];
-  const recent = [...state.tasks]
-    .filter(
-      (task) =>
-        source === 'all' ||
-        state.conversations.find((c) => c.id === task.conversationId)?.origin === source,
-    )
-    .sort(
-      (a, b) => Number(active(b.status)) - Number(active(a.status)) || b.createdAt - a.createdAt,
-    )
-    .slice(0, 4);
+  const activeCount = state.tasks.filter((task) => active(task.status)).length;
   const empty = messages.length === 0 && local;
   const threadTask = (task: (typeof tasks)[number]) => (
     <div key={task.id} className={`thread-task${active(task.status) ? ' active' : ''}`}>
@@ -225,13 +188,7 @@ export function Assistant() {
               className="start-session"
               aria-label={t('开始本地会话', 'Start a local session')}
             >
-              <h1>{t('今天想处理什么？', 'What can I help with?')}</h1>
-              <p className="start-description">
-                {t(
-                  '交代一件事，或继续手边的工作。',
-                  'Start something new, or pick up where you left off.',
-                )}
-              </p>
+              <h1>{t('今天想完成什么？', 'What should we get done?')}</h1>
               <Composer inputRef={textarea} />
               <div className="request-shortcuts">
                 {prompts.map(({ icon: Icon, title, prompt }) => (
@@ -241,71 +198,15 @@ export function Assistant() {
                   </button>
                 ))}
               </div>
-            </section>
-            <section className="recent-section" aria-label={t('最近任务', 'Recent tasks')}>
-              <div className="section-heading">
-                <h2>{t('工作动态', 'Your work')}</h2>
-                <div
-                  className="segmented"
-                  role="group"
-                  aria-label={t('筛选任务来源', 'Filter task sources')}
-                >
-                  {[
-                    ['all', t('全部', 'All')],
-                    ['desktop', t('桌面', 'Desktop')],
-                    ['channel', t('消息渠道', 'Channels')],
-                  ].map(([value, label]) => (
-                    <button
-                      key={value}
-                      aria-pressed={source === value}
-                      onClick={() => setSource(value)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <button className="text-button" onClick={() => navigate('tasks')}>
-                  {t('查看全部', 'View all')}
+              {activeCount > 0 && (
+                <button className="active-work" onClick={() => navigate('tasks')}>
+                  <span className="active-dot" aria-hidden="true" />
+                  {t(
+                    `${activeCount} 项工作正在进行`,
+                    `${activeCount} ${activeCount === 1 ? 'task' : 'tasks'} in progress`,
+                  )}
                   <ArrowRight size={13} />
                 </button>
-              </div>
-              <div className="activity-list">
-                {recent.map((task) => (
-                  <button
-                    className="activity-row"
-                    key={task.id}
-                    onClick={() => {
-                      selectConversation(task.conversationId);
-                      openTask(task.id);
-                    }}
-                  >
-                    <span className="activity-icon">
-                      {task.members.length ? (
-                        <Users size={16} />
-                      ) : task.kind === 'file' ? (
-                        <FileText size={16} />
-                      ) : (
-                        <ListChecks size={16} />
-                      )}
-                    </span>
-                    <span className="activity-title">
-                      <strong>{task.title}</strong>
-                      <Source conversationId={task.conversationId} />
-                    </span>
-                    <span className="activity-meta">
-                      <StatusBadge status={task.status} />
-                      <Time value={task.createdAt} format="time" />
-                    </span>
-                  </button>
-                ))}
-              </div>
-              {!recent.length && (
-                <p className="activity-empty">
-                  {t(
-                    '暂无任务。发送请求后，执行记录会显示在这里。',
-                    'No tasks yet. Send a request to create an execution record.',
-                  )}
-                </p>
               )}
             </section>
           </div>
@@ -343,15 +244,6 @@ export function Assistant() {
             }}
           >
             <div className="thread">
-              {!local && (
-                <div className="channel-readonly">
-                  <LockKeyhole size={14} />
-                  <span>
-                    {t('渠道会话 · 只读预览', 'Channel conversation · Read-only preview')}
-                  </span>
-                  <Source conversationId={conversation.id} />
-                </div>
-              )}
               {messages.map((message, index) => (
                 <Fragment key={message.id}>
                   {(index === 0 ||
@@ -361,16 +253,13 @@ export function Assistant() {
                     </div>
                   )}
                   <div className={`message ${message.role} ${message.state}`}>
-                    {message.role === 'assistant' && (
-                      <span className="message-avatar">
-                        <Logo />
-                      </span>
-                    )}
                     <div className="message-body">
                       {message.role === 'assistant' && (
                         <div className="message-author">
+                          <span className="message-mark">
+                            <Logo />
+                          </span>
                           <strong>Orangutan</strong>
-                          <Time value={message.createdAt} format="time" />
                         </div>
                       )}
                       <Markdown>{message.text}</Markdown>
@@ -387,7 +276,7 @@ export function Assistant() {
               {tasks
                 .filter((task) => !messages.some((message) => message.id === `${task.id}:user`))
                 .map(threadTask)}
-              {running && (
+              {running && running.status !== 'awaiting_approval' && (
                 <div className="thinking">
                   {running.status === 'running' && (
                     <span className="thinking-dots" aria-hidden="true">
@@ -396,11 +285,9 @@ export function Assistant() {
                       <i />
                     </span>
                   )}
-                  {running.status === 'awaiting_approval'
-                    ? t('等待操作确认', 'Awaiting approval')
-                    : running.status === 'cancelling'
-                      ? t('正在取消执行', 'Cancelling execution')
-                      : t('正在执行', 'Executing')}
+                  {running.status === 'cancelling'
+                    ? t('正在取消执行', 'Cancelling execution')
+                    : t('正在执行', 'Executing')}
                 </div>
               )}
             </div>

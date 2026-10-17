@@ -284,49 +284,25 @@ export function Source({ conversationId }: { conversationId: string }) {
 
 export function TaskCard({ task }: { task: Task }) {
   const { state, t, openTask } = useApp();
-  const memberState = useMemberState();
   return (
     <button
       className="task-card"
       onClick={() => openTask(task.id)}
       data-testid={`task-card-${task.id}`}
     >
-      <span className="task-card-top">
-        <span className="task-type">
-          <FileText size={14} />
-          {task.artifact ? t('成果已就绪', 'Artifact ready') : t('执行记录', 'Task activity')}
-        </span>
-        <StatusBadge status={task.status} />
-      </span>
-      <strong className="task-card-title">{task.title}</strong>
-      {task.members.length > 0 && (
-        <span className="member-chips">
-          {task.members.map((member) => {
-            const { label, icon } = memberState(member.state);
-            return (
-              <span
-                key={member.id}
-                className={`member-chip ${member.state}`}
-                title={`${member.role} · ${label}`}
-              >
-                {icon}
-                {member.role}
-                <span className="visually-hidden">{label}</span>
-              </span>
-            );
-          })}
+      <span className="task-card-title">{task.title}</span>
+      {task.artifact && (
+        <span className="task-card-artifact" title={t('成果已就绪', 'Artifact ready')}>
+          <FileText size={13} aria-hidden="true" />
+          <span className="visually-hidden">{t('成果已就绪', 'Artifact ready')}</span>
         </span>
       )}
-      <span className="task-card-bottom">
-        <span className={task.artifact ? 'artifact-link' : undefined}>
-          {task.artifact ? task.artifact.name : t('查看执行详情', 'View activity')}
-        </span>
-        {canControl(state, task.conversationId) ? (
-          <ArrowUpRight size={15} />
-        ) : (
-          <LockKeyhole size={13} />
-        )}
-      </span>
+      <StatusBadge status={task.status} />
+      {canControl(state, task.conversationId) ? (
+        <ArrowUpRight size={14} />
+      ) : (
+        <LockKeyhole size={13} />
+      )}
     </button>
   );
 }
@@ -337,11 +313,11 @@ export function Approval({ task }: { task: Task }) {
   const local = canControl(state, task.conversationId);
   const pending = task.approval.status === 'pending';
   const approvalLabels = {
-    pending: t('需要确认一个文件操作', 'A file action needs approval'),
+    pending: t('需要你的确认', 'Needs your approval'),
     approved: t('已允许此操作', 'Action approved'),
-    rejected: t('你已拒绝此操作', 'Action declined'),
-    expired: t('此确认请求已失效', 'This request has expired'),
-    cancelled: t('此确认请求已取消', 'This request was cancelled'),
+    rejected: t('已拒绝此操作', 'Action declined'),
+    expired: t('此请求已失效', 'Request expired'),
+    cancelled: t('此请求已取消', 'Request cancelled'),
   };
   return (
     <div className={`approval-card ${pending ? '' : 'settled'}`} data-testid="approval-card">
@@ -355,13 +331,11 @@ export function Approval({ task }: { task: Task }) {
         )}
         <strong>{approvalLabels[task.approval.status]}</strong>
       </div>
-      <p>
-        {t(
-          '写入整理后的笔记，保留原始文件。',
-          'Write the organized note and keep the original files.',
-        )}
+      <p className="approval-detail">
+        {t('将整理后的笔记写入 ', 'Write the organized note to ')}
+        <code>{task.approval.target}</code>
+        {t('，原始文件保持不变。', ' and keep the originals.')}
       </p>
-      <code>{task.approval.target}</code>
       {pending && local && (
         <div className="approval-actions">
           <button

@@ -1,7 +1,6 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import {
   ArrowDownToLine,
-  ArrowRight,
   Cable,
   ChevronRight,
   FileText,
@@ -12,7 +11,6 @@ import {
   Monitor,
   Moon,
   Pencil,
-  Search,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
@@ -34,85 +32,9 @@ import {
   Switch,
   Time,
 } from './components.tsx';
+import { SearchField, Segmented, SettingRow } from './controls.tsx';
+import { PageFrame, Toolbar } from './layout.tsx';
 import type { Connection, Note } from './schema.ts';
-
-function Page({
-  title,
-  detail,
-  action,
-  children,
-}: {
-  title: string;
-  detail: string;
-  action?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <div className="page-scroll">
-      <div className="page">
-        <div className="page-heading">
-          <div>
-            <h1>{title}</h1>
-            <p>{detail}</p>
-          </div>
-          {action}
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function Segmented({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: { value: string; label: string; count?: number }[];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="segmented" role="group" aria-label={label}>
-      {options.map((option) => (
-        <button
-          key={option.value}
-          aria-pressed={value === option.value}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-          {option.count !== undefined && <span className="count">{option.count}</span>}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function SearchField({
-  label,
-  placeholder,
-  value,
-  onChange,
-}: {
-  label: string;
-  placeholder: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="search-field">
-      <Search size={15} />
-      <input
-        aria-label={label}
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </label>
-  );
-}
 
 const taskFilters = {
   all: () => true,
@@ -137,14 +59,14 @@ export function TasksPage() {
   const count = (key: keyof typeof taskFilters) =>
     state.tasks.filter((task) => taskFilters[key](task.status)).length;
   return (
-    <Page
+    <PageFrame
       title={t('任务', 'Tasks')}
       detail={t(
         '查看执行状态、待确认操作和历史结果。',
         'Review execution status, pending actions and completed results.',
       )}
     >
-      <div className="toolbar">
+      <Toolbar>
         <Segmented
           label={t('任务状态', 'Task status')}
           value={filter}
@@ -171,13 +93,12 @@ export function TasksPage() {
           <option value="desktop">{t('桌面', 'Desktop')}</option>
           <option value="channel">{t('消息渠道', 'Channels')}</option>
         </select>
-      </div>
+      </Toolbar>
       {tasks.length > 0 && (
         <div className="task-table">
           <div className="task-table-heading" aria-hidden="true">
             <span>{t('任务', 'Task')}</span>
             <span>{t('状态', 'Status')}</span>
-            <span>{t('来源', 'Source')}</span>
             <span />
           </div>
           {tasks.map((task) => (
@@ -194,16 +115,13 @@ export function TasksPage() {
                 <span>
                   <strong>{task.title}</strong>
                   <small>
-                    {task.members.length
-                      ? `${task.members.length} ${t('位协作成员', 'teammates')}`
-                      : t('独立执行', 'Single-agent execution')}
+                    <Source conversationId={task.conversationId} />
                     {' · '}
                     <Time value={task.createdAt} format="datetime" />
                   </small>
                 </span>
               </span>
               <StatusBadge status={task.status} />
-              <Source conversationId={task.conversationId} />
               <ChevronRight size={15} className="row-chevron" />
             </button>
           ))}
@@ -225,7 +143,7 @@ export function TasksPage() {
           'Channel tasks are here to view. Take action in their original channel.',
         )}
       </div>
-    </Page>
+    </PageFrame>
   );
 }
 
@@ -241,7 +159,7 @@ export function ConnectionsPage() {
     error: t('连接异常', 'Connection error'),
   };
   return (
-    <Page
+    <PageFrame
       title={t('连接', 'Connections')}
       detail={t(
         '管理消息渠道连接。各渠道的会话与权限独立。',
@@ -255,7 +173,15 @@ export function ConnectionsPage() {
             <article className="connection-card" key={connection.id}>
               <PlatformIcon platform={connection.platform} size={18} />
               <div className="connection-main">
-                <h2>{connection.name}</h2>
+                <h2>
+                  <button
+                    disabled={!conversations.length}
+                    title={t('查看会话', 'View conversations')}
+                    onClick={() => selectConversation(conversations[0].id)}
+                  >
+                    {connection.name}
+                  </button>
+                </h2>
                 <p>
                   {connection.account}
                   <span>
@@ -300,14 +226,6 @@ export function ConnectionsPage() {
                   </button>
                 )}
               </div>
-              <button
-                className="text-button connection-preview"
-                disabled={!conversations.length}
-                onClick={() => selectConversation(conversations[0].id)}
-              >
-                {t('查看会话', 'View conversations')}
-                <ArrowRight size={13} />
-              </button>
             </article>
           );
         })}
@@ -380,7 +298,7 @@ export function ConnectionsPage() {
           </div>
         </Modal>
       )}
-    </Page>
+    </PageFrame>
   );
 }
 
@@ -399,7 +317,7 @@ export function MemoryPage() {
       `${n.title} ${n.body}`.toLocaleLowerCase().includes(needle),
   );
   return (
-    <Page
+    <PageFrame
       title={t('记忆', 'Memory')}
       detail={t(
         '管理共享知识和个人偏好，检查每条记录的来源与作用域。',
@@ -422,7 +340,7 @@ export function MemoryPage() {
           )}
         </div>
       )}
-      <div className="toolbar">
+      <Toolbar>
         <Segmented
           label={t('记忆作用域', 'Memory scope')}
           value={scope}
@@ -457,7 +375,7 @@ export function MemoryPage() {
             <option key={s}>{s}</option>
           ))}
         </select>
-      </div>
+      </Toolbar>
       {notes.length > 0 && (
         <div className="memory-list">
           {notes.map((note) => (
@@ -567,27 +485,7 @@ export function MemoryPage() {
           </div>
         </Modal>
       )}
-    </Page>
-  );
-}
-
-function SettingRow({
-  title,
-  detail,
-  children,
-}: {
-  title: string;
-  detail: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="setting-row">
-      <div>
-        <strong>{title}</strong>
-        <p>{detail}</p>
-      </div>
-      {children}
-    </div>
+    </PageFrame>
   );
 }
 
@@ -602,7 +500,7 @@ export function SettingsPage({
   const [confirmReset, setConfirmReset] = useState(false);
   const update = (value: Partial<typeof state.settings>) => dispatch({ type: 'settings', value });
   return (
-    <Page
+    <PageFrame
       title={t('设置', 'Settings')}
       detail={t(
         '配置外观、模型和桌面对话的操作权限。',
@@ -797,6 +695,6 @@ export function SettingsPage({
           </div>
         </Modal>
       )}
-    </Page>
+    </PageFrame>
   );
 }

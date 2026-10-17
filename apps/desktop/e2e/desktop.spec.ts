@@ -6,7 +6,7 @@ test('content-first home, read-only channel previews and notification routing', 
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '今天想处理什么？' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '今天想完成什么？' })).toBeVisible();
   await page.screenshot({
     path: 'test-results/home-light.png',
     fullPage: true,
@@ -15,7 +15,7 @@ test('content-first home, read-only channel previews and notification routing', 
   await page.getByTestId('conversation-qq-main').click();
   await expect(page.getByTestId('composer')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '允许这次操作' })).toHaveCount(0);
-  await expect(page.getByText('渠道会话 · 只读预览')).toBeVisible();
+  await expect(page.getByText('渠道会话只读')).toBeVisible();
   await page.getByTestId('task-card-qq-files').click();
   const panel = page.getByTestId('task-panel');
   await expect(panel.getByRole('button', { name: '停止任务' })).toHaveCount(0);
@@ -48,7 +48,7 @@ test('local approval, denial, retry and artifacts work through the interface', a
   await expect(page.getByRole('button', { name: '允许这次操作' })).toBeVisible();
   await expect(page.locator('.thinking-dots')).toHaveCount(0);
   await page.getByRole('button', { name: '拒绝', exact: true }).click();
-  await expect(page.getByText('你已拒绝此操作')).toBeVisible();
+  await expect(page.getByText('已拒绝此操作')).toBeVisible();
   await page.locator('.thread .task-card').click();
   await page.getByRole('button', { name: '重新尝试', exact: true }).click();
   await page.clock.runFor(2400);
@@ -74,7 +74,13 @@ test('close/reload interrupts runs, drafts survive appearance changes, both lang
   await page.clock.runFor(800);
   await page.reload();
   await expect(page.locator('.thread .status')).toHaveText('已中断');
-  await expect(page.locator('.thread .member-chip').first()).toContainText('已停止');
+  await page.locator('.thread .task-card').first().click();
+  const interrupted = page.getByTestId('task-panel');
+  await interrupted.getByRole('button', { name: '小队', exact: true }).click();
+  await expect(
+    interrupted.locator('.member-state').filter({ hasText: '已停止' }).first(),
+  ).toBeVisible();
+  await interrupted.getByRole('button', { name: '关闭', exact: true }).click();
   await page.getByRole('textbox', { name: '给助手发消息' }).fill('还没发送的想法');
   await page.getByTestId('nav-settings').click();
   await page.getByTestId('theme-dark').click();
@@ -290,15 +296,15 @@ test('rename preserves a custom title after sending and reload, with cancel and 
   await input.fill('不应保存');
   await page.keyboard.press('Escape');
   await expect(rename).toBeFocused();
-  await expect(page.locator('.breadcrumb')).not.toContainText('不应保存');
+  await expect(page.locator('.conversation-heading')).not.toContainText('不应保存');
   await rename.click();
   await input.fill('产品设计讨论');
   await input.press('Enter');
-  await expect(page.locator('.breadcrumb')).toContainText('产品设计讨论');
+  await expect(page.locator('.conversation-heading')).toContainText('产品设计讨论');
   await page.getByRole('textbox', { name: '给助手发消息' }).fill('讨论界面');
   await page.getByRole('button', { name: '发送消息' }).click();
   await page.reload();
-  await expect(page.locator('.breadcrumb')).toContainText('产品设计讨论');
+  await expect(page.locator('.conversation-heading')).toContainText('产品设计讨论');
   await expect(
     page.locator('.sidebar').getByRole('button', { name: '产品设计讨论', exact: true }),
   ).toBeVisible();
@@ -321,8 +327,8 @@ test('search palette names sources and opens results from the keyboard', async (
   await expect(search).toBeFocused();
   await search.press('Enter');
   await expect(dialog).toHaveCount(0);
-  await expect(page.locator('.breadcrumb')).toContainText('周然 · 工作');
-  await expect(page.getByText('渠道会话 · 只读预览')).toBeVisible();
+  await expect(page.locator('.conversation-heading')).toContainText('周然 · 工作');
+  await expect(page.getByText('渠道会话只读')).toBeVisible();
 });
 
 test('secondary text keeps AA contrast on every surface in both themes', async ({ page }) => {
